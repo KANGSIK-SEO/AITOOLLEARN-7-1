@@ -26,7 +26,7 @@ log = logging.getLogger("app")
 STATIC_DIR = Path(__file__).parent / "static"
 COOKIE = "session"
 
-app = FastAPI(title="미술 명화 찾기 챗봇")
+app = FastAPI(title="저작권 걱정 없는 퍼블릭 도메인 명화 찾기 챗봇")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 STATUS_BY_CODE = {"AI_TIMEOUT": 504, "AI_ERROR": 502, "AI_EXPIRED": 503,
