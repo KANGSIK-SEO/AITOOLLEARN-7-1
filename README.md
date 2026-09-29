@@ -13,6 +13,17 @@
 - **데이터**: [MET Open Access](https://metmuseum.github.io/), [Art Institute of Chicago API](https://api.artic.edu/docs/) (둘 다 CC0, API 키 불필요)
 
 ## 2. 시스템 구조
+
+**한눈에 보기** (팀원 전원 필독 — 본인 담당 파일은 깊게, 나머지는 이 정도만 알면 충분합니다)
+- `app/main.py` — **교통정리.** 모든 URL 경로(로그인/챗/내 로그)가 여기 모임. 요청 검증·로그·오류 응답 담당.
+- `app/auth.py` — **문지기.** 비밀번호 해시(scrypt)와 로그인 쿠키(HMAC 서명) 검증. 서버에 세션을 저장하지 않음.
+- `app/chat.py` — **지휘자.** "질문 → 검색조건 추출 → 검색 → 답변 생성" 파이프라인을 순서대로 지휘.
+- `app/art.py` — **검색엔진.** `data/art.db`에서 SQLite FTS5로 작품을 찾음. AI 호출 없이 순수 DB 검색.
+- `app/llm.py` — **AI 통신창구.** Upstage `solar-pro3`를 실제로 호출하는 유일한 곳. 타임아웃·에러를 통일된 형태로 반환.
+- `app/db.py` — **저장소.** 사용자·대화 로그 저장(로컬 SQLite 또는 Turso 자동 선택).
+- `app/config.py` — **규칙집.** 허용 모델(solar-pro3)과 만료일 등 정책을 고정.
+- `app/static/*` — **화면.** 브라우저에 보이는 HTML/JS/CSS 전부.
+
 ```
 브라우저 ─ /static (HTML/JS) ─┐
                               ├─ FastAPI (app/main.py, Vercel Function)
@@ -117,10 +128,11 @@ vercel deploy --prod
 브랜치: `main` / `develop` / `feature/*`, 모든 병합은 PR. 팀원별 유의미한 커밋 10회 이상.
 
 ## 7. 팀 구성원 역할 및 개인별 작업 요약
-| 이름 | 역할 | 작업 요약 |
-|---|---|---|
-| 서강식 | 기획·백엔드·DB·배포 | (작성 중) |
-| 팀원 4명 | (합의 후 기입) | (각자 실제 작업을 Git 이력에 맞춰 기입) |
+| 이름 | 역할 | 담당 이슈 | 작업 요약 |
+|---|---|---|---|
+| 서강식 | AI/데이터 엔지니어 & 팀 리드 | [#8](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/8), [#9](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/9), [#10](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/10), [#17](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/17) | MVP 설계·구현, 검색·AI 파이프라인 고도화, 배포·통합·PR 머지 총괄 (작업 완료 후 PR 번호로 갱신) |
+| 유영민 | 프론트엔드 개발자 | [#11](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/11), [#12](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/12), [#13](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/13) | 대화 UI, 모바일 반응형·접근성, 오류/로딩 UX (작성 예정) |
+| 오철호 | 백엔드 개발자 | [#14](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/14), [#15](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/15), [#16](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/16) | 즐겨찾기 API·DB, 테스트·로깅 보강, ERD/API 문서화 (작성 예정) |
 
 ## 8. 민감정보 관리
 - 모든 키는 환경 변수로만 사용하고 `.env`는 `.gitignore`로 제외한다. 예시는 `.env.example`.
