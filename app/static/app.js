@@ -1,11 +1,11 @@
 const $ = (id) => document.getElementById(id);
 const chatLog = $("chat-log");
 
-function show(loggedIn, email) {
+function show(loggedIn, email, isPremium) {
     $("auth-panel").hidden = loggedIn;
     $("chat-panel").hidden = !loggedIn;
     $("logout-btn").hidden = !loggedIn;
-    $("status-bar").textContent = loggedIn ? `${email} 님` : "로그인이 필요합니다";
+    $("status-bar").textContent = loggedIn ? `${email} 님${isPremium ? " · 초대코드 회원" : ""}` : "로그인이 필요합니다";
 }
 
 async function api(path, options = {}) {
@@ -21,16 +21,19 @@ async function api(path, options = {}) {
 
 async function submitAuth(kind) {
     $("auth-error").textContent = "";
-    const { ok, data } = await api(`/api/auth/${kind}`, {
-        method: "POST",
-        body: JSON.stringify({ email: $("email").value, password: $("password").value }),
-    });
+    const body = { email: $("email").value, password: $("password").value };
+    if (kind === "signup") {
+        const code = $("private-code").value.trim();
+        if (code) body.private_code = code;
+    }
+    const { ok, data } = await api(`/api/auth/${kind}`, { method: "POST", body: JSON.stringify(body) });
     if (!ok) {
         $("auth-error").textContent = data.error?.message || "요청에 실패했습니다.";
         return;
     }
     $("password").value = "";
-    show(true, data.user.email);
+    $("private-code").value = "";
+    show(true, data.user.email, data.user.is_premium);
 }
 
 function addMessage(kind, text) {
@@ -105,5 +108,5 @@ $("logout-btn").addEventListener("click", async () => { await api("/api/auth/log
 
 (async () => {
     const { ok, data } = await api("/api/me");
-    show(ok, ok ? data.user.email : "");
+    show(ok, ok ? data.user.email : "", ok ? data.user.is_premium : false);
 })();

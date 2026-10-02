@@ -1,4 +1,4 @@
-"""Upstage solar-pro3 호출 (서버 측에서만 수행, 키는 응답에 노출하지 않는다)."""
+"""Upstage solar-pro4 호출 (서버 측에서만 수행, 키는 응답에 노출하지 않는다)."""
 import json
 import logging
 import socket

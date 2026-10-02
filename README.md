@@ -19,26 +19,26 @@
 - `app/auth.py` — **문지기.** 비밀번호 해시(scrypt)와 로그인 쿠키(HMAC 서명) 검증. 서버에 세션을 저장하지 않음.
 - `app/chat.py` — **지휘자.** "질문 → 검색조건 추출 → 검색 → 답변 생성" 파이프라인을 순서대로 지휘.
 - `app/art.py` — **검색엔진.** `data/art.db`에서 SQLite FTS5로 작품을 찾음. AI 호출 없이 순수 DB 검색.
-- `app/llm.py` — **AI 통신창구.** Upstage `solar-pro3`를 실제로 호출하는 유일한 곳. 타임아웃·에러를 통일된 형태로 반환.
+- `app/llm.py` — **AI 통신창구.** Upstage `solar-pro4`를 실제로 호출하는 유일한 곳. 타임아웃·에러를 통일된 형태로 반환.
 - `app/db.py` — **저장소.** 사용자·대화 로그 저장(로컬 SQLite 또는 Turso 자동 선택).
-- `app/config.py` — **규칙집.** 허용 모델(solar-pro3)과 만료일 등 정책을 고정.
+- `app/config.py` — **규칙집.** 허용 모델(solar-pro4)과 만료일 등 정책을 고정.
 - `app/static/*` — **화면.** 브라우저에 보이는 HTML/JS/CSS 전부.
 
 ```
 브라우저 ─ /static (HTML/JS) ─┐
                               ├─ FastAPI (app/main.py, Vercel Function)
   POST /api/chat ─────────────┘    ├─ 인증: scrypt 해시 + HMAC 서명 쿠키 (app/auth.py)
-                                   ├─ chat.extract_intent → solar-pro3 (검색 조건 JSON)
+                                   ├─ chat.extract_intent → solar-pro4 (검색 조건 JSON)
                                    ├─ art.search → data/art.db (읽기 전용 SQLite + FTS5)
-                                   ├─ chat.compose_answer → solar-pro3 (근거 기반 한국어 답변)
+                                   ├─ chat.compose_answer → solar-pro4 (근거 기반 한국어 답변)
                                    └─ db.execute → Turso(SQLite 호환): users, chats
 ```
 | 컴포넌트 | 역할 |
 |---|---|
 | `app/main.py` | 라우팅, 입력 검증, 로그, 오류 응답 |
 | `app/chat.py` | 질문 → 검색 의도 → DB 검색 → 답변 생성 파이프라인 |
-| `app/llm.py` | Upstage solar-pro3 호출(서버 전용, 타임아웃 설정) |
-| `app/config.py` | **solar-pro3만 허용, 2027-04-01 이후 모든 모델 차단** |
+| `app/llm.py` | Upstage solar-pro4 호출(서버 전용, 타임아웃 설정) |
+| `app/config.py` | **solar-pro4만 허용, 2027-04-01 이후 모든 모델 차단** |
 | `app/db.py` | 사용자·로그 DB (Turso 또는 로컬 SQLite 자동 선택) |
 | `scripts/collect_*.py` | 공개 API → `data/art.db` 수집기 |
 
@@ -49,7 +49,7 @@
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| POST | `/api/auth/signup` | `{email, password(8자+)}` → 201, 세션 쿠키 발급 |
+| POST | `/api/auth/signup` | `{email, password(8자+), private_code?}` → 201, 세션 쿠키 발급 (`private_code`가 `PREMIUM_CODE`와 일치하면 프리미엄 가입) |
 | POST | `/api/auth/login` | 로그인 → 200, 세션 쿠키 |
 | POST | `/api/auth/logout` | 쿠키 삭제 |
 | GET | `/api/me` | 현재 사용자 |
@@ -70,13 +70,17 @@
 // 오류 예
 {"error": {"code": "AI_TIMEOUT", "message": "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요."}}
 ```
-오류 코드: `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`(400) `RATE_LIMITED`(429, 시간당 30회)
+오류 코드: `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`(400) `RATE_LIMITED`(429, 시간당 일반 30회·프리미엄 300회)
 `AI_TIMEOUT`(504) `AI_ERROR`(502) `AI_EXPIRED`/`AI_MODEL_NOT_ALLOWED`/`AI_KEY_MISSING`(503) `DB_ERROR`/`ART_DB_ERROR`(503)
+
+**프리미엄**: 회원가입 시 `private_code`로 `PREMIUM_CODE`(서버 환경변수)와 일치하는 값을 보내면 해당 계정은 시간당 질문 한도가
+`CHAT_LIMIT_PER_HOUR_PREMIUM`(기본 300)으로 상향된다. 프리미엄 여부는 서버 세션 없이 서명된 쿠키에 담기므로(`app/auth.py`)
+가입/로그인 시점 기준이며, 코드 입력 UI는 로그인 화면이 아니라 **회원가입** 화면에만 있다(`app/static/index.html`).
 
 ## 4. DB 구조
 - `data/art.db` (읽기 전용, 레포에 포함): `artworks`(source, source_id, title, artist, date_display, medium, subjects, image_url, source_url, license, is_public_domain …) + `artworks_fts`(FTS5). 스키마: `db/schema.sql`
 - Turso/SQLite (쓰기): 
-  - `users(id, email UNIQUE, password_hash, created_at)`
+  - `users(id, email UNIQUE, password_hash, is_premium, created_at)`
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
 
 **DB 확인 가이드** (택 1 이상)
@@ -111,10 +115,12 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 
 | 이름 | 설명 |
 |---|---|
-| `UPSTAGE_API_KEY` | Upstage solar-pro3 키 |
+| `UPSTAGE_API_KEY` | Upstage solar-pro4 키 |
 | `SECRET_KEY` | 세션 서명 키 (32자 이상 랜덤) |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | Turso DB. **없으면 로컬 `data/app.db` 사용** |
 | `LLM_TIMEOUT_SECONDS` | AI 호출 타임아웃(기본 20) |
+| `PREMIUM_CODE` | 회원가입 시 입력받는 프리미엄 코드(선택, 비우면 프리미엄 가입 비활성) |
+| `CHAT_LIMIT_PER_HOUR_PREMIUM` | 프리미엄 사용자 시간당 질문 상한(기본 300) |
 
 **Vercel + Turso 배포**
 ```bash
@@ -137,4 +143,4 @@ vercel deploy --prod
 ## 8. 민감정보 관리
 - 모든 키는 환경 변수로만 사용하고 `.env`는 `.gitignore`로 제외한다. 예시는 `.env.example`.
 - AI 호출은 서버에서만 수행되며 키는 응답·로그에 노출되지 않는다.
-- **모델 정책**: `solar-pro3` 외 모델 호출은 코드에서 차단, **2027-04 이후에는 모든 모델 호출이 차단**된다 (`app/config.py`).
+- **모델 정책**: `solar-pro4` 외 모델 호출은 코드에서 차단, **2027-04 이후에는 모든 모델 호출이 차단**된다 (`app/config.py`).

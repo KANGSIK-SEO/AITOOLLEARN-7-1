@@ -18,7 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import auth, chat, db
-from .config import CHAT_LIMIT_PER_HOUR, CHAT_MAX_LENGTH, CONTEXT_TURNS, AIUnavailableError
+from .config import (CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
+                     CONTEXT_TURNS, AIUnavailableError)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("app")
@@ -58,24 +59,29 @@ async def db_exc(_: Request, exc: db.DbError):
     return error(503, "DB_ERROR", "데이터베이스에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.")
 
 
-def current_user(session: str | None = Cookie(default=None)) -> int:
-    user_id = auth.read_token(session)
-    if user_id is None:
+def current_session(session: str | None = Cookie(default=None)) -> dict:
+    data = auth.read_token(session)
+    if data is None:
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "로그인이 필요합니다."})
-    return user_id
+    return data
+
+
+def current_user(session_data: dict = Depends(current_session)) -> int:
+    return session_data["uid"]
 
 
 class Credentials(BaseModel):
     email: str
     password: str
+    private_code: str | None = None  # 회원가입 시에만 사용. 일치하면 프리미엄으로 가입된다.
 
 
 class ChatRequest(BaseModel):
     message: str
 
 
-def _set_cookie(resp: JSONResponse, user_id: int, request: Request) -> None:
-    resp.set_cookie(COOKIE, auth.make_token(user_id), max_age=auth.TOKEN_TTL_SECONDS,
+def _set_cookie(resp: JSONResponse, user_id: int, is_premium: bool, request: Request) -> None:
+    resp.set_cookie(COOKIE, auth.make_token(user_id, is_premium), max_age=auth.TOKEN_TTL_SECONDS,
                     httponly=True, samesite="lax", secure=request.url.scheme == "https")
 
 
@@ -98,27 +104,30 @@ def signup(body: Credentials, request: Request):
         return error(400, "INVALID_PASSWORD", "비밀번호는 8자 이상 128자 이하여야 합니다.")
     if db.execute("SELECT 1 AS x FROM users WHERE email = ?", (email,)):
         return error(409, "EMAIL_TAKEN", "이미 가입된 이메일입니다.")
+    is_premium = auth.check_premium_code(body.private_code)
     try:
-        row = db.execute("INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?) RETURNING id",
-                         (email, auth.hash_password(body.password), _now()))[0]
+        row = db.execute(
+            "INSERT INTO users (email, password_hash, is_premium, created_at) VALUES (?, ?, ?, ?) RETURNING id",
+            (email, auth.hash_password(body.password), int(is_premium), _now()))[0]
     except db.DbError:  # 동시 가입으로 UNIQUE 충돌
         return error(409, "EMAIL_TAKEN", "이미 가입된 이메일입니다.")
-    log.info("signup_success user_id=%s", row["id"])
-    resp = JSONResponse({"user": {"id": row["id"], "email": email}}, status_code=201)
-    _set_cookie(resp, row["id"], request)
+    log.info("signup_success user_id=%s is_premium=%s", row["id"], is_premium)
+    resp = JSONResponse({"user": {"id": row["id"], "email": email, "is_premium": is_premium}}, status_code=201)
+    _set_cookie(resp, row["id"], is_premium, request)
     return resp
 
 
 @app.post("/api/auth/login")
 def login(body: Credentials, request: Request):
     email = body.email.strip().lower()
-    rows = db.execute("SELECT id, password_hash FROM users WHERE email = ?", (email,))
+    rows = db.execute("SELECT id, password_hash, is_premium FROM users WHERE email = ?", (email,))
     if not rows or not auth.verify_password(body.password, rows[0]["password_hash"]):
         log.info("login_failed")
         return error(401, "INVALID_CREDENTIALS", "이메일 또는 비밀번호가 올바르지 않습니다.")
-    log.info("login_success user_id=%s", rows[0]["id"])
-    resp = JSONResponse({"user": {"id": rows[0]["id"], "email": email}})
-    _set_cookie(resp, rows[0]["id"], request)
+    is_premium = bool(rows[0]["is_premium"])
+    log.info("login_success user_id=%s is_premium=%s", rows[0]["id"], is_premium)
+    resp = JSONResponse({"user": {"id": rows[0]["id"], "email": email, "is_premium": is_premium}})
+    _set_cookie(resp, rows[0]["id"], is_premium, request)
     return resp
 
 
@@ -131,10 +140,12 @@ def logout():
 
 @app.get("/api/me")
 def me(user_id: int = Depends(current_user)):
-    rows = db.execute("SELECT id, email, created_at FROM users WHERE id = ?", (user_id,))
+    rows = db.execute("SELECT id, email, created_at, is_premium FROM users WHERE id = ?", (user_id,))
     if not rows:
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "로그인이 필요합니다."})
-    return {"user": rows[0]}
+    user = rows[0]
+    user["is_premium"] = bool(user["is_premium"])
+    return {"user": user}
 
 
 def _save_chat(user_id, question, answer, status, error_code, latency_ms, artwork_ids) -> int | None:
@@ -151,7 +162,8 @@ def _save_chat(user_id, question, answer, status, error_code, latency_ms, artwor
 
 
 @app.post("/api/chat")
-def chat_endpoint(body: ChatRequest, user_id: int = Depends(current_user)):
+def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_session)):
+    user_id, is_premium = session_data["uid"], session_data["premium"]
     request_id = uuid.uuid4().hex[:8]
     log.info("request_received user_id=%s path=/api/chat request_id=%s", user_id, request_id)
 
@@ -161,10 +173,11 @@ def chat_endpoint(body: ChatRequest, user_id: int = Depends(current_user)):
     if len(question) > CHAT_MAX_LENGTH:
         return error(400, "MESSAGE_TOO_LONG", f"질문은 {CHAT_MAX_LENGTH}자 이하로 입력해 주세요.")
 
+    limit = CHAT_LIMIT_PER_HOUR_PREMIUM if is_premium else CHAT_LIMIT_PER_HOUR
     since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
     used = db.execute("SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND created_at > ?", (user_id, since))[0]["n"]
-    if used >= CHAT_LIMIT_PER_HOUR:
-        log.warning("rate_limited user_id=%s request_id=%s", user_id, request_id)
+    if used >= limit:
+        log.warning("rate_limited user_id=%s request_id=%s is_premium=%s", user_id, request_id, is_premium)
         return error(429, "RATE_LIMITED", "질문이 너무 많아요. 잠시 후 다시 시도해 주세요.")
 
     history = list(reversed(db.execute(

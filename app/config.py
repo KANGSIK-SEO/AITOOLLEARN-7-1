@@ -1,7 +1,7 @@
 """AI 모델 사용 정책.
 
-- solar-pro3만 허용한다. 다른 모델은 과금되므로 코드 어디서도 호출할 수 없다.
-- 2027-04-01부터는 solar-pro3도 과금되므로 모든 모델을 무효화한다.
+- solar-pro4만 허용한다. 다른 모델은 과금되므로 코드 어디서도 호출할 수 없다.
+- 2027-04-01부터는 solar-pro4도 과금되므로 모든 모델을 무효화한다.
 """
 import os
 from datetime import date
@@ -25,7 +25,7 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
-ALLOWED_MODEL = "solar-pro3"
+ALLOWED_MODEL = "solar-pro4"
 AI_CUTOFF_DATE = date(2027, 4, 1)  # 이 날짜 이후(포함) 모든 AI 호출 차단
 UPSTAGE_BASE_URL = "https://api.upstage.ai/v1"
 
@@ -63,7 +63,13 @@ def get_secret_key() -> str:
     return key
 
 
+def get_premium_code() -> str:
+    """가입 시 이 값과 일치하는 코드를 입력하면 프리미엄으로 전환. 비어 있으면 프리미엄 가입 비활성."""
+    return os.environ.get("PREMIUM_CODE", "")
+
+
 LLM_TIMEOUT_SECONDS = float(os.environ.get("LLM_TIMEOUT_SECONDS", "20"))
 CHAT_MAX_LENGTH = 500          # 질문 최대 글자 수
 CONTEXT_TURNS = 5              # 문맥으로 넘기는 최근 대화 수
-CHAT_LIMIT_PER_HOUR = 30       # 사용자별 시간당 질문 상한 (무료 API 보호)
+CHAT_LIMIT_PER_HOUR = 30               # 일반 사용자 시간당 질문 상한 (무료 API 보호)
+CHAT_LIMIT_PER_HOUR_PREMIUM = int(os.environ.get("CHAT_LIMIT_PER_HOUR_PREMIUM", "300"))  # 프리미엄 사용자 상한
