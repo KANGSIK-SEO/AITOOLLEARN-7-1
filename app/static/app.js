@@ -6,6 +6,7 @@ function show(loggedIn, email, isPremium) {
     $("chat-panel").hidden = !loggedIn;
     $("logout-btn").hidden = !loggedIn;
     $("status-bar").textContent = loggedIn ? `${email} 님${isPremium ? " · 초대코드 회원" : ""}` : "로그인이 필요합니다";
+    document.body.classList.toggle("light-theme", loggedIn && !!isPremium);
 }
 
 async function api(path, options = {}) {

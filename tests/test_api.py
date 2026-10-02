@@ -130,6 +130,43 @@ def test_signup_without_premium_code_is_regular_when_code_unset(client, monkeypa
     assert r.status_code == 201 and r.json()["user"]["is_premium"] is False
 
 
+def test_free_limit_blocks_after_lifetime_quota(client, monkeypatch):
+    monkeypatch.setattr(main_module, "CHAT_LIFETIME_LIMIT_FREE", 2)
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    assert client.post("/api/chat", json={"message": "1"}).status_code == 200
+    assert client.post("/api/chat", json={"message": "2"}).status_code == 200
+    r = client.post("/api/chat", json={"message": "3"})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "FREE_LIMIT_REACHED"
+
+
+def test_premium_user_is_exempt_from_free_limit(client, monkeypatch):
+    monkeypatch.setenv("PREMIUM_CODE", "vip-2026")
+    monkeypatch.setattr(main_module, "CHAT_LIFETIME_LIMIT_FREE", 1)
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    client.post("/api/auth/signup",
+                json={"email": "vip3@x.com", "password": "password123", "private_code": "vip-2026"})
+    assert client.post("/api/chat", json={"message": "1"}).status_code == 200
+    # 평생 무료 한도(1)를 넘겨도 초대코드 계정은 막히지 않아야 한다
+    assert client.post("/api/chat", json={"message": "2"}).status_code == 200
+
+
+def test_premium_users_get_more_recommended_artworks(client, monkeypatch):
+    monkeypatch.setenv("PREMIUM_CODE", "vip-2026")
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    client.post("/api/auth/signup",
+                json={"email": "vip4@x.com", "password": "password123", "private_code": "vip-2026"})
+    r = client.post("/api/chat", json={"message": "봄 느낌 풍경화 보여줘"})
+    assert r.status_code == 200 and len(r.json()["artworks"]) <= 100
+
+
+def test_regular_users_get_capped_recommended_artworks(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    r = client.post("/api/chat", json={"message": "봄 느낌 풍경화 보여줘"})
+    assert r.status_code == 200 and len(r.json()["artworks"]) <= 6
+
+
 def test_schema_migration_is_idempotent(tmp_path, monkeypatch):
     """재배포(새 서버리스 인스턴스)처럼 ensure_schema()가 다시 ALTER TABLE을 실행해도 죽지 않아야 한다."""
     monkeypatch.setenv("LOCAL_DB_PATH", str(tmp_path / "app.db"))

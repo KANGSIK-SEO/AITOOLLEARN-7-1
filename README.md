@@ -70,12 +70,20 @@
 // 오류 예
 {"error": {"code": "AI_TIMEOUT", "message": "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요."}}
 ```
-오류 코드: `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`(400) `RATE_LIMITED`(429, 시간당 일반 30회·프리미엄 300회)
-`AI_TIMEOUT`(504) `AI_ERROR`(502) `AI_EXPIRED`/`AI_MODEL_NOT_ALLOWED`/`AI_KEY_MISSING`(503) `DB_ERROR`/`ART_DB_ERROR`(503)
+오류 코드: `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`(400) `RATE_LIMITED`(429, 시간당 일반 30회·초대코드 300회)
+`FREE_LIMIT_REACHED`(403, 초대코드 없는 계정의 평생 무료 질문 100회 소진) `AI_TIMEOUT`(504) `AI_ERROR`(502)
+`AI_EXPIRED`/`AI_MODEL_NOT_ALLOWED`/`AI_KEY_MISSING`(503) `DB_ERROR`/`ART_DB_ERROR`(503)
 
-**프리미엄**: 회원가입 시 `private_code`로 `PREMIUM_CODE`(서버 환경변수)와 일치하는 값을 보내면 해당 계정은 시간당 질문 한도가
-`CHAT_LIMIT_PER_HOUR_PREMIUM`(기본 300)으로 상향된다. 프리미엄 여부는 서버 세션 없이 서명된 쿠키에 담기므로(`app/auth.py`)
-가입/로그인 시점 기준이며, 코드 입력 UI는 로그인 화면이 아니라 **회원가입** 화면에만 있다(`app/static/index.html`).
+**초대코드(프리미엄)**: 회원가입 시 `private_code`로 `PREMIUM_CODE`(서버 환경변수)와 일치하는 값을 보내면 해당 계정은
+- 시간당 질문 한도가 `CHAT_LIMIT_PER_HOUR_PREMIUM`(기본 300)으로 상향되고, **평생 무료 질문 100회 제한이 적용되지 않는다**
+  (일반 계정은 `CHAT_LIFETIME_LIMIT_FREE`(기본 100)회를 다 쓰면 `FREE_LIMIT_REACHED`로 막힌다).
+- 추천 작품 수가 `ART_RESULTS_LIMIT_PREMIUM`(기본 100, 일반은 `ART_RESULTS_LIMIT`=6)으로 늘어난다. 답변 본문에서 번호로
+  설명하는 작품은 `ANSWER_NARRATION_LIMIT`(6)개까지만이고 — 100개를 전부 LLM이 한 줄씩 설명하면 토큰 비용이 커지고
+  응답이 잘릴 수 있어서다 — 나머지는 카드로만 보여주고 "그 외 N개를 더 찾았어요"를 한 줄 덧붙인다(`app/chat.py`).
+- 화면 배경이 화이트 테마로 바뀐다(`body.light-theme`, `app/static/style.css`, `app/static/app.js`).
+
+초대코드 여부는 서버 세션 없이 서명된 쿠키에 담기므로(`app/auth.py`) 가입/로그인 시점 기준이며, 코드 입력 UI는
+로그인 화면이 아니라 **회원가입** 화면에만 있다(`app/static/index.html`).
 
 ## 4. DB 구조
 - `data/art.db` (읽기 전용, 레포에 포함): `artworks`(source, source_id, title, artist, date_display, medium, subjects, image_url, source_url, license, is_public_domain …) + `artworks_fts`(FTS5). 스키마: `db/schema.sql`
@@ -119,8 +127,10 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 | `SECRET_KEY` | 세션 서명 키 (32자 이상 랜덤) |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | Turso DB. **없으면 로컬 `data/app.db` 사용** |
 | `LLM_TIMEOUT_SECONDS` | AI 호출 타임아웃(기본 20) |
-| `PREMIUM_CODE` | 회원가입 시 입력받는 프리미엄 코드(선택, 비우면 프리미엄 가입 비활성) |
-| `CHAT_LIMIT_PER_HOUR_PREMIUM` | 프리미엄 사용자 시간당 질문 상한(기본 300) |
+| `PREMIUM_CODE` | 회원가입 시 입력받는 초대코드(선택, 비우면 초대코드 가입 비활성) |
+| `CHAT_LIMIT_PER_HOUR_PREMIUM` | 초대코드 사용자 시간당 질문 상한(기본 300) |
+| `CHAT_LIFETIME_LIMIT_FREE` | 초대코드 없는 사용자의 평생 무료 질문 수(기본 100) |
+| `ART_RESULTS_LIMIT_PREMIUM` | 초대코드 사용자에게 보여줄 추천 작품 수(기본 100) |
 
 **Vercel + Turso 배포**
 ```bash

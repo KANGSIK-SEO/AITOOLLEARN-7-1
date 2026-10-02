@@ -18,7 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import auth, chat, db
-from .config import (CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
+from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, CHAT_LIFETIME_LIMIT_FREE,
+                     CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
                      CONTEXT_TURNS, AIUnavailableError)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -173,12 +174,20 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
     if len(question) > CHAT_MAX_LENGTH:
         return error(400, "MESSAGE_TOO_LONG", f"질문은 {CHAT_MAX_LENGTH}자 이하로 입력해 주세요.")
 
-    limit = CHAT_LIMIT_PER_HOUR_PREMIUM if is_premium else CHAT_LIMIT_PER_HOUR
+    hour_limit = CHAT_LIMIT_PER_HOUR_PREMIUM if is_premium else CHAT_LIMIT_PER_HOUR
     since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
-    used = db.execute("SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND created_at > ?", (user_id, since))[0]["n"]
-    if used >= limit:
+    used_hour = db.execute("SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND created_at > ?", (user_id, since))[0]["n"]
+    if used_hour >= hour_limit:
         log.warning("rate_limited user_id=%s request_id=%s is_premium=%s", user_id, request_id, is_premium)
         return error(429, "RATE_LIMITED", "질문이 너무 많아요. 잠시 후 다시 시도해 주세요.")
+
+    if not is_premium:
+        used_lifetime = db.execute(
+            "SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND status = 'ok'", (user_id,))[0]["n"]
+        if used_lifetime >= CHAT_LIFETIME_LIMIT_FREE:
+            log.warning("free_limit_reached user_id=%s request_id=%s", user_id, request_id)
+            return error(403, "FREE_LIMIT_REACHED",
+                        f"무료 이용 {CHAT_LIFETIME_LIMIT_FREE}회를 모두 사용했어요. 초대코드가 있다면 입력해 보세요.")
 
     history = list(reversed(db.execute(
         "SELECT question, answer FROM chats WHERE user_id = ? AND status = 'ok' ORDER BY id DESC LIMIT ?",
@@ -186,9 +195,10 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
 
     started = time.monotonic()
     log.info("ai_call_start user_id=%s request_id=%s", user_id, request_id)
+    art_limit = ART_RESULTS_LIMIT_PREMIUM if is_premium else ART_RESULTS_LIMIT
     try:
         intent = chat.extract_intent(question)
-        works = chat.find_artworks(intent)
+        works = chat.find_artworks(intent, limit=art_limit)
         answer = chat.compose_answer(question, works, history)
     except AIUnavailableError as e:
         latency = int((time.monotonic() - started) * 1000)
