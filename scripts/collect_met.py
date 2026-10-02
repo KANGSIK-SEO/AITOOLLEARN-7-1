@@ -36,7 +36,9 @@ def to_row(o: dict) -> dict | None:
         "subjects": ", ".join(tags) or None,
         "image_url": o["primaryImage"],
         "thumbnail_url": o.get("primaryImageSmall") or None,
-        "source_url": o.get("objectURL") or f"https://www.metmuseum.org/art/collection/search/{o['objectID']}",
+        # MET이 www 서브도메인을 폐기해 API가 돌려주는 objectURL도 www 그대로라 깨짐 → apex 도메인으로 교정
+        "source_url": (o.get("objectURL") or f"https://metmuseum.org/art/collection/search/{o['objectID']}")
+            .replace("https://www.metmuseum.org", "https://metmuseum.org"),
         "credit_line": o.get("creditLine") or None,
         "is_public_domain": 1,
         "license": "CC0",
