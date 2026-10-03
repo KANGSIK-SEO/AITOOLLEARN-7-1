@@ -87,6 +87,7 @@ class Credentials(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    lang: str = "ko"  # 프론트엔드 언어 토글(ko/en). 모르는 값은 chat.compose_answer에서 ko로 폴백.
 
 
 def _set_cookie(resp: JSONResponse, user_id: int, is_premium: bool, request: Request) -> None:
@@ -229,7 +230,7 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
     try:
         intent = chat.extract_intent(question)
         works, relaxed = chat.find_artworks(intent, limit=art_limit)
-        answer = chat.compose_answer(question, works, history, relaxed=relaxed)
+        answer = chat.compose_answer(question, works, history, relaxed=relaxed, lang=body.lang)
     except AIUnavailableError as e:
         latency = int((time.monotonic() - started) * 1000)
         log.error("ai_call_failure request_id=%s code=%s latency_ms=%s", request_id, e.code, latency)
