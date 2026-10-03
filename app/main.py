@@ -17,8 +17,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, chat, db
-from .config import CHAT_LIMIT_PER_HOUR, CHAT_MAX_LENGTH, CONTEXT_TURNS, AIUnavailableError
+from . import auth, chat, db, guardian
+from .config import CHAT_LIMIT_PER_HOUR, CHAT_MAX_LENGTH, CONTEXT_TURNS, CRON_SECRET, AIUnavailableError
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("app")
@@ -29,8 +29,8 @@ COOKIE = "session"
 app = FastAPI(title="저작권 걱정 없는 퍼블릭 도메인 명화 찾기 챗봇")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-STATUS_BY_CODE = {"AI_TIMEOUT": 504, "AI_ERROR": 502, "AI_EXPIRED": 503,
-                  "AI_MODEL_NOT_ALLOWED": 503, "AI_KEY_MISSING": 503}
+STATUS_BY_CODE = {"AI_TIMEOUT": 504, "AI_ERROR": 502, "AI_RATE_LIMITED": 429,
+                  "AI_KEY_MISSING": 503, "AI_BACKED_OFF": 503}
 
 
 def _now() -> str:
@@ -55,7 +55,15 @@ async def validation_exc(_: Request, __: RequestValidationError):
 @app.exception_handler(db.DbError)
 async def db_exc(_: Request, exc: db.DbError):
     log.error("db_error detail=%s", exc)
+    guardian.record_incident("reliability", "DB_ERROR", str(exc), {}, "high")
     return error(503, "DB_ERROR", "데이터베이스에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.")
+
+
+@app.exception_handler(Exception)
+async def unhandled_exc(_: Request, exc: Exception):
+    log.error("unhandled_exception detail=%r", exc, exc_info=True)
+    guardian.record_incident("reliability", "UNHANDLED_EXCEPTION", repr(exc), {}, "high")
+    return error(500, "INTERNAL_ERROR", "예상치 못한 오류가 발생했어요. 잠시 후 다시 시도해 주세요.")
 
 
 def current_user(session: str | None = Cookie(default=None)) -> int:
@@ -89,8 +97,20 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/api/guardian/daily-digest")
+def guardian_daily_digest(request: Request):
+    """보수보안 에이전트의 일일 점검 (Vercel Cron 전용, CRON_SECRET으로 보호)."""
+    if not CRON_SECRET or request.headers.get("authorization") != f"Bearer {CRON_SECRET}":
+        raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
+    return guardian.run_daily_digest()
+
+
 @app.post("/api/auth/signup")
 def signup(body: Credentials, request: Request):
+    ip = guardian.client_ip(request)
+    if not guardian.check_rate(f"signup:{ip}", limit=10, window_seconds=3600):
+        guardian.record_incident("security", "SIGNUP_RATE_LIMITED", f"{ip} 가입 시도 과다", {"ip": ip}, "medium")
+        return error(429, "RATE_LIMITED", "가입 시도가 너무 많아요. 잠시 후 다시 시도해 주세요.")
     email = body.email.strip().lower()
     if not auth.EMAIL_RE.match(email) or len(email) > 254:
         return error(400, "INVALID_EMAIL", "이메일 형식이 올바르지 않습니다.")
@@ -111,10 +131,14 @@ def signup(body: Credentials, request: Request):
 
 @app.post("/api/auth/login")
 def login(body: Credentials, request: Request):
+    ip = guardian.client_ip(request)
     email = body.email.strip().lower()
+    if guardian.check_login_lockout(email) or not guardian.check_rate(f"login:{ip}", limit=20, window_seconds=600):
+        return error(429, "RATE_LIMITED", "로그인 시도가 너무 많아요. 잠시 후 다시 시도해 주세요.")
     rows = db.execute("SELECT id, password_hash FROM users WHERE email = ?", (email,))
     if not rows or not auth.verify_password(body.password, rows[0]["password_hash"]):
         log.info("login_failed")
+        guardian.note_login_failure(email)
         return error(401, "INVALID_CREDENTIALS", "이메일 또는 비밀번호가 올바르지 않습니다.")
     log.info("login_success user_id=%s", rows[0]["id"])
     resp = JSONResponse({"user": {"id": rows[0]["id"], "email": email}})
@@ -160,6 +184,12 @@ def chat_endpoint(body: ChatRequest, user_id: int = Depends(current_user)):
         return error(400, "EMPTY_MESSAGE", "질문을 입력해 주세요.")
     if len(question) > CHAT_MAX_LENGTH:
         return error(400, "MESSAGE_TOO_LONG", f"질문은 {CHAT_MAX_LENGTH}자 이하로 입력해 주세요.")
+    if guardian.looks_malicious(question):
+        guardian.record_incident("security", "MALICIOUS_INPUT_BLOCKED", "의심스러운 입력 패턴 차단",
+                                 {"user_id": user_id, "request_id": request_id}, "medium")
+        return error(400, "INVALID_INPUT", "허용되지 않는 입력입니다.")
+    if guardian.is_ai_backed_off():
+        return error(503, "AI_BACKED_OFF", "AI 서비스가 일시적으로 쉬고 있어요. 잠시 후 다시 시도해 주세요.")
 
     since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
     used = db.execute("SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND created_at > ?", (user_id, since))[0]["n"]
@@ -181,6 +211,9 @@ def chat_endpoint(body: ChatRequest, user_id: int = Depends(current_user)):
         latency = int((time.monotonic() - started) * 1000)
         log.error("ai_call_failure request_id=%s code=%s latency_ms=%s", request_id, e.code, latency)
         _save_chat(user_id, question, None, "error", e.code, latency, [])
+        guardian.record_incident("reliability", e.code, str(e), {"request_id": request_id, "latency_ms": latency},
+                                 "medium" if e.code == "AI_RATE_LIMITED" else "low")
+        guardian.note_ai_failure(e.code)
         return error(STATUS_BY_CODE.get(e.code, 502), e.code, str(e))
     except sqlite3.Error as e:
         latency = int((time.monotonic() - started) * 1000)
@@ -213,7 +246,10 @@ AIC_UA = "AITOOLLEARN-7-1 (student project; https://github.com/KANGSIK-SEO/AITOO
 
 
 @app.get("/api/img/aic/{image_id}")
-def aic_image(image_id: str, w: int = 400):
+def aic_image(image_id: str, w: int = 400, request: Request = None):
+    ip = guardian.client_ip(request)
+    if not guardian.check_rate(f"img:{ip}", limit=300, window_seconds=3600):
+        return error(429, "RATE_LIMITED", "이미지 요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
     if not AIC_ID_RE.match(image_id) or w not in AIC_WIDTHS:
         return error(400, "INVALID_IMAGE", "지원하지 않는 이미지 요청입니다.")
     req = urllib.request.Request(f"{AIC_IIIF}/{image_id}/full/{w},/0/default.jpg", headers={"AIC-User-Agent": AIC_UA, "User-Agent": "AITOOLLEARN-7-1/1.0"})

@@ -19,27 +19,30 @@
 - `app/auth.py` — **문지기.** 비밀번호 해시(scrypt)와 로그인 쿠키(HMAC 서명) 검증. 서버에 세션을 저장하지 않음.
 - `app/chat.py` — **지휘자.** "질문 → 검색조건 추출 → 검색 → 답변 생성" 파이프라인을 순서대로 지휘.
 - `app/art.py` — **검색엔진.** `data/art.db`에서 SQLite FTS5로 작품을 찾음. AI 호출 없이 순수 DB 검색.
-- `app/llm.py` — **AI 통신창구.** Upstage `solar-pro3`를 실제로 호출하는 유일한 곳. 타임아웃·에러를 통일된 형태로 반환.
+- `app/llm.py` — **AI 통신창구.** OpenAI `gpt-6-astra`를 실제로 호출하는 유일한 곳. 타임아웃·에러를 통일된 형태로 반환.
 - `app/db.py` — **저장소.** 사용자·대화 로그 저장(로컬 SQLite 또는 Turso 자동 선택).
-- `app/config.py` — **규칙집.** 허용 모델(solar-pro3)과 만료일 등 정책을 고정.
+- `app/config.py` — **규칙집.** 사용 모델(gpt-6-astra)과 키 이름 등 설정을 고정.
+- `app/guardian.py` — **보수보안 에이전트.** 장애·보안 사건을 즉시 기록·대응(잠금, AI 백오프, 악성 입력 차단)하고, 1일 1회 gpt-6-astra로 일괄 분석·GitHub 이슈까지 생성.
 - `app/static/*` — **화면.** 브라우저에 보이는 HTML/JS/CSS 전부.
 
 ```
 브라우저 ─ /static (HTML/JS) ─┐
                               ├─ FastAPI (app/main.py, Vercel Function)
   POST /api/chat ─────────────┘    ├─ 인증: scrypt 해시 + HMAC 서명 쿠키 (app/auth.py)
-                                   ├─ chat.extract_intent → solar-pro3 (검색 조건 JSON)
+                                   ├─ chat.extract_intent → gpt-6-astra (검색 조건 JSON)
                                    ├─ art.search → data/art.db (읽기 전용 SQLite + FTS5)
-                                   ├─ chat.compose_answer → solar-pro3 (근거 기반 한국어 답변)
-                                   └─ db.execute → Turso(SQLite 호환): users, chats
+                                   ├─ chat.compose_answer → gpt-6-astra (근거 기반 한국어 답변)
+                                   ├─ guardian: 실패 시 즉시 기록·대응 (잠금/백오프/차단)
+                                   └─ db.execute → Turso(SQLite 호환): users, chats, incidents
 ```
 | 컴포넌트 | 역할 |
 |---|---|
 | `app/main.py` | 라우팅, 입력 검증, 로그, 오류 응답 |
 | `app/chat.py` | 질문 → 검색 의도 → DB 검색 → 답변 생성 파이프라인 |
-| `app/llm.py` | Upstage solar-pro3 호출(서버 전용, 타임아웃 설정) |
-| `app/config.py` | **solar-pro3만 허용, 2027-04-01 이후 모든 모델 차단** |
-| `app/db.py` | 사용자·로그 DB (Turso 또는 로컬 SQLite 자동 선택) |
+| `app/llm.py` | OpenAI gpt-6-astra 호출(서버 전용, 타임아웃 설정) |
+| `app/config.py` | 사용 모델(gpt-6-astra)·키 이름 등 설정 |
+| `app/guardian.py` | **보수보안 에이전트** — 장애·보안 사건 즉시 대응 + 1일 1회 AI 일괄 분석 (`/api/guardian/daily-digest`) |
+| `app/db.py` | 사용자·로그·사건 DB (Turso 또는 로컬 SQLite 자동 선택) |
 | `scripts/collect_*.py` | 공개 API → `data/art.db` 수집기 |
 
 문맥 유지: 같은 사용자의 최근 `CONTEXT_TURNS`(5)개 Q/A를 답변 프롬프트에 포함한다.
@@ -70,14 +73,18 @@
 // 오류 예
 {"error": {"code": "AI_TIMEOUT", "message": "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요."}}
 ```
-오류 코드: `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`(400) `RATE_LIMITED`(429, 시간당 30회)
-`AI_TIMEOUT`(504) `AI_ERROR`(502) `AI_EXPIRED`/`AI_MODEL_NOT_ALLOWED`/`AI_KEY_MISSING`(503) `DB_ERROR`/`ART_DB_ERROR`(503)
+오류 코드: `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`/`INVALID_INPUT`(400) `RATE_LIMITED`(429, 시간당 30회)
+`AI_TIMEOUT`(504) `AI_ERROR`(502) `AI_RATE_LIMITED`(429) `AI_BACKED_OFF`/`AI_KEY_MISSING`(503) `DB_ERROR`/`ART_DB_ERROR`(503)
+`INTERNAL_ERROR`(500, 예상 못한 예외는 모두 여기로 모이고 보수보안 에이전트가 기록한다)
 
 ## 4. DB 구조
 - `data/art.db` (읽기 전용, 레포에 포함): `artworks`(source, source_id, title, artist, date_display, medium, subjects, image_url, source_url, license, is_public_domain …) + `artworks_fts`(FTS5). 스키마: `db/schema.sql`
 - Turso/SQLite (쓰기): 
   - `users(id, email UNIQUE, password_hash, created_at)`
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
+  - `incidents(id, category[reliability|security], code, message, context(JSON), severity, auto_action, diagnosis, created_at)` — 보수보안 에이전트 사건 로그. `diagnosis`는 일일 배치 분석 전까지 NULL.
+  - `runtime_flags(key, value, updated_at)` — AI 백오프·로그인 잠금 등 자동 대응 상태값 (예: `ai_backoff_until`, `lockout:<email>`)
+  - `rate_counters(bucket, count, window_start)` — IP/이메일 단위 레이트리밋 카운터
 
 **DB 확인 가이드** (택 1 이상)
 1. 로그 조회 API: `curl -b cookies.txt https://<서비스>/api/me/chats`
@@ -111,17 +118,29 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 
 | 이름 | 설명 |
 |---|---|
-| `UPSTAGE_API_KEY` | Upstage solar-pro3 키 |
+| `GPT_ASTRA_API_KEY` | OpenAI gpt-6-astra 키 |
 | `SECRET_KEY` | 세션 서명 키 (32자 이상 랜덤) |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | Turso DB. **없으면 로컬 `data/app.db` 사용** |
 | `LLM_TIMEOUT_SECONDS` | AI 호출 타임아웃(기본 20) |
+| `LLM_REASONING_EFFORT` | gpt-6-astra reasoning_effort (기본 low — 비용 보호) |
+| `CRON_SECRET` | 보수보안 에이전트 일일 점검(`/api/guardian/daily-digest`)을 Vercel Cron만 호출하게 막는 값 |
+| `GITHUB_TOKEN` (선택) | 긴급도 medium/high 사건 발생 시 GitHub 이슈 자동 생성 (issues:write) |
+| `GITHUB_REPO` (선택) | 이슈를 열 저장소, 기본 `KANGSIK-SEO/AITOOLLEARN-7-1` |
 
 **Vercel + Turso 배포**
 ```bash
 turso db create art-chatbot && turso db show art-chatbot --url && turso db tokens create art-chatbot
-vercel link && vercel env add UPSTAGE_API_KEY && vercel env add SECRET_KEY \
-  && vercel env add TURSO_DATABASE_URL && vercel env add TURSO_AUTH_TOKEN
+vercel link && vercel env add GPT_ASTRA_API_KEY && vercel env add SECRET_KEY \
+  && vercel env add TURSO_DATABASE_URL && vercel env add TURSO_AUTH_TOKEN \
+  && vercel env add CRON_SECRET && vercel env add GITHUB_TOKEN
 vercel deploy --prod
+```
+**보수보안 에이전트 (장애 대응 + 보안)**: `app/guardian.py`. 로그인 폭주·AI 429 반복·악성 입력 패턴은
+요청마다 비용 없이 즉시 차단/잠금(`incidents`, `runtime_flags` 테이블). 쌓인 사건은 Vercel Cron이
+하루 한 번(Hobby 플랜 제한) `/api/guardian/daily-digest`를 호출해 gpt-6-astra로 한 번에 분석하고,
+긴급도가 medium/high면 GitHub 이슈를 자동으로 연다. 로컬에서 수동 실행:
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:8000/api/guardian/daily-digest
 ```
 
 ## 6. 협업 규칙
@@ -137,4 +156,17 @@ vercel deploy --prod
 ## 8. 민감정보 관리
 - 모든 키는 환경 변수로만 사용하고 `.env`는 `.gitignore`로 제외한다. 예시는 `.env.example`.
 - AI 호출은 서버에서만 수행되며 키는 응답·로그에 노출되지 않는다.
-- **모델 정책**: `solar-pro3` 외 모델 호출은 코드에서 차단, **2027-04 이후에는 모든 모델 호출이 차단**된다 (`app/config.py`).
+- **모델**: 주 모델은 `gpt-6-astra` (`app/config.py`, `app/llm.py`). GPT 쪽이 429/401/403으로
+  실패할 때만 Upstage `solar-pro3`로 한 번 더 시도한다(`UPSTAGE_API_KEY` 설정 시에만 활성, 없으면
+  폴백 없이 원래 에러 반환). 둘 다 실제 과금되므로 호출 비용 보호가 중요하다 — 시간당 질문 상한
+  (`CHAT_LIMIT_PER_HOUR`), 429 반복 시 자동 백오프, 요청당 GPT 호출 금지(배치 분석만)로 방어한다.
+
+## 9. 보수보안 에이전트
+`app/guardian.py`가 **장애 대응과 보안 위협 탐지를 함께** 담당한다.
+- **즉시(매 요청, GPT 미사용)**: 로그인 5회 실패 시 15분 잠금, AI 429가 5분 내 3회면 5분 백오프,
+  `<script>`/`UNION SELECT` 등 명백한 악성 입력 차단, 가입/로그인/이미지 프록시 IP 레이트리밋.
+  요청마다 GPT를 부르면 공격자가 실패 요청을 반복시켜 AI 비용 자체를 디도스 벡터로 쓸 수 있어 피한다.
+- **배치(1일 1회, Vercel Cron → `/api/guardian/daily-digest`, `CRON_SECRET`으로 보호)**: 그동안 쌓인
+  `incidents`를 한 번에 gpt-6-astra에 보내 "무슨 일이 있었는지 / 반복·증가 추세가 있는지 / 다음에
+  뭐가 터질 수 있는지"를 진단하고, 긴급도가 medium/high면 GitHub 이슈를 자동으로 연다.
+  코드는 수정하지 않는다(유지관리자 리뷰·머지 원칙 유지) — 사람이 볼 이슈를 만드는 것까지만 자동화한다.

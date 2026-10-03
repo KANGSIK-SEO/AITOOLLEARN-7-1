@@ -15,13 +15,14 @@
 ## 로컬 실행·테스트
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-cp .env.example .env      # UPSTAGE_API_KEY, SECRET_KEY 채우기 (TURSO_*는 비워두면 로컬 SQLite 사용)
+cp .env.example .env      # GPT_ASTRA_API_KEY, SECRET_KEY 채우기 (TURSO_*는 비워두면 로컬 SQLite 사용)
 .venv/bin/uvicorn app.main:app --reload
 .venv/bin/python -m pytest -q tests
 ```
 - PR을 올리기 전에 테스트가 통과해야 합니다. 새 기능에는 테스트를 함께 추가해 주세요.
 - **비밀 값(`.env`, API 키, 토큰)은 절대 커밋하지 않습니다.** 실수로 올렸다면 즉시 유지관리자에게 알리고 키를 폐기하세요.
-- AI 모델은 `solar-pro3`만 허용되며 2027-04 이후 모든 모델이 차단됩니다 (`app/config.py`). 다른 모델을 추가하지 마세요.
+- AI 모델은 OpenAI `gpt-6-astra`가 주 모델입니다 (`app/config.py`, `GPT_ASTRA_API_KEY`). GPT 쪽이 429/401/403으로 실패할 때만 Upstage `solar-pro3`로 한 번 더 시도합니다(`UPSTAGE_API_KEY` 설정 시에만, `app/llm.py`). 둘 다 실제 과금되므로 다른 모델을 함부로 추가하거나 `reasoning_effort`를 올리지 마세요(비용 증가).
+- `app/guardian.py`(보수보안 에이전트)가 장애·보안 사건을 `incidents` 테이블에 기록하고 1일 1회(Vercel Cron, `/api/guardian/daily-digest`) gpt-6-astra로 일괄 분석합니다. 요청마다 GPT를 부르지 않는 비용 보호 설계이므로, 새 엔드포인트에 대응 로직을 추가할 때도 이 패턴(결정적 규칙은 즉시, AI 분석은 배치)을 따라 주세요.
 
 ## PR 작성 규칙
 - 제목: `feat: 무엇을 왜` 한 줄. 본문: 변경 내용 / 확인 방법 / 스크린샷(화면 변경 시).

@@ -47,7 +47,7 @@ def _parse_intent(text: str) -> dict:
 def extract_intent(question: str) -> dict:
     raw = llm.chat_completion(
         [{"role": "system", "content": INTENT_SYSTEM}, {"role": "user", "content": question}],
-        max_tokens=200, temperature=0.0,
+        max_tokens=200,
     )
     return _parse_intent(raw)
 
@@ -76,5 +76,5 @@ def compose_answer(question: str, works: list[dict], history: list[dict]) -> str
     user = f"[이전 대화]\n{past}\n\n[검색 결과]\n{_format_results(works)}\n\n[질문]\n{question}"
     return llm.chat_completion(
         [{"role": "system", "content": ANSWER_SYSTEM}, {"role": "user", "content": user}],
-        max_tokens=700, temperature=0.3,
+        max_tokens=700,
     )
