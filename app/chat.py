@@ -17,8 +17,10 @@ INTENT_SYSTEM = (
     "- keywords는 주제·분위기·색·소재 등 (예: spring, landscape, flowers, portrait, winter, sea)."
 )
 
-ANSWER_SYSTEM_KO = (
-    "너는 '퍼블릭 도메인 명화 찾기' 챗봇이다. 한국어로 간결하게 답한다.\n"
+ANSWER_SYSTEM = (
+    "너는 '퍼블릭 도메인 명화 찾기' 챗봇이다. 먼저 한국어로 간결하게 답하고, 빈 줄을 하나 띄운 뒤 "
+    "'English:'로 시작하는 동일한 내용의 영어 번역을 덧붙인다 — 두 언어 모두 아래 규칙을 똑같이 "
+    "따른다 (서비스가 한/영 병용이라 항상 두 언어 모두 보여준다).\n"
     "규칙:\n"
     "1. 아래 [검색 결과]에 있는 작품만 언급한다. 없는 작품·작가·연도를 지어내지 않는다.\n"
     "2. 작품은 [1], [2] 번호로 인용하고, 각 작품이 왜 요청에 맞는지 한 줄씩 설명한다.\n"
@@ -29,26 +31,6 @@ ANSWER_SYSTEM_KO = (
     "6. [완화 안내]가 있으면, 작가/연도 조건에는 맞는 작품을 못 찾아 조건을 일부 빼고 찾았다는 걸 "
     "한 줄로 먼저 알려준다 — 사용자가 결과를 보기 전에 '왜 이게 나왔는지' 판단할 수 있어야 한다."
 )
-
-ANSWER_SYSTEM_EN = (
-    "You are the 'Public Domain Masterpiece Finder' chatbot. Answer concisely in English.\n"
-    "Rules:\n"
-    "1. Only mention works listed in [Search Results] below. Never invent a work, artist, or year "
-    "that isn't there.\n"
-    "2. Cite works by number [1], [2], and explain in one line why each fits the request.\n"
-    "3. The search results are released as CC0 (public domain) by the MET and the Art Institute "
-    "of Chicago. They can be used commercially, but add one line advising the user to check the "
-    "terms on the 'source page' before use.\n"
-    "4. If the search results are empty, say so and suggest more specific conditions (artist, era, "
-    "theme).\n"
-    "5. If the question asks about the previous conversation, answer based on [Previous "
-    "Conversation].\n"
-    "6. If [Relaxation Notice] is present, first tell the user in one line that no works matched "
-    "the artist/year condition so that condition was dropped — the user should be able to judge "
-    "'why these results' before seeing them."
-)
-
-ANSWER_SYSTEM_BY_LANG = {"ko": ANSWER_SYSTEM_KO, "en": ANSWER_SYSTEM_EN}
 
 
 def _parse_intent(text: str) -> dict:
@@ -87,22 +69,17 @@ def find_artworks(intent: dict, limit: int = 6) -> tuple[list[dict], bool]:
     return found, False
 
 
-def _format_results(works: list[dict], lang: str) -> str:
-    none_label = "(none)" if lang == "en" else "(없음)"
+def _format_results(works: list[dict]) -> str:
     if not works:
-        return none_label
-    unknown_artist = "Unknown artist" if lang == "en" else "작가 미상"
-    unknown_date = "Unknown date" if lang == "en" else "연도 미상"
-    source_label = "Source" if lang == "en" else "출처"
+        return "(없음)"
     return "\n".join(
-        f"[{i}] {w['title']} — {w['artist'] or unknown_artist}, {w['date_display'] or unknown_date}, "
-        f"{w['medium'] or ''} | {w['license']} | {source_label}: {w['source'].upper()}"
+        f"[{i}] {w['title']} — {w['artist'] or '작가 미상'}, {w['date_display'] or '연도 미상'}, "
+        f"{w['medium'] or ''} | {w['license']} | 출처: {w['source'].upper()}"
         for i, w in enumerate(works, 1)
     )
 
 
-def compose_answer(question: str, works: list[dict], history: list[dict], relaxed: bool = False,
-                    lang: str = "ko") -> str:
+def compose_answer(question: str, works: list[dict], history: list[dict], relaxed: bool = False) -> str:
     """works가 ANSWER_NARRATION_LIMIT보다 많아도(예: 프리미엄 100개) 모델에는 그 안에서만 넘긴다.
     본문에서 100개를 전부 한 줄씩 설명시키면 토큰 비용이 폭증하고 잘릴 수 있어서, 나머지는
     카드로만 보여주고 몇 개 더 있는지 한 줄 안내를 덧붙인다.
@@ -110,28 +87,18 @@ def compose_answer(question: str, works: list[dict], history: list[dict], relaxe
     relaxed=True면 작가/연도 조건을 빼고 키워드만으로 다시 찾은 결과라는 뜻 — ANSWER_SYSTEM
     규칙 6에 따라 모델이 이를 먼저 알려주게 한다(사용자의 '사전 판단 비용'을 줄이기 위함).
 
-    lang은 프론트엔드 언어 토글(ko/en)을 그대로 받는다 — 응답 언어만 바꾸고 검색 로직은 그대로."""
-    lang = lang if lang in ANSWER_SYSTEM_BY_LANG else "ko"
-    none_label = "(none)" if lang == "en" else "(없음)"
+    서비스가 한/영 상시 병기라 ANSWER_SYSTEM이 늘 한국어+영어 답변을 함께 생성한다(토글 없음)."""
     narrated = works[:ANSWER_NARRATION_LIMIT]
-    past = "\n".join(f"Q: {h['question']}\nA: {(h['answer'] or '')[:300]}" for h in history) or none_label
-    if relaxed:
-        relax_note = ("No works matched the artist/year condition, so the results below were "
-                       "found using only the keywords." if lang == "en" else
-                       "작가/연도 조건에는 맞는 작품이 없어 그 조건을 빼고 키워드만으로 찾은 결과입니다.")
-    else:
-        relax_note = none_label
-    label = {"ko": ("[이전 대화]", "[완화 안내]", "[검색 결과]", "[질문]"),
-             "en": ("[Previous Conversation]", "[Relaxation Notice]", "[Search Results]", "[Question]")}[lang]
-    user = (f"{label[0]}\n{past}\n\n{label[1]}\n{relax_note}\n\n"
-           f"{label[2]}\n{_format_results(narrated, lang)}\n\n{label[3]}\n{question}")
+    past = "\n".join(f"Q: {h['question']}\nA: {(h['answer'] or '')[:300]}" for h in history) or "(없음)"
+    relax_note = "작가/연도 조건에는 맞는 작품이 없어 그 조건을 빼고 키워드만으로 찾은 결과입니다." if relaxed else "(없음)"
+    user = (f"[이전 대화]\n{past}\n\n[완화 안내]\n{relax_note}\n\n"
+           f"[검색 결과]\n{_format_results(narrated)}\n\n[질문]\n{question}")
     answer = llm.chat_completion(
-        [{"role": "system", "content": ANSWER_SYSTEM_BY_LANG[lang]}, {"role": "user", "content": user}],
-        max_tokens=700,
+        [{"role": "system", "content": ANSWER_SYSTEM}, {"role": "user", "content": user}],
+        max_tokens=900,
     )
     extra = len(works) - len(narrated)
     if extra > 0:
-        tail = (f"\n\nFound {extra} more related works. Check the cards below." if lang == "en" else
-                f"\n\n그 외에도 관련 작품 {extra}개를 더 찾았어요. 아래 카드에서 확인해 보세요.")
-        answer += tail
+        answer += (f"\n\n그 외에도 관련 작품 {extra}개를 더 찾았어요. 아래 카드에서 확인해 보세요. / "
+                   f"Found {extra} more related works — check the cards below.")
     return answer

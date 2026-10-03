@@ -3,38 +3,37 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title data-i18n="title">저작권 걱정 없는 퍼블릭 도메인 명화 찾기 챗봇</title>
+    <title>저작권 걱정 없는 퍼블릭 도메인 명화 찾기 / Public Domain Masterpiece Finder</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <main class="chat-container">
         <header class="chat-header">
-            <button id="lang-toggle" class="lang-btn" type="button" title="Switch language">한/EN</button>
-            <div data-i18n="headerTitle">🖼️ 저작권 걱정 없는 퍼블릭 도메인 명화 찾기</div>
-            <div class="status-bar" id="status-bar" data-i18n="loginRequired">로그인이 필요합니다</div>
-            <button id="logout-btn" class="link-btn" data-i18n="logout" hidden>로그아웃</button>
+            <div>🖼️ 저작권 걱정 없는 퍼블릭 도메인 명화 찾기<br>Public Domain Masterpiece Finder</div>
+            <div class="status-bar" id="status-bar">로그인이 필요합니다 / Login required</div>
+            <button id="logout-btn" class="link-btn" hidden>로그아웃 / Log out</button>
         </header>
 
         <section id="auth-panel" class="auth-panel">
-            <p class="hint" data-i18n="hint">상업적으로 써도 되는 CC0 명화를 한국어로 물어보세요.<br>(MET · Art Institute of Chicago 공개 데이터)</p>
-            <input type="email" id="email" data-i18n-placeholder="emailPlaceholder" placeholder="이메일" autocomplete="username">
-            <input type="password" id="password" data-i18n-placeholder="passwordPlaceholder" placeholder="비밀번호 (8자 이상)" autocomplete="current-password">
-            <input type="text" id="private-code" data-i18n-placeholder="privateCodePlaceholder" placeholder="초대코드 (선택, 회원가입 시에만 적용)" autocomplete="off">
+            <p class="hint">상업적으로 써도 되는 CC0 명화를 한국어나 영어로 물어보세요. / Ask for CC0 masterpieces you can use commercially, in Korean or English.<br>(MET · Art Institute of Chicago 공개 데이터 / Open data from the MET and the Art Institute of Chicago)</p>
+            <input type="email" id="email" placeholder="이메일 / Email" autocomplete="username">
+            <input type="password" id="password" placeholder="비밀번호 (8자 이상) / Password (8+ characters)" autocomplete="current-password">
+            <input type="text" id="private-code" placeholder="초대코드 (선택) / Invite code (optional)" autocomplete="off">
             <div class="auth-buttons">
-                <button id="login-btn" class="pill" data-i18n="login">로그인</button>
-                <button id="signup-btn" class="pill secondary" data-i18n="signup">회원가입</button>
+                <button id="login-btn" class="pill">로그인 / Login</button>
+                <button id="signup-btn" class="pill secondary">회원가입 / Sign up</button>
             </div>
             <div id="auth-error" class="error-text" role="alert"></div>
         </section>
 
         <section id="chat-panel" hidden>
             <div id="chat-log" class="chat-log">
-                <div class="message bot" id="greeting" data-i18n="greeting">안녕하세요! 어떤 명화를 찾으세요?<br>예) "봄 느낌 풍경화 보여줘", "모네 작품 중 물이 나오는 그림"</div>
+                <div class="message bot">안녕하세요! 어떤 명화를 찾으세요? / Hi! What masterpiece are you looking for?<br>예) "봄 느낌 풍경화 보여줘" / e.g. "Show me a spring landscape"</div>
             </div>
             <form id="chat-form" class="input-area">
-                <input type="text" id="message-input" maxlength="500" data-i18n-placeholder="messagePlaceholder" placeholder="질문을 입력하세요 (최대 500자)" autocomplete="off">
-                <button id="send-btn" type="submit" title="Send">➤</button>
+                <input type="text" id="message-input" maxlength="500" placeholder="질문을 입력하세요 (최대 500자) / Type your question (max 500 chars)" autocomplete="off">
+                <button id="send-btn" type="submit" title="보내기 / Send">➤</button>
             </form>
         </section>
     </main>
