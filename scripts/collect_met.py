@@ -4,12 +4,15 @@
 API 키 불필요. 공식 제한(초당 80회)보다 훨씬 낮게 동시 요청 수를 제한한다.
 """
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+import time
+import urllib.error
 
 from artdb import connect, get_json, upsert
 
 BASE = "https://collectionapi.metmuseum.org/public/collection/v1"
+SEARCH_BASE = "https://collectionapi.metmuseum.org/public/collection/v1.1"
 DEPARTMENT_ID = 11  # European Paintings
+SEARCH_PAGE_SIZE = 500  # v1.1/search 최대 limit
 
 
 def to_row(o: dict) -> dict | None:
@@ -33,7 +36,9 @@ def to_row(o: dict) -> dict | None:
         "subjects": ", ".join(tags) or None,
         "image_url": o["primaryImage"],
         "thumbnail_url": o.get("primaryImageSmall") or None,
-        "source_url": o.get("objectURL") or f"https://www.metmuseum.org/art/collection/search/{o['objectID']}",
+        # MET이 www 서브도메인을 폐기해 API가 돌려주는 objectURL도 www 그대로라 깨짐 → apex 도메인으로 교정
+        "source_url": (o.get("objectURL") or f"https://metmuseum.org/art/collection/search/{o['objectID']}")
+            .replace("https://www.metmuseum.org", "https://metmuseum.org"),
         "credit_line": o.get("creditLine") or None,
         "is_public_domain": 1,
         "license": "CC0",
@@ -46,41 +51,66 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=0, help="0이면 전체")
     args = parser.parse_args()
 
-    search = get_json(f"{BASE}/search", {
-        "departmentId": DEPARTMENT_ID, "isPublicDomain": "true", "hasImages": "true", "q": "*",
-    })
-    ids = (search or {}).get("objectIDs") or []
+    ids: list[int] = []
+    offset = 0
+    while True:
+        page = get_json(f"{SEARCH_BASE}/search", {
+            "departmentId": DEPARTMENT_ID, "isPublicDomain": "true", "hasImages": "true",
+            "q": "*", "limit": SEARCH_PAGE_SIZE, "offset": offset,
+        })
+        page_ids = (page or {}).get("objectIDs") or []
+        ids.extend(page_ids)
+        total = (page or {}).get("total") or 0
+        offset += SEARCH_PAGE_SIZE
+        if not page_ids or offset >= total:
+            break
     if args.limit:
         ids = ids[: args.limit]
-    print(f"MET 대상 {len(ids)}건 수집 시작")
+    print(f"MET 대상(전체) {len(ids)}건")
 
     conn = connect()
+    done = {r[0] for r in conn.execute("SELECT source_id FROM artworks WHERE source='met'")}
+    ids = [i for i in ids if str(i) not in done]
+    print(f"이미 저장됨 {len(done)}건 제외, 남은 대상 {len(ids)}건 수집 시작")
+
     saved = skipped = failed = 0
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        for obj_id, obj in zip(ids, pool.map(lambda i: _fetch(i), ids)):
-            if obj is None:
+    consecutive_403 = 0
+    for n, obj_id in enumerate(ids, 1):
+        time.sleep(0.5)  # WAF(레이트리밋) 회피용 완만한 스로틀, 단일 요청씩만 진행
+        try:
+            obj = get_json(f"{BASE}/objects/{obj_id}", retries=1)
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                consecutive_403 += 1
+                cooldown = min(20 * consecutive_403, 180)
+                print(f"  403(차단 의심) objectID={obj_id}, {cooldown}초 쿨다운 후 재개 ({consecutive_403}연속)")
+                time.sleep(cooldown)
                 failed += 1
                 continue
-            row = to_row(obj)
-            if row is None:
-                skipped += 1
-                continue
-            upsert(conn, row)
-            saved += 1
-            if saved % 200 == 0:
-                conn.commit()
-                print(f"  {saved}건 저장…")
+            print(f"  실패 objectID={obj_id}: {e}")
+            failed += 1
+            continue
+        except Exception as e:
+            print(f"  실패 objectID={obj_id}: {e}")
+            failed += 1
+            continue
+
+        consecutive_403 = 0
+        if obj is None:
+            failed += 1
+            continue
+        row = to_row(obj)
+        if row is None:
+            skipped += 1
+            continue
+        upsert(conn, row)
+        saved += 1
+        if saved % 100 == 0:
+            conn.commit()
+            print(f"  {n}/{len(ids)} 진행, 저장 {saved}건…")
     conn.commit()
     conn.close()
     print(f"완료: 저장 {saved}, 제외 {skipped}, 실패 {failed}")
-
-
-def _fetch(obj_id: int):
-    try:
-        return get_json(f"{BASE}/objects/{obj_id}")
-    except Exception as e:  # 개별 실패는 건너뛰고 계속 진행
-        print(f"  실패 objectID={obj_id}: {e}")
-        return None
 
 
 if __name__ == "__main__":

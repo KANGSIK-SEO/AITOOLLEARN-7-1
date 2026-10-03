@@ -4,6 +4,7 @@ import logging
 import re
 
 from . import art, llm
+from .config import ANSWER_NARRATION_LIMIT
 
 log = logging.getLogger("app.chat")
 
@@ -52,12 +53,12 @@ def extract_intent(question: str) -> dict:
     return _parse_intent(raw)
 
 
-def find_artworks(intent: dict) -> list[dict]:
+def find_artworks(intent: dict, limit: int = 6) -> list[dict]:
     if intent["chitchat"]:
         return []
-    found = art.search(intent["keywords"], intent["artist"], intent["year_from"], intent["year_to"])
+    found = art.search(intent["keywords"], intent["artist"], intent["year_from"], intent["year_to"], limit=limit)
     if not found and (intent["artist"] or intent["year_from"] or intent["year_to"]):
-        found = art.search(intent["keywords"])  # 조건이 너무 좁으면 키워드만으로 완화
+        found = art.search(intent["keywords"], limit=limit)  # 조건이 너무 좁으면 키워드만으로 완화
     return found
 
 
@@ -72,9 +73,17 @@ def _format_results(works: list[dict]) -> str:
 
 
 def compose_answer(question: str, works: list[dict], history: list[dict]) -> str:
+    """works가 ANSWER_NARRATION_LIMIT보다 많아도(예: 프리미엄 100개) 모델에는 그 안에서만 넘긴다.
+    본문에서 100개를 전부 한 줄씩 설명시키면 토큰 비용이 폭증하고 잘릴 수 있어서, 나머지는
+    카드로만 보여주고 몇 개 더 있는지 한 줄 안내를 덧붙인다."""
+    narrated = works[:ANSWER_NARRATION_LIMIT]
     past = "\n".join(f"Q: {h['question']}\nA: {(h['answer'] or '')[:300]}" for h in history) or "(없음)"
-    user = f"[이전 대화]\n{past}\n\n[검색 결과]\n{_format_results(works)}\n\n[질문]\n{question}"
-    return llm.chat_completion(
+    user = f"[이전 대화]\n{past}\n\n[검색 결과]\n{_format_results(narrated)}\n\n[질문]\n{question}"
+    answer = llm.chat_completion(
         [{"role": "system", "content": ANSWER_SYSTEM}, {"role": "user", "content": user}],
         max_tokens=700,
     )
+    extra = len(works) - len(narrated)
+    if extra > 0:
+        answer += f"\n\n그 외에도 관련 작품 {extra}개를 더 찾았어요. 아래 카드에서 확인해 보세요."
+    return answer

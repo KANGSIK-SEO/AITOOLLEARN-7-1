@@ -58,6 +58,13 @@ SCHEMA = [
     )""",
 ]
 
+# SCHEMA는 신규 DB 기준. 이미 배포된 DB에 컬럼을 추가할 때는 여기 ALTER TABLE을 쓴다.
+# SQLite ALTER TABLE ADD COLUMN은 IF NOT EXISTS를 지원하지 않으므로, 이미 존재하면 나는
+# "duplicate column" 오류를 ensure_schema()에서 무시한다.
+MIGRATIONS = [
+    "ALTER TABLE users ADD COLUMN is_premium INTEGER NOT NULL DEFAULT 0",
+]
+
 _initialized = False
 
 
@@ -150,6 +157,12 @@ def ensure_schema() -> None:
         return
     for stmt in SCHEMA:
         _raw_execute(stmt)
+    for stmt in MIGRATIONS:
+        try:
+            _raw_execute(stmt)
+        except DbError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
     _initialized = True
     log.info("db_schema_ready backend=%s", "turso" if _turso_url() else "local_sqlite")
 

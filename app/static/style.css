@@ -190,3 +190,28 @@ body { min-height: 100vh; height: auto; padding: 16px; box-sizing: border-box; }
 .badge { align-self: flex-start; background: rgba(0, 255, 136, 0.12); color: #00ff88; border-radius: 6px; padding: 1px 6px; font-size: 0.7rem; }
 .card a { color: var(--accent); text-decoration: none; }
 .typing { color: #888; font-size: 0.85rem; }
+
+/* ---- 초대코드 회원 화이트 테마 ---- */
+body.light-theme {
+    --bg-color: #f4f4f7;
+    --chat-bg: #ffffff;
+    --accent: #0066ff;
+    --accent-secondary: #6a5cff;
+    --text-color: #1a1a1a;
+    --bot-msg-bg: #eef1f6;
+    --user-msg-bg: #0066ff;
+}
+body.light-theme .chat-container { border-color: rgba(0, 0, 0, 0.08); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08); }
+body.light-theme .input-area { background-color: #f3f3f6; border-top-color: rgba(0, 0, 0, 0.06); }
+body.light-theme input[type="text"],
+body.light-theme .auth-panel input { background: #ffffff; border: 1px solid #dadade; color: #1a1a1a; }
+body.light-theme button { color: #ffffff; }
+body.light-theme .link-btn { background: rgba(0, 0, 0, 0.08); color: #1a1a1a; }
+body.light-theme .hint { color: #555; }
+body.light-theme .card { background: #fafafa; border-color: rgba(0, 0, 0, 0.08); }
+body.light-theme .card img { background: #eee; }
+body.light-theme .card .sub { color: #666; }
+body.light-theme .badge { background: rgba(0, 120, 80, 0.1); color: #067a4c; }
+body.light-theme .typing { color: #777; }
+body.light-theme .error { background: rgba(255, 0, 60, 0.06); }
+body.light-theme .success { background: rgba(0, 150, 90, 0.06); }

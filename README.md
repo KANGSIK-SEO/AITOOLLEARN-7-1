@@ -16,19 +16,19 @@
 
 **한눈에 보기** (팀원 전원 필독 — 본인 담당 파일은 깊게, 나머지는 이 정도만 알면 충분합니다)
 - `app/main.py` — **교통정리.** 모든 URL 경로(로그인/챗/내 로그)가 여기 모임. 요청 검증·로그·오류 응답 담당.
-- `app/auth.py` — **문지기.** 비밀번호 해시(scrypt)와 로그인 쿠키(HMAC 서명) 검증. 서버에 세션을 저장하지 않음.
+- `app/auth.py` — **문지기.** 비밀번호 해시(scrypt)와 로그인 쿠키(HMAC 서명) 검증. 초대코드(프리미엄) 여부도 이 쿠키에 담긴다. 서버에 세션을 저장하지 않음.
 - `app/chat.py` — **지휘자.** "질문 → 검색조건 추출 → 검색 → 답변 생성" 파이프라인을 순서대로 지휘.
 - `app/art.py` — **검색엔진.** `data/art.db`에서 SQLite FTS5로 작품을 찾음. AI 호출 없이 순수 DB 검색.
-- `app/llm.py` — **AI 통신창구.** OpenAI `gpt-6-astra`를 실제로 호출하는 유일한 곳. 타임아웃·에러를 통일된 형태로 반환.
-- `app/db.py` — **저장소.** 사용자·대화 로그 저장(로컬 SQLite 또는 Turso 자동 선택).
-- `app/config.py` — **규칙집.** 사용 모델(gpt-6-astra)과 키 이름 등 설정을 고정.
+- `app/llm.py` — **AI 통신창구.** OpenAI `gpt-6-astra`를 실제로 호출하는 유일한 곳(429/401/403이면 Upstage `solar-pro3`로 비상 폴백). 타임아웃·에러를 통일된 형태로 반환.
+- `app/db.py` — **저장소.** 사용자·대화 로그·보수보안 사건 저장(로컬 SQLite 또는 Turso 자동 선택).
+- `app/config.py` — **규칙집.** 사용 모델(gpt-6-astra/폴백 solar-pro3)·초대코드·요금제 상한 등 설정을 고정.
 - `app/guardian.py` — **보수보안 에이전트.** 장애·보안 사건을 즉시 기록·대응(잠금, AI 백오프, 악성 입력 차단)하고, 1일 1회 gpt-6-astra로 일괄 분석·GitHub 이슈까지 생성.
-- `app/static/*` — **화면.** 브라우저에 보이는 HTML/JS/CSS 전부.
+- `app/static/*` — **화면.** 브라우저에 보이는 HTML/JS/CSS 전부. 초대코드 회원은 화이트 테마(`body.light-theme`)로 바뀐다.
 
 ```
 브라우저 ─ /static (HTML/JS) ─┐
                               ├─ FastAPI (app/main.py, Vercel Function)
-  POST /api/chat ─────────────┘    ├─ 인증: scrypt 해시 + HMAC 서명 쿠키 (app/auth.py)
+  POST /api/chat ─────────────┘    ├─ 인증: scrypt 해시 + HMAC 서명 쿠키 (app/auth.py, is_premium 포함)
                                    ├─ chat.extract_intent → gpt-6-astra (검색 조건 JSON)
                                    ├─ art.search → data/art.db (읽기 전용 SQLite + FTS5)
                                    ├─ chat.compose_answer → gpt-6-astra (근거 기반 한국어 답변)
@@ -39,8 +39,8 @@
 |---|---|
 | `app/main.py` | 라우팅, 입력 검증, 로그, 오류 응답 |
 | `app/chat.py` | 질문 → 검색 의도 → DB 검색 → 답변 생성 파이프라인 |
-| `app/llm.py` | OpenAI gpt-6-astra 호출(서버 전용, 타임아웃 설정) |
-| `app/config.py` | 사용 모델(gpt-6-astra)·키 이름 등 설정 |
+| `app/llm.py` | OpenAI gpt-6-astra 호출(서버 전용, 타임아웃 설정) + solar-pro3 비상 폴백 |
+| `app/config.py` | 사용 모델(gpt-6-astra)·키 이름·초대코드/요금제 상한 등 설정 |
 | `app/guardian.py` | **보수보안 에이전트** — 장애·보안 사건 즉시 대응 + 1일 1회 AI 일괄 분석 (`/api/guardian/daily-digest`) |
 | `app/db.py` | 사용자·로그·사건 DB (Turso 또는 로컬 SQLite 자동 선택) |
 | `scripts/collect_*.py` | 공개 API → `data/art.db` 수집기 |
@@ -52,13 +52,14 @@
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| POST | `/api/auth/signup` | `{email, password(8자+)}` → 201, 세션 쿠키 발급 |
+| POST | `/api/auth/signup` | `{email, password(8자+), private_code?}` → 201, 세션 쿠키 발급 (`private_code`가 `PREMIUM_CODE`와 일치하면 프리미엄 가입) |
 | POST | `/api/auth/login` | 로그인 → 200, 세션 쿠키 |
 | POST | `/api/auth/logout` | 쿠키 삭제 |
 | GET | `/api/me` | 현재 사용자 |
 | POST | `/api/chat` | **로그인 필요**. 질문 → 답변 + 작품 카드 |
 | GET | `/api/me/chats?limit=20&offset=0` | 내 대화 로그 조회 |
 | GET | `/api/health` | 상태 확인 |
+| GET | `/api/guardian/daily-digest` | 보수보안 에이전트 일일 점검 (`CRON_SECRET` 필요, Vercel Cron 전용) |
 
 `POST /api/chat`
 ```json
@@ -73,14 +74,26 @@
 // 오류 예
 {"error": {"code": "AI_TIMEOUT", "message": "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요."}}
 ```
-오류 코드: `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`/`INVALID_INPUT`(400) `RATE_LIMITED`(429, 시간당 30회)
+오류 코드: `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`/`INVALID_INPUT`(400)
+`RATE_LIMITED`(429, 시간당 일반 30회·초대코드 300회) `FREE_LIMIT_REACHED`(403, 초대코드 없는 계정의 평생 무료 질문 100회 소진)
 `AI_TIMEOUT`(504) `AI_ERROR`(502) `AI_RATE_LIMITED`(429) `AI_BACKED_OFF`/`AI_KEY_MISSING`(503) `DB_ERROR`/`ART_DB_ERROR`(503)
 `INTERNAL_ERROR`(500, 예상 못한 예외는 모두 여기로 모이고 보수보안 에이전트가 기록한다)
+
+**초대코드(프리미엄)**: 회원가입 시 `private_code`로 `PREMIUM_CODE`(서버 환경변수)와 일치하는 값을 보내면 해당 계정은
+- 시간당 질문 한도가 `CHAT_LIMIT_PER_HOUR_PREMIUM`(기본 300)으로 상향되고, **평생 무료 질문 100회 제한이 적용되지 않는다**
+  (일반 계정은 `CHAT_LIFETIME_LIMIT_FREE`(기본 100)회를 다 쓰면 `FREE_LIMIT_REACHED`로 막힌다).
+- 추천 작품 수가 `ART_RESULTS_LIMIT_PREMIUM`(기본 100, 일반은 `ART_RESULTS_LIMIT`=6)으로 늘어난다. 답변 본문에서 번호로
+  설명하는 작품은 `ANSWER_NARRATION_LIMIT`(6)개까지만이고 — 100개를 전부 LLM이 한 줄씩 설명하면 토큰 비용이 커지고
+  응답이 잘릴 수 있어서다 — 나머지는 카드로만 보여주고 "그 외 N개를 더 찾았어요"를 한 줄 덧붙인다(`app/chat.py`).
+- 화면 배경이 화이트 테마로 바뀐다(`body.light-theme`, `app/static/style.css`, `app/static/app.js`).
+
+초대코드 여부는 서버 세션 없이 서명된 쿠키에 담기므로(`app/auth.py`) 가입/로그인 시점 기준이며, 코드 입력 UI는
+로그인 화면이 아니라 **회원가입** 화면에만 있다(`app/static/index.html`).
 
 ## 4. DB 구조
 - `data/art.db` (읽기 전용, 레포에 포함): `artworks`(source, source_id, title, artist, date_display, medium, subjects, image_url, source_url, license, is_public_domain …) + `artworks_fts`(FTS5). 스키마: `db/schema.sql`
 - Turso/SQLite (쓰기): 
-  - `users(id, email UNIQUE, password_hash, created_at)`
+  - `users(id, email UNIQUE, password_hash, is_premium, created_at)`
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
   - `incidents(id, category[reliability|security], code, message, context(JSON), severity, auto_action, diagnosis, created_at)` — 보수보안 에이전트 사건 로그. `diagnosis`는 일일 배치 분석 전까지 NULL.
   - `runtime_flags(key, value, updated_at)` — AI 백오프·로그인 잠금 등 자동 대응 상태값 (예: `ai_backoff_until`, `lockout:<email>`)
@@ -103,7 +116,7 @@ cp .env.example .env         # 값 채우기
 개발은 macOS에서 했고, 배포 전에 Ubuntu 24.04 컨테이너에서 동일 코드를 설치·테스트·실행해 검증했다.
 ```bash
 docker build -t art-chatbot-ubuntu .
-docker run --rm art-chatbot-ubuntu python -m pytest -q tests          # 14 passed (Ubuntu 24.04, Python 3.12)
+docker run --rm art-chatbot-ubuntu python -m pytest -q tests          # Ubuntu 24.04, Python 3.12
 docker run -d --rm -p 8000:8000 --env-file .env art-chatbot-ubuntu    # http://localhost:8000
 ```
 Vercel Functions도 Linux 런타임에서 실행되며, 배포는 Ubuntu 24.04 컨테이너(`deploy/Dockerfile`, Node + Vercel CLI)의 셸에서 실행했다.
@@ -118,7 +131,8 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 
 | 이름 | 설명 |
 |---|---|
-| `GPT_ASTRA_API_KEY` | OpenAI gpt-6-astra 키 |
+| `GPT_ASTRA_API_KEY` | OpenAI gpt-6-astra 키 (주 모델) |
+| `UPSTAGE_API_KEY` (선택) | Upstage solar-pro3 키. GPT 쪽이 429/401/403일 때만 비상 폴백으로 사용 |
 | `SECRET_KEY` | 세션 서명 키 (32자 이상 랜덤) |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | Turso DB. **없으면 로컬 `data/app.db` 사용** |
 | `LLM_TIMEOUT_SECONDS` | AI 호출 타임아웃(기본 20) |
@@ -126,6 +140,10 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 | `CRON_SECRET` | 보수보안 에이전트 일일 점검(`/api/guardian/daily-digest`)을 Vercel Cron만 호출하게 막는 값 |
 | `GITHUB_TOKEN` (선택) | 긴급도 medium/high 사건 발생 시 GitHub 이슈 자동 생성 (issues:write) |
 | `GITHUB_REPO` (선택) | 이슈를 열 저장소, 기본 `KANGSIK-SEO/AITOOLLEARN-7-1` |
+| `PREMIUM_CODE` (선택) | 회원가입 시 입력받는 초대코드 (비우면 초대코드 가입 비활성) |
+| `CHAT_LIMIT_PER_HOUR_PREMIUM` | 초대코드 사용자 시간당 질문 상한(기본 300) |
+| `CHAT_LIFETIME_LIMIT_FREE` | 초대코드 없는 사용자의 평생 무료 질문 수(기본 100) |
+| `ART_RESULTS_LIMIT_PREMIUM` | 초대코드 사용자에게 보여줄 추천 작품 수(기본 100) |
 
 **Vercel + Turso 배포**
 ```bash
@@ -159,7 +177,7 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:8000/api/guardian/
 - **모델**: 주 모델은 `gpt-6-astra` (`app/config.py`, `app/llm.py`). GPT 쪽이 429/401/403으로
   실패할 때만 Upstage `solar-pro3`로 한 번 더 시도한다(`UPSTAGE_API_KEY` 설정 시에만 활성, 없으면
   폴백 없이 원래 에러 반환). 둘 다 실제 과금되므로 호출 비용 보호가 중요하다 — 시간당 질문 상한
-  (`CHAT_LIMIT_PER_HOUR`), 429 반복 시 자동 백오프, 요청당 GPT 호출 금지(배치 분석만)로 방어한다.
+  (`CHAT_LIMIT_PER_HOUR`/`CHAT_LIMIT_PER_HOUR_PREMIUM`), 429 반복 시 자동 백오프, 요청당 GPT 호출 금지(배치 분석만)로 방어한다.
 
 ## 9. 보수보안 에이전트
 `app/guardian.py`가 **장애 대응과 보안 위협 탐지를 함께** 담당한다.

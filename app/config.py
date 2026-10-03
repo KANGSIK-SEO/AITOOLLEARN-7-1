@@ -60,8 +60,19 @@ def get_secret_key() -> str:
     return key
 
 
+def get_premium_code() -> str:
+    """가입 시 이 값과 일치하는 코드를 입력하면 프리미엄으로 전환. 비어 있으면 프리미엄 가입 비활성."""
+    return os.environ.get("PREMIUM_CODE", "")
+
+
 LLM_TIMEOUT_SECONDS = float(os.environ.get("LLM_TIMEOUT_SECONDS", "20"))
 LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "low")  # low|medium|high|xhigh|max
 CHAT_MAX_LENGTH = 500          # 질문 최대 글자 수
 CONTEXT_TURNS = 5              # 문맥으로 넘기는 최근 대화 수
-CHAT_LIMIT_PER_HOUR = 30       # 사용자별 시간당 질문 상한 (유료 API 비용 보호)
+CHAT_LIMIT_PER_HOUR = 30               # 일반 사용자 시간당 질문 상한 (버스트 방지 + 비용 보호)
+CHAT_LIMIT_PER_HOUR_PREMIUM = int(os.environ.get("CHAT_LIMIT_PER_HOUR_PREMIUM", "300"))  # 초대코드 사용자 시간당 상한
+CHAT_LIFETIME_LIMIT_FREE = int(os.environ.get("CHAT_LIFETIME_LIMIT_FREE", "100"))  # 초대코드 없는 사용자의 평생 무료 질문 수
+
+ART_RESULTS_LIMIT = 6                  # 일반 사용자에게 보여줄 추천 작품 수
+ART_RESULTS_LIMIT_PREMIUM = int(os.environ.get("ART_RESULTS_LIMIT_PREMIUM", "100"))  # 초대코드 사용자 추천 작품 수
+ANSWER_NARRATION_LIMIT = 6             # 답변 본문에서 번호로 설명하는 작품 수 상한 (프리미엄이어도 동일 — 토큰 비용 보호)
