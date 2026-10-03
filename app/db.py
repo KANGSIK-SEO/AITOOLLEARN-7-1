@@ -33,6 +33,16 @@ SCHEMA = [
         created_at  TEXT NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_chats_user_time ON chats (user_id, created_at)",
+    # artwork_id는 별도 파일인 미술 DB(data/art.db)의 artworks.id라 FOREIGN KEY를 걸 수 없다.
+    # 존재 여부는 API(POST /api/favorites)에서 art.get_by_ids()로 검증한다.
+    """CREATE TABLE IF NOT EXISTS favorites (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id     INTEGER NOT NULL REFERENCES users(id),
+        artwork_id  INTEGER NOT NULL,
+        created_at  TEXT NOT NULL,
+        UNIQUE (user_id, artwork_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_favorites_user_time ON favorites (user_id, created_at)",
 ]
 
 # SCHEMA는 신규 DB 기준. 이미 배포된 DB에 컬럼을 추가할 때는 여기 ALTER TABLE을 쓴다.

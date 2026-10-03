@@ -1,4 +1,4 @@
-"""FastAPI 앱: 회원가입/로그인, 챗봇 질문/응답, 내 대화 로그 조회."""
+"""FastAPI 앱: 회원가입/로그인, 챗봇 질문/응답, 내 대화 로그 조회, 작품 즐겨찾기."""
 import json
 import logging
 import re
@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, chat, db
+from . import art, auth, chat, db
 from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, CHAT_LIFETIME_LIMIT_FREE,
                      CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
                      CONTEXT_TURNS, AIUnavailableError)
@@ -79,6 +79,10 @@ class Credentials(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+
+
+class FavoriteRequest(BaseModel):
+    artwork_id: int
 
 
 def _set_cookie(resp: JSONResponse, user_id: int, is_premium: bool, request: Request) -> None:
@@ -225,6 +229,55 @@ def my_chats(limit: int = 20, offset: int = 0, user_id: int = Depends(current_us
         "SELECT id, question, answer, status, error_code, latency_ms, created_at FROM chats "
         "WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?", (user_id, limit, max(0, offset)))
     return {"chats": rows}
+
+
+# ---- 작품 즐겨찾기 ----
+def _artwork_or_404(artwork_id: int) -> None:
+    try:
+        exists = artwork_id in art.get_by_ids([artwork_id])
+    except sqlite3.Error as e:
+        log.error("art_db_failure path=/api/favorites detail=%s", e)
+        raise HTTPException(503, {"code": "ART_DB_ERROR", "message": "작품 데이터베이스를 읽지 못했어요."})
+    if not exists:
+        raise HTTPException(404, {"code": "ARTWORK_NOT_FOUND", "message": "존재하지 않는 작품입니다."})
+
+
+@app.post("/api/favorites")
+def add_favorite(body: FavoriteRequest, user_id: int = Depends(current_user)):
+    """이미 저장한 작품이면 200(created=false), 새로 저장하면 201. 같은 요청을 반복해도 안전하다."""
+    _artwork_or_404(body.artwork_id)
+    created = db.execute(
+        "INSERT INTO favorites (user_id, artwork_id, created_at) VALUES (?, ?, ?) "
+        "ON CONFLICT (user_id, artwork_id) DO NOTHING RETURNING id",
+        (user_id, body.artwork_id, _now()))
+    log.info("favorite_add user_id=%s artwork_id=%s created=%s", user_id, body.artwork_id, bool(created))
+    return JSONResponse({"artwork_id": body.artwork_id, "created": bool(created)},
+                        status_code=201 if created else 200)
+
+
+@app.delete("/api/favorites/{artwork_id}")
+def remove_favorite(artwork_id: int, user_id: int = Depends(current_user)):
+    """저장하지 않은 작품을 지워도 오류가 아니다(removed=false)."""
+    removed = db.execute("DELETE FROM favorites WHERE user_id = ? AND artwork_id = ? RETURNING id",
+                         (user_id, artwork_id))
+    log.info("favorite_remove user_id=%s artwork_id=%s removed=%s", user_id, artwork_id, bool(removed))
+    return {"artwork_id": artwork_id, "removed": bool(removed)}
+
+
+@app.get("/api/me/favorites")
+def my_favorites(limit: int = 20, offset: int = 0, user_id: int = Depends(current_user)):
+    """최근 저장 순. 미술 DB에서 사라진 작품은 목록에서 빠진다."""
+    limit = max(1, min(limit, 100))
+    rows = db.execute(
+        "SELECT artwork_id, created_at FROM favorites WHERE user_id = ? "
+        "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", (user_id, limit, max(0, offset)))
+    try:
+        cards = art.get_by_ids([r["artwork_id"] for r in rows])
+    except sqlite3.Error as e:
+        log.error("art_db_failure path=/api/me/favorites detail=%s", e)
+        return error(503, "ART_DB_ERROR", "작품 데이터베이스를 읽지 못했어요.")
+    return {"favorites": [{**cards[r["artwork_id"]], "favorited_at": r["created_at"]}
+                          for r in rows if r["artwork_id"] in cards]}
 
 
 # ---- AIC 이미지 프록시 ----

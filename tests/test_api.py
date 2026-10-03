@@ -206,3 +206,67 @@ def test_image_proxy_validates_and_sends_aic_header(client, monkeypatch):
     assert not seen["hdr"]["User-agent"].startswith("Python-urllib")
     assert client.get("/api/img/aic/not-a-uuid?w=400").status_code == 400
     assert client.get("/api/img/aic/bda9058b-5be6-37d0-e5a6-926584540757?w=999").status_code == 400
+
+
+# ---- 작품 즐겨찾기 ----
+def _artwork_ids(n=2):
+    import sqlite3
+    from app import art
+    conn = sqlite3.connect(f"file:{art.ART_DB}?mode=ro", uri=True)
+    try:
+        return [r[0] for r in conn.execute("SELECT id FROM artworks ORDER BY id LIMIT ?", (n,))]
+    finally:
+        conn.close()
+
+
+def test_favorites_require_login(client):
+    assert client.post("/api/favorites", json={"artwork_id": 1}).status_code == 401
+    assert client.delete("/api/favorites/1").status_code == 401
+    assert client.get("/api/me/favorites").json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_favorite_add_list_remove(client):
+    a, b = _artwork_ids(2)
+    signup(client)
+    assert client.post("/api/favorites", json={"artwork_id": a}).status_code == 201
+    assert client.post("/api/favorites", json={"artwork_id": b}).status_code == 201
+    favs = client.get("/api/me/favorites").json()["favorites"]
+    assert [f["id"] for f in favs] == [b, a]  # 최근 저장 순
+    assert favs[0]["title"] and favs[0]["license"] and favs[0]["favorited_at"]
+
+    r = client.delete(f"/api/favorites/{b}")
+    assert r.status_code == 200 and r.json()["removed"] is True
+    assert client.delete(f"/api/favorites/{b}").json()["removed"] is False
+    assert [f["id"] for f in client.get("/api/me/favorites").json()["favorites"]] == [a]
+
+
+def test_favorite_duplicate_is_idempotent(client):
+    (a,) = _artwork_ids(1)
+    signup(client)
+    assert client.post("/api/favorites", json={"artwork_id": a}).json()["created"] is True
+    r = client.post("/api/favorites", json={"artwork_id": a})
+    assert r.status_code == 200 and r.json()["created"] is False
+    assert len(client.get("/api/me/favorites").json()["favorites"]) == 1
+
+
+def test_favorite_rejects_unknown_or_invalid_artwork(client):
+    signup(client)
+    r = client.post("/api/favorites", json={"artwork_id": 999_999_999})
+    assert r.status_code == 404 and r.json()["error"]["code"] == "ARTWORK_NOT_FOUND"
+    assert client.post("/api/favorites", json={"artwork_id": "abc"}).status_code == 422
+    assert client.post("/api/favorites", json={}).status_code == 422
+    assert client.get("/api/me/favorites").json()["favorites"] == []
+
+
+def test_favorites_are_isolated_between_users(client):
+    a, b = _artwork_ids(2)
+    signup(client, "one@x.com")
+    client.post("/api/favorites", json={"artwork_id": a})
+
+    other = TestClient(app)
+    signup(other, "two@x.com")
+    assert other.get("/api/me/favorites").json()["favorites"] == []
+    # 다른 사용자가 같은 작품을 저장하거나 지워도 내 즐겨찾기에는 영향이 없다
+    assert other.post("/api/favorites", json={"artwork_id": a}).status_code == 201
+    assert other.delete(f"/api/favorites/{a}").json()["removed"] is True
+    assert [f["id"] for f in client.get("/api/me/favorites").json()["favorites"]] == [a]
