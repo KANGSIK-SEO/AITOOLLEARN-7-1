@@ -55,6 +55,9 @@
 | GET | `/api/me` | 현재 사용자 |
 | POST | `/api/chat` | **로그인 필요**. 질문 → 답변 + 작품 카드 |
 | GET | `/api/me/chats?limit=20&offset=0` | 내 대화 로그 조회 |
+| POST | `/api/favorites` | **로그인 필요**. `{artwork_id}` 작품 즐겨찾기 저장 (상세: `docs/track-c.md`) |
+| DELETE | `/api/favorites/{artwork_id}` | **로그인 필요**. 즐겨찾기 해제 |
+| GET | `/api/me/favorites?limit=20&offset=0` | 내 즐겨찾기 작품 카드 조회 |
 | GET | `/api/health` | 상태 확인 |
 
 `POST /api/chat`
@@ -90,6 +93,7 @@
 - Turso/SQLite (쓰기): 
   - `users(id, email UNIQUE, password_hash, is_premium, created_at)`
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
+  - `favorites(id, user_id → users.id, artwork_id(art.db artworks.id), created_at, UNIQUE(user_id, artwork_id))`
 
 **DB 확인 가이드** (택 1 이상)
 1. 로그 조회 API: `curl -b cookies.txt https://<서비스>/api/me/chats`
