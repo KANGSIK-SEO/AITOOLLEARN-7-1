@@ -264,6 +264,22 @@ def remove_favorite(artwork_id: int, user_id: int = Depends(current_user)):
     return {"artwork_id": artwork_id, "removed": bool(removed)}
 
 
+@app.get("/api/me/favorites")
+def my_favorites(limit: int = 20, offset: int = 0, user_id: int = Depends(current_user)):
+    """최근 저장 순. 미술 DB에서 사라진 작품은 목록에서 빠진다."""
+    limit = max(1, min(limit, 100))
+    rows = db.execute(
+        "SELECT artwork_id, created_at FROM favorites WHERE user_id = ? "
+        "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", (user_id, limit, max(0, offset)))
+    try:
+        cards = art.get_by_ids([r["artwork_id"] for r in rows])
+    except sqlite3.Error as e:
+        log.error("art_db_failure path=/api/me/favorites detail=%s", e)
+        return error(503, "ART_DB_ERROR", "작품 데이터베이스를 읽지 못했어요.")
+    return {"favorites": [{**cards[r["artwork_id"]], "favorited_at": r["created_at"]}
+                          for r in rows if r["artwork_id"] in cards]}
+
+
 # ---- AIC 이미지 프록시 ----
 # AIC 이미지 서버는 `AIC-User-Agent` 헤더와 (파이썬 기본이 아닌) User-Agent가 없으면 403을 준다. 브라우저 <img>는 헤더를 붙일 수 없어 서버가 대신 받는다.
 AIC_IIIF = "https://www.artic.edu/iiif/2"
