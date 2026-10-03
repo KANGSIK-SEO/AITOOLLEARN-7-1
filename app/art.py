@@ -39,6 +39,20 @@ def _fts_query(keywords: list[str]) -> str:
     return " OR ".join(f'"{t}"' for t in dict.fromkeys(tokens))
 
 
+def get_by_ids(ids: list[int]) -> dict[int, dict]:
+    """작품 id 목록 → {id: 카드}. 없는 id는 결과에 빠진다 (즐겨찾기 검증·조회용)."""
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return {}
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            f"SELECT {CARD_FIELDS} FROM artworks a WHERE a.id IN ({','.join('?' * len(ids))})", ids).fetchall()
+        return {r["id"]: with_proxy_urls(dict(r)) for r in rows}
+    finally:
+        conn.close()
+
+
 def search(keywords: list[str], artist: str | None = None,
            year_from: int | None = None, year_to: int | None = None, limit: int = 6) -> list[dict]:
     where, params = ["a.is_public_domain = 1"], []
