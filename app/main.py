@@ -106,7 +106,7 @@ def health():
 
 @app.get("/api/guardian/daily-digest")
 def guardian_daily_digest(request: Request):
-    """보수보안 에이전트의 일일 점검 (Vercel Cron 전용, CRON_SECRET으로 보호)."""
+    """가디언의 일일 점검 (Vercel Cron 전용, CRON_SECRET으로 보호)."""
     if not CRON_SECRET or request.headers.get("authorization") != f"Bearer {CRON_SECRET}":
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
     return guardian.run_daily_digest()
@@ -228,8 +228,8 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
     art_limit = ART_RESULTS_LIMIT_PREMIUM if is_premium else ART_RESULTS_LIMIT
     try:
         intent = chat.extract_intent(question)
-        works = chat.find_artworks(intent, limit=art_limit)
-        answer = chat.compose_answer(question, works, history)
+        works, relaxed = chat.find_artworks(intent, limit=art_limit)
+        answer = chat.compose_answer(question, works, history, relaxed=relaxed)
     except AIUnavailableError as e:
         latency = int((time.monotonic() - started) * 1000)
         log.error("ai_call_failure request_id=%s code=%s latency_ms=%s", request_id, e.code, latency)

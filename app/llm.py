@@ -1,6 +1,6 @@
 """AI 호출 (서버 측에서만 수행, 키는 응답에 노출하지 않는다).
 
-주 모델: OpenAI gpt-6-astra. 429/401/403(=키 소진·장애)일 때만 Upstage solar-pro3로
+주 모델: OpenAI gpt-6-astra. 429/401/403(=키 소진·장애)일 때만 Upstage solar-pro4로
 한 번 더 시도한다 (UPSTAGE_API_KEY가 없으면 폴백 없이 원래 에러를 그대로 던진다).
 """
 import json

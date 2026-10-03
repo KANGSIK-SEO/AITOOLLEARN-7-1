@@ -33,7 +33,7 @@ SCHEMA = [
         created_at  TEXT NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_chats_user_time ON chats (user_id, created_at)",
-    # 보수보안 에이전트: 장애·보안 사건 로그 + 자동 대응용 상태값
+    # 가디언: 장애·보안 사건 로그 + 자동 대응용 상태값
     """CREATE TABLE IF NOT EXISTS incidents (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         category    TEXT NOT NULL CHECK (category IN ('reliability', 'security')),

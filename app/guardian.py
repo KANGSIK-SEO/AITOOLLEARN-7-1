@@ -1,10 +1,24 @@
-"""보수보안 에이전트 — 안정성 장애와 보안 위협을 함께 감시·대응한다.
+"""가디언 — 안정성 장애와 보안 위협을 함께 감시·대응한다.
 
 - 실시간(매 요청): 비용이 들지 않는 결정적 규칙만 적용한다 (로그인 잠금, AI 백오프,
   악성 입력 차단, IP 레이트리밋). GPT를 요청마다 부르지 않는 이유는, 그렇게 하면
   공격자가 실패 요청을 반복시켜 AI 비용 자체를 디도스 벡터로 쓸 수 있기 때문이다.
 - 배치(1일 1회, Vercel Cron): 쌓인 사건을 모아 gpt-6-astra로 한 번에 분석해
   원인 진단 + 추세 예측 + (필요 시) GitHub 이슈 생성까지 수행한다.
+
+왜 GPT가 "진단만" 하고 코드를 고치거나 실행하지 않는가 (의도적 경계):
+Sun, Zhu, Xu, Du, Li, Lo, "Toward Agentic Runtime Healing" (CACM, Oct 2026, 68.9)는
+LLM이 에러 발생 시 소스코드가 아니라 "런타임 상태"만 즉석에서 고쳐 요청 하나를 살리는
+HEALER를 제안한다 — GPT-4 기준 73%가 실행을 이어가고 39.6%는 정답까지 낸다. 하지만
+저자들 스스로 결론 내리길, 진짜 장벽은 효과성이 아니라 신뢰성이다: LLM이 생성한 치유
+코드의 75%만 "인식 가능한 패턴"이고, 화이트리스트·샌드박스 같은 안전장치가 아직
+미성숙(underdeveloped)하다고 명시한다. 이들은 개입을 "comfort zone"(부작용이 허용되는
+비핵심 영역)으로 한정해야 한다고도 제안한다.
+우리는 이 논문의 결론을 그대로 받아들여, LLM이 생성한 코드를 실행하거나 커밋하는
+어떤 경로도 만들지 않았다 — 진단(텍스트)과 사람이 보는 GitHub 이슈 생성까지만 자동화하고,
+결정적 규칙(잠금/백오프/차단)만 "comfort zone"(상태값 변경, 되돌리기 쉬움)에서 즉시
+자동 적용한다. 이 선택은 임의적 보수주의가 아니라, 같은 분야 최신 연구가 "아직은
+이게 맞다"고 말하는 지점과 일치한다.
 """
 import json
 import logging
@@ -26,7 +40,7 @@ SUSPICIOUS_INPUT_RE = re.compile(
 )
 
 DIGEST_SYSTEM = (
-    "너는 'AITOOLLEARN-7-1' 웹서비스의 보수보안 에이전트다. 아래는 최근 미분석 사건 로그(JSON 배열)다.\n"
+    "너는 'AITOOLLEARN-7-1' 웹서비스의 가디언이다. 아래는 최근 미분석 사건 로그(JSON 배열)다.\n"
     "각 사건은 category(reliability|security), code, message, context, severity, created_at을 가진다.\n"
     "다음을 한국어로 간결히 작성하라:\n"
     "1. 요약: 지금 벌어지고 있는 일\n"
@@ -191,7 +205,7 @@ def run_daily_digest() -> dict:
     if m:
         urgency = m.group(1).lower()
     if urgency in ("medium", "high"):
-        open_github_issue(f"[보수보안 에이전트] 일일 점검 — 긴급도 {urgency} ({len(rows)}건)", diagnosis)
+        open_github_issue(f"[가디언] 일일 점검 — 긴급도 {urgency} ({len(rows)}건)", diagnosis)
 
     log.info("digest_complete analyzed=%s urgency=%s", len(rows), urgency)
     return {"analyzed": len(rows), "urgency": urgency}

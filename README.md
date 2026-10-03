@@ -18,11 +18,11 @@
 - `app/main.py` — **교통정리.** 모든 URL 경로(로그인/챗/내 로그)가 여기 모임. 요청 검증·로그·오류 응답 담당.
 - `app/auth.py` — **문지기.** 비밀번호 해시(scrypt)와 로그인 쿠키(HMAC 서명) 검증. 초대코드(프리미엄) 여부도 이 쿠키에 담긴다. 서버에 세션을 저장하지 않음.
 - `app/chat.py` — **지휘자.** "질문 → 검색조건 추출 → 검색 → 답변 생성" 파이프라인을 순서대로 지휘.
-- `app/art.py` — **검색엔진.** `data/art.db`에서 SQLite FTS5로 작품을 찾음. AI 호출 없이 순수 DB 검색.
-- `app/llm.py` — **AI 통신창구.** OpenAI `gpt-6-astra`를 실제로 호출하는 유일한 곳(429/401/403이면 Upstage `solar-pro3`로 비상 폴백). 타임아웃·에러를 통일된 형태로 반환.
-- `app/db.py` — **저장소.** 사용자·대화 로그·보수보안 사건 저장(로컬 SQLite 또는 Turso 자동 선택).
-- `app/config.py` — **규칙집.** 사용 모델(gpt-6-astra/폴백 solar-pro3)·초대코드·요금제 상한 등 설정을 고정.
-- `app/guardian.py` — **보수보안 에이전트.** 장애·보안 사건을 즉시 기록·대응(잠금, AI 백오프, 악성 입력 차단)하고, 1일 1회 gpt-6-astra로 일괄 분석·GitHub 이슈까지 생성.
+- `app/art.py` — **검색엔진.** `data/art.db`에서 SQLite FTS5로 작품을 찾음. AI 호출 없이 순수 DB 검색. 상위 2개(`GUARANTEED_TOP`)는 관련도순 고정, 나머지는 후보 풀에서 무작위로 섞어 같은 질문이라도 항상 똑같은 작품만 나오지 않게 한다.
+- `app/llm.py` — **AI 통신창구.** OpenAI `gpt-6-astra`를 실제로 호출하는 유일한 곳(429/401/403이면 Upstage `solar-pro4`로 비상 폴백). 타임아웃·에러를 통일된 형태로 반환.
+- `app/db.py` — **저장소.** 사용자·대화 로그·가디언 사건 저장(로컬 SQLite 또는 Turso 자동 선택).
+- `app/config.py` — **규칙집.** 사용 모델(gpt-6-astra/폴백 solar-pro4)·초대코드·요금제 상한 등 설정을 고정.
+- `app/guardian.py` — **가디언.** 장애·보안 사건을 즉시 기록·대응(잠금, AI 백오프, 악성 입력 차단)하고, 1일 1회 gpt-6-astra로 일괄 분석·GitHub 이슈까지 생성.
 - `app/static/*` — **화면.** 브라우저에 보이는 HTML/JS/CSS 전부. 초대코드 회원은 화이트 테마(`body.light-theme`)로 바뀐다.
 
 ```
@@ -39,9 +39,9 @@
 |---|---|
 | `app/main.py` | 라우팅, 입력 검증, 로그, 오류 응답 |
 | `app/chat.py` | 질문 → 검색 의도 → DB 검색 → 답변 생성 파이프라인 |
-| `app/llm.py` | OpenAI gpt-6-astra 호출(서버 전용, 타임아웃 설정) + solar-pro3 비상 폴백 |
+| `app/llm.py` | OpenAI gpt-6-astra 호출(서버 전용, 타임아웃 설정) + solar-pro4 비상 폴백 |
 | `app/config.py` | 사용 모델(gpt-6-astra)·키 이름·초대코드/요금제 상한 등 설정 |
-| `app/guardian.py` | **보수보안 에이전트** — 장애·보안 사건 즉시 대응 + 1일 1회 AI 일괄 분석 (`/api/guardian/daily-digest`) |
+| `app/guardian.py` | **가디언** — 장애·보안 사건 즉시 대응 + 1일 1회 AI 일괄 분석 (`/api/guardian/daily-digest`) |
 | `app/db.py` | 사용자·로그·사건 DB (Turso 또는 로컬 SQLite 자동 선택) |
 | `scripts/collect_*.py` | 공개 API → `data/art.db` 수집기 |
 
@@ -59,7 +59,7 @@
 | POST | `/api/chat` | **로그인 필요**. 질문 → 답변 + 작품 카드 |
 | GET | `/api/me/chats?limit=20&offset=0` | 내 대화 로그 조회 |
 | GET | `/api/health` | 상태 확인 |
-| GET | `/api/guardian/daily-digest` | 보수보안 에이전트 일일 점검 (`CRON_SECRET` 필요, Vercel Cron 전용) |
+| GET | `/api/guardian/daily-digest` | 가디언 일일 점검 (`CRON_SECRET` 필요, Vercel Cron 전용) |
 
 `POST /api/chat`
 ```json
@@ -77,7 +77,7 @@
 오류 코드: `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`/`INVALID_INPUT`(400)
 `RATE_LIMITED`(429, 시간당 일반 30회·초대코드 300회) `FREE_LIMIT_REACHED`(403, 초대코드 없는 계정의 평생 무료 질문 100회 소진)
 `AI_TIMEOUT`(504) `AI_ERROR`(502) `AI_RATE_LIMITED`(429) `AI_BACKED_OFF`/`AI_KEY_MISSING`(503) `DB_ERROR`/`ART_DB_ERROR`(503)
-`INTERNAL_ERROR`(500, 예상 못한 예외는 모두 여기로 모이고 보수보안 에이전트가 기록한다)
+`INTERNAL_ERROR`(500, 예상 못한 예외는 모두 여기로 모이고 가디언이 기록한다)
 
 **초대코드(프리미엄)**: 회원가입 시 `private_code`로 `PREMIUM_CODE`(서버 환경변수)와 일치하는 값을 보내면 해당 계정은
 - 시간당 질문 한도가 `CHAT_LIMIT_PER_HOUR_PREMIUM`(기본 300)으로 상향되고, **평생 무료 질문 100회 제한이 적용되지 않는다**
@@ -95,7 +95,7 @@
 - Turso/SQLite (쓰기): 
   - `users(id, email UNIQUE, password_hash, is_premium, created_at)`
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
-  - `incidents(id, category[reliability|security], code, message, context(JSON), severity, auto_action, diagnosis, created_at)` — 보수보안 에이전트 사건 로그. `diagnosis`는 일일 배치 분석 전까지 NULL.
+  - `incidents(id, category[reliability|security], code, message, context(JSON), severity, auto_action, diagnosis, created_at)` — 가디언 사건 로그. `diagnosis`는 일일 배치 분석 전까지 NULL.
   - `runtime_flags(key, value, updated_at)` — AI 백오프·로그인 잠금 등 자동 대응 상태값 (예: `ai_backoff_until`, `lockout:<email>`)
   - `rate_counters(bucket, count, window_start)` — IP/이메일 단위 레이트리밋 카운터
 
@@ -132,12 +132,12 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 | 이름 | 설명 |
 |---|---|
 | `GPT_ASTRA_API_KEY` | OpenAI gpt-6-astra 키 (주 모델) |
-| `UPSTAGE_API_KEY` (선택) | Upstage solar-pro3 키. GPT 쪽이 429/401/403일 때만 비상 폴백으로 사용 |
+| `UPSTAGE_API_KEY` (선택) | Upstage solar-pro4 키. GPT 쪽이 429/401/403일 때만 비상 폴백으로 사용 |
 | `SECRET_KEY` | 세션 서명 키 (32자 이상 랜덤) |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | Turso DB. **없으면 로컬 `data/app.db` 사용** |
 | `LLM_TIMEOUT_SECONDS` | AI 호출 타임아웃(기본 20) |
 | `LLM_REASONING_EFFORT` | gpt-6-astra reasoning_effort (기본 low — 비용 보호) |
-| `CRON_SECRET` | 보수보안 에이전트 일일 점검(`/api/guardian/daily-digest`)을 Vercel Cron만 호출하게 막는 값 |
+| `CRON_SECRET` | 가디언 일일 점검(`/api/guardian/daily-digest`)을 Vercel Cron만 호출하게 막는 값 |
 | `GITHUB_TOKEN` (선택) | 긴급도 medium/high 사건 발생 시 GitHub 이슈 자동 생성 (issues:write) |
 | `GITHUB_REPO` (선택) | 이슈를 열 저장소, 기본 `KANGSIK-SEO/AITOOLLEARN-7-1` |
 | `PREMIUM_CODE` (선택) | 회원가입 시 입력받는 초대코드 (비우면 초대코드 가입 비활성) |
@@ -153,7 +153,7 @@ vercel link && vercel env add GPT_ASTRA_API_KEY && vercel env add SECRET_KEY \
   && vercel env add CRON_SECRET && vercel env add GITHUB_TOKEN
 vercel deploy --prod
 ```
-**보수보안 에이전트 (장애 대응 + 보안)**: `app/guardian.py`. 로그인 폭주·AI 429 반복·악성 입력 패턴은
+**가디언 (장애 대응 + 보안)**: `app/guardian.py`. 로그인 폭주·AI 429 반복·악성 입력 패턴은
 요청마다 비용 없이 즉시 차단/잠금(`incidents`, `runtime_flags` 테이블). 쌓인 사건은 Vercel Cron이
 하루 한 번(Hobby 플랜 제한) `/api/guardian/daily-digest`를 호출해 gpt-6-astra로 한 번에 분석하고,
 긴급도가 medium/high면 GitHub 이슈를 자동으로 연다. 로컬에서 수동 실행:
@@ -175,11 +175,13 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:8000/api/guardian/
 - 모든 키는 환경 변수로만 사용하고 `.env`는 `.gitignore`로 제외한다. 예시는 `.env.example`.
 - AI 호출은 서버에서만 수행되며 키는 응답·로그에 노출되지 않는다.
 - **모델**: 주 모델은 `gpt-6-astra` (`app/config.py`, `app/llm.py`). GPT 쪽이 429/401/403으로
-  실패할 때만 Upstage `solar-pro3`로 한 번 더 시도한다(`UPSTAGE_API_KEY` 설정 시에만 활성, 없으면
-  폴백 없이 원래 에러 반환). 둘 다 실제 과금되므로 호출 비용 보호가 중요하다 — 시간당 질문 상한
-  (`CHAT_LIMIT_PER_HOUR`/`CHAT_LIMIT_PER_HOUR_PREMIUM`), 429 반복 시 자동 백오프, 요청당 GPT 호출 금지(배치 분석만)로 방어한다.
+  실패할 때만 Upstage `solar-pro4`로 한 번 더 시도한다(`UPSTAGE_API_KEY` 설정 시에만 활성, 없으면
+  폴백 없이 원래 에러 반환). gpt-6-astra는 실제 과금, solar-pro4는 2026-10 기준 무료·무제한이지만
+  **2027-04-01부터 Upstage가 전 모델을 과금 전환**하면서 이 폴백도 끝난다. 호출 비용 보호를 위해
+  시간당 질문 상한(`CHAT_LIMIT_PER_HOUR`/`CHAT_LIMIT_PER_HOUR_PREMIUM`), 429 반복 시 자동 백오프,
+  요청당 GPT 호출 금지(배치 분석만)로 방어한다.
 
-## 9. 보수보안 에이전트
+## 9. 가디언
 `app/guardian.py`가 **장애 대응과 보안 위협 탐지를 함께** 담당한다.
 - **즉시(매 요청, GPT 미사용)**: 로그인 5회 실패 시 15분 잠금, AI 429가 5분 내 3회면 5분 백오프,
   `<script>`/`UNION SELECT` 등 명백한 악성 입력 차단, 가입/로그인/이미지 프록시 IP 레이트리밋.
@@ -188,3 +190,9 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:8000/api/guardian/
   `incidents`를 한 번에 gpt-6-astra에 보내 "무슨 일이 있었는지 / 반복·증가 추세가 있는지 / 다음에
   뭐가 터질 수 있는지"를 진단하고, 긴급도가 medium/high면 GitHub 이슈를 자동으로 연다.
   코드는 수정하지 않는다(유지관리자 리뷰·머지 원칙 유지) — 사람이 볼 이슈를 만드는 것까지만 자동화한다.
+
+**"왜 자동 코드수정은 안 하는가"**는 최근 연구와도 일치한다. Sun et al., "Toward Agentic
+Runtime Healing"(CACM, Oct 2026)은 LLM이 런타임 상태만 즉석에서 고쳐 요청을 살리는
+HEALER를 제안하는데(GPT-4 기준 73% 실행 지속, 39.6% 정답), 저자들 스스로 "진짜 장벽은
+효과성이 아니라 신뢰성"이라며 안전장치가 아직 미성숙하다고 결론짓는다. 가디언이 LLM 생성
+코드를 실행/커밋하는 경로를 만들지 않은 건 그래서다 — 진단과 이슈 생성까지만 자동화한다.

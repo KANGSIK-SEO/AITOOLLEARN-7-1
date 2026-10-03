@@ -1,7 +1,9 @@
 """AI 모델 설정과 외부 API 키.
 
 주 모델: OpenAI GPT-6 Astra(모델 ID `gpt-6-astra`). GPT 쪽 키가 소진·장애(429/401/403)일 때만
-비상용으로 Upstage solar-pro3로 넘어간다 (`UPSTAGE_API_KEY`가 설정된 경우에만 활성).
+비상용으로 Upstage solar-pro4로 넘어간다 (`UPSTAGE_API_KEY`가 설정된 경우에만 활성).
+solar-pro4는 2026-10 기준 무료·무제한이지만, 2027-04-01부터는 Upstage 쪽에서 모든 모델을 과금 전환해
+무효화한다고 공지했다 — 그 날짜 이후엔 이 폴백도 더 이상 쓸 수 없다.
 """
 import os
 from pathlib import Path
@@ -29,7 +31,7 @@ OPENAI_BASE_URL = "https://api.openai.com/v1"
 CRON_SECRET = os.environ.get("CRON_SECRET", "")
 
 # 비상 폴백 (GPT 키 소진/장애 시에만 사용)
-UPSTAGE_MODEL = "solar-pro3"
+UPSTAGE_MODEL = "solar-pro4"
 UPSTAGE_BASE_URL = "https://api.upstage.ai/v1"
 
 

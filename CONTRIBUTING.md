@@ -21,8 +21,8 @@ cp .env.example .env      # GPT_ASTRA_API_KEY, SECRET_KEY 채우기 (TURSO_*는 
 ```
 - PR을 올리기 전에 테스트가 통과해야 합니다. 새 기능에는 테스트를 함께 추가해 주세요.
 - **비밀 값(`.env`, API 키, 토큰)은 절대 커밋하지 않습니다.** 실수로 올렸다면 즉시 유지관리자에게 알리고 키를 폐기하세요.
-- AI 모델은 OpenAI `gpt-6-astra`가 주 모델입니다 (`app/config.py`, `GPT_ASTRA_API_KEY`). GPT 쪽이 429/401/403으로 실패할 때만 Upstage `solar-pro3`로 한 번 더 시도합니다(`UPSTAGE_API_KEY` 설정 시에만, `app/llm.py`). 둘 다 실제 과금되므로 다른 모델을 함부로 추가하거나 `reasoning_effort`를 올리지 마세요(비용 증가).
-- `app/guardian.py`(보수보안 에이전트)가 장애·보안 사건을 `incidents` 테이블에 기록하고 1일 1회(Vercel Cron, `/api/guardian/daily-digest`) gpt-6-astra로 일괄 분석합니다. 요청마다 GPT를 부르지 않는 비용 보호 설계이므로, 새 엔드포인트에 대응 로직을 추가할 때도 이 패턴(결정적 규칙은 즉시, AI 분석은 배치)을 따라 주세요.
+- AI 모델은 OpenAI `gpt-6-astra`가 주 모델입니다 (`app/config.py`, `GPT_ASTRA_API_KEY`, 실제 과금됨). GPT 쪽이 429/401/403으로 실패할 때만 Upstage `solar-pro4`로 한 번 더 시도합니다(`UPSTAGE_API_KEY` 설정 시에만, `app/llm.py`). solar-pro4는 현재(2026-10) 무료·무제한이지만 **2027-04-01부터는 Upstage가 전 모델을 과금 전환**해 이 폴백도 끝난다 — 그 전에 유료 전환이 공지되면 다시 확인할 것. 다른 모델을 함부로 추가하거나 `reasoning_effort`를 올리지 마세요(비용 증가).
+- `app/guardian.py`(가디언)가 장애·보안 사건을 `incidents` 테이블에 기록하고 1일 1회(Vercel Cron, `/api/guardian/daily-digest`) gpt-6-astra로 일괄 분석합니다. 요청마다 GPT를 부르지 않는 비용 보호 설계이므로, 새 엔드포인트에 대응 로직을 추가할 때도 이 패턴(결정적 규칙은 즉시, AI 분석은 배치)을 따라 주세요.
 - 초대코드(프리미엄) 회원 로직은 `PREMIUM_CODE`/`app/auth.py`/`app/config.py`를 참고하세요. 일반 회원은 평생 무료 질문 수(`CHAT_LIFETIME_LIMIT_FREE`)가 있습니다.
 
 ## PR 작성 규칙
