@@ -11,8 +11,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Request
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -30,6 +31,16 @@ COOKIE = "session"
 
 app = FastAPI(title="저작권 걱정 없는 퍼블릭 도메인 명화 찾기 챗봇")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# TV 앱 등 다른 오리진 클라이언트는 쿠키 대신 Authorization: Bearer 헤더로 인증하므로
+# 자격 증명(쿠키) 공유는 필요 없다 — allow_credentials=False라 allow_origins="*"와 함께 써도 안전하다.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
+)
 
 STATUS_BY_CODE = {"AI_TIMEOUT": 504, "AI_ERROR": 502, "AI_RATE_LIMITED": 429,
                   "AI_KEY_MISSING": 503, "AI_BACKED_OFF": 503}
@@ -68,8 +79,14 @@ async def unhandled_exc(_: Request, exc: Exception):
     return error(500, "INTERNAL_ERROR", "예상치 못한 오류가 발생했어요. 잠시 후 다시 시도해 주세요.")
 
 
-def current_session(session: str | None = Cookie(default=None)) -> dict:
-    data = auth.read_token(session)
+def current_session(session: str | None = Cookie(default=None),
+                    authorization: str | None = Header(default=None)) -> dict:
+    # 웹 클라이언트는 쿠키로, TV 등 다른 오리진 클라이언트는 Authorization: Bearer 헤더로 인증한다.
+    # 쿠키가 있으면 쿠키를 우선한다(기존 동작 그대로 유지).
+    token = session
+    if token is None and authorization and authorization.startswith("Bearer "):
+        token = authorization[len("Bearer "):]
+    data = auth.read_token(token)
     if data is None:
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "로그인이 필요합니다."})
     return data
@@ -89,8 +106,8 @@ class ChatRequest(BaseModel):
     message: str
 
 
-def _set_cookie(resp: JSONResponse, user_id: int, is_premium: bool, request: Request) -> None:
-    resp.set_cookie(COOKIE, auth.make_token(user_id, is_premium), max_age=auth.TOKEN_TTL_SECONDS,
+def _set_cookie(resp: JSONResponse, token: str, request: Request) -> None:
+    resp.set_cookie(COOKIE, token, max_age=auth.TOKEN_TTL_SECONDS,
                     httponly=True, samesite="lax", secure=request.url.scheme == "https")
 
 
@@ -133,8 +150,10 @@ def signup(body: Credentials, request: Request):
     except db.DbError:  # 동시 가입으로 UNIQUE 충돌
         return error(409, "EMAIL_TAKEN", "이미 가입된 이메일입니다.")
     log.info("signup_success user_id=%s is_premium=%s", row["id"], is_premium)
-    resp = JSONResponse({"user": {"id": row["id"], "email": email, "is_premium": is_premium}}, status_code=201)
-    _set_cookie(resp, row["id"], is_premium, request)
+    token = auth.make_token(row["id"], is_premium)
+    resp = JSONResponse({"user": {"id": row["id"], "email": email, "is_premium": is_premium}, "token": token},
+                        status_code=201)
+    _set_cookie(resp, token, request)
     return resp
 
 
@@ -151,8 +170,9 @@ def login(body: Credentials, request: Request):
         return error(401, "INVALID_CREDENTIALS", "이메일 또는 비밀번호가 올바르지 않습니다.")
     is_premium = bool(rows[0]["is_premium"])
     log.info("login_success user_id=%s is_premium=%s", rows[0]["id"], is_premium)
-    resp = JSONResponse({"user": {"id": rows[0]["id"], "email": email, "is_premium": is_premium}})
-    _set_cookie(resp, rows[0]["id"], is_premium, request)
+    token = auth.make_token(rows[0]["id"], is_premium)
+    resp = JSONResponse({"user": {"id": rows[0]["id"], "email": email, "is_premium": is_premium}, "token": token})
+    _set_cookie(resp, token, request)
     return resp
 
 

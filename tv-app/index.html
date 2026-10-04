@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1920, height=1080, initial-scale=1.0, user-scalable=no">
+<title>명화 챗봇 TV</title>
+<link rel="stylesheet" href="css/tv.css">
+</head>
+<body>
+
+<section id="screen-login" class="screen">
+  <div class="login-box">
+    <h1>저작권 걱정 없는 명화 챗봇</h1>
+    <p class="subtitle">리모컨으로 이동 · 방향키 이동, 확인 버튼으로 선택</p>
+    <div id="auth-error" class="error" role="alert"></div>
+
+    <label>이메일</label>
+    <input id="email" type="text" inputmode="email" class="focusable" data-row="0">
+
+    <label>비밀번호</label>
+    <input id="password" type="password" class="focusable" data-row="1">
+
+    <label>초대코드 (선택, 회원가입 시에만)</label>
+    <input id="private-code" type="text" class="focusable" data-row="2">
+
+    <div class="button-row">
+      <button id="login-btn" class="focusable" data-row="3">로그인</button>
+      <button id="signup-btn" class="focusable" data-row="3">회원가입</button>
+    </div>
+  </div>
+</section>
+
+<section id="screen-chat" class="screen" hidden>
+  <header class="chat-header">
+    <span id="status-bar"></span>
+    <button id="logout-btn" class="focusable" data-row="0">로그아웃</button>
+  </header>
+
+  <div id="chat-log" class="chat-log"></div>
+
+  <div class="composer">
+    <input id="message-input" type="text" placeholder="예: 봄 느낌 풍경화 3개 찾아줘" class="focusable" data-row="900">
+    <button id="send-btn" class="focusable" data-row="900">질문하기</button>
+  </div>
+</section>
+
+<div id="detail-overlay" class="overlay" hidden>
+  <div class="detail-card">
+    <img id="detail-img" alt="">
+    <h2 id="detail-title"></h2>
+    <p id="detail-sub"></p>
+    <p id="detail-badge"></p>
+    <p class="hint">확인: 닫기 · 돌아가기: 닫기</p>
+  </div>
+</div>
+
+<script src="js/api.js"></script>
+<script src="js/focus.js"></script>
+<script src="js/keys.js"></script>
+<script src="js/screens/login.js"></script>
+<script src="js/screens/chat.js"></script>
+<script src="js/tv.js"></script>
+</body>
+</html>
