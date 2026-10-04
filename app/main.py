@@ -1,4 +1,5 @@
 """FastAPI 앱: 회원가입/로그인, 챗봇 질문/응답, 내 대화 로그 조회."""
+import hmac
 import json
 import logging
 import re
@@ -18,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, chat, db, guardian
+from . import auth, chat, db, explain, guardian
 from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, CHAT_LIFETIME_LIMIT_FREE,
                      CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
                      CONTEXT_TURNS, CRON_SECRET, AIUnavailableError)
@@ -278,6 +279,41 @@ def my_chats(limit: int = 20, offset: int = 0, user_id: int = Depends(current_us
         "SELECT id, question, answer, status, error_code, latency_ms, created_at FROM chats "
         "WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?", (user_id, limit, max(0, offset)))
     return {"chats": rows}
+
+
+# ---- 설명 에이전트 (피어 리뷰용) ----
+# 비밀번호 입력 없이 '/explain/{token}' 링크 자체가 암호 역할을 한다(EXPLAIN_AGENT_SECRET과 일치해야 함).
+# 토큰이 틀리거나 비활성(EXPLAIN_AGENT_SECRET 미설정)이면 404 — 평범한 404와 구별되지 않게 해 존재 자체를 숨긴다.
+class ExplainRequest(BaseModel):
+    question: str
+    secret: str
+
+
+@app.get("/explain/{token}")
+def explain_page(token: str):
+    secret = explain.get_secret()
+    if not secret or not hmac.compare_digest(token, secret):
+        raise HTTPException(404)
+    return FileResponse(STATIC_DIR / "explain.html")
+
+
+@app.post("/api/explain")
+def explain_endpoint(body: ExplainRequest, request: Request):
+    secret = explain.get_secret()
+    if not secret or not hmac.compare_digest(body.secret, secret):
+        return error(401, "UNAUTHENTICATED", "암호가 올바르지 않습니다.")
+    ip = guardian.client_ip(request)
+    if not guardian.check_rate(f"explain:{ip}", limit=30, window_seconds=3600):
+        return error(429, "RATE_LIMITED", "질문이 너무 많아요. 잠시 후 다시 시도해 주세요.")
+    question = body.question.strip()
+    if not question:
+        return error(400, "EMPTY_MESSAGE", "질문을 입력해 주세요.")
+    if len(question) > CHAT_MAX_LENGTH:
+        return error(400, "MESSAGE_TOO_LONG", f"질문은 {CHAT_MAX_LENGTH}자 이하로 입력해 주세요.")
+    try:
+        return {"answer": explain.ask(question)}
+    except AIUnavailableError as e:
+        return error(STATUS_BY_CODE.get(e.code, 502), e.code, str(e))
 
 
 # ---- AIC 이미지 프록시 ----
