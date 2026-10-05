@@ -31,5 +31,9 @@ jobs:
           npm i -g vercel@latest
           SCOPE_ARG=""
           [ -n "$VERCEL_SCOPE" ] && SCOPE_ARG="--scope $VERCEL_SCOPE"
-          vercel link --yes --project "$VERCEL_PROJECT" --token "$VERCEL_TOKEN" $SCOPE_ARG
+          if ! vercel link --yes --project "$VERCEL_PROJECT" --token "$VERCEL_TOKEN" $SCOPE_ARG 2>link.err; then
+            cat link.err
+            grep -q "User not found" link.err && echo "::error::토큰 범위가 프로젝트 하나로 제한돼 있습니다. Vercel에서 Scope를 팀(customer-auto) 전체로 새 토큰을 만들어 VERCEL_TOKEN을 바꾸세요."
+            exit 1
+          fi
           vercel deploy --prod --yes --token "$VERCEL_TOKEN" $SCOPE_ARG
