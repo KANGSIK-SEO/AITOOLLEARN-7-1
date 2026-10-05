@@ -2,16 +2,12 @@
 
 - SOURCES: 공급원(기관)별 권리 데이터 (§1). enabled=False인 기관은 검색에 절대 나오지 않는다.
 - evaluate(): 작품 하나에 R1~R6을 적용한 결과 (§2).
-- certificate_number(): 확인서 번호 — 권리 데이터가 바뀌면 번호도 바뀐다 (§5).
+기록 발급·보관은 app/records.py (§5).
 """
-import hashlib
-import hmac
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlparse
-
-from .config import get_secret_key
 
 RECHECK_AFTER_DAYS = 365  # R5
 
@@ -26,15 +22,19 @@ class Source:
     policy_url: str          # 기관 공식 정책 페이지 (§1 S1)
     image_hosts: tuple[str, ...]  # 원본 이미지 공식 도메인 (§1 S3)
     note: str = ""
+    api_url: str = ""        # 작품 단위 근거 필드가 담긴 API 주소 ({id}=기관 작품 ID) — 기록 발급 시 제3자 보관
 
 
 SOURCES: dict[str, Source] = {s.code: s for s in (
     Source("met", "The Metropolitan Museum of Art", True, "CC0", "isPublicDomain = true",
-           "https://www.metmuseum.org/hubs/open-access", ("images.metmuseum.org",)),
+           "https://www.metmuseum.org/hubs/open-access", ("images.metmuseum.org",),
+           api_url="https://collectionapi.metmuseum.org/public/collection/v1/objects/{id}"),
     Source("aic", "Art Institute of Chicago", True, "CC0", "is_public_domain = true",
-           "https://www.artic.edu/open-access/open-access-images", ("www.artic.edu", "artic.edu")),
+           "https://www.artic.edu/open-access/open-access-images", ("www.artic.edu", "artic.edu"),
+           api_url="https://api.artic.edu/api/v1/artworks/{id}?fields=id,title,is_public_domain,image_id"),
     Source("cma", "Cleveland Museum of Art", True, "CC0", 'share_license_status = "CC0"',
-           "https://www.clevelandart.org/open-access", ("openaccess-cdn.clevelandart.org",)),
+           "https://www.clevelandart.org/open-access", ("openaccess-cdn.clevelandart.org",),
+           api_url="https://openaccess-api.clevelandart.org/api/artworks/{id}"),
     # 보류 (§1 기관 현황) — 등록만 하고 검색에는 나오지 않는다
     Source("nga", "National Gallery of Art", False, "CC0", "open access 이미지 표시",
            "https://www.nga.gov/open-access-images.html", (), "데이터셋 수집 방식 설계 후 확인"),
@@ -87,9 +87,3 @@ def evaluate(work: dict, now: datetime | None = None) -> dict:
     status = "ok" if not failed else "recheck" if failed == ["R5"] else "blocked"
     return {"status": status, "checks": [{"code": c, "label": l, "ok": ok} for c, l, ok in checks],
             "checked_at": checked.date().isoformat() if checked else None, "age_days": age_days}
-
-
-def certificate_number(work: dict) -> str:
-    payload = f"{work['source']}:{work['source_id']}:{work['license']}:{work.get('collected_at')}"
-    digest = hmac.new(get_secret_key().encode(), payload.encode(), hashlib.sha256).hexdigest()[:12].upper()
-    return f"PD-{digest[:4]}-{digest[4:8]}-{digest[8:]}"

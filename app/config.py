@@ -87,3 +87,4 @@ GUEST_TRIAL_WINDOW_SECONDS = 24 * 3600
 BROWSE_PAGE_SIZE = 24                  # '더 보기' 한 번에 보여줄 작품 수 (AI 없이 DB만 조회)
 BROWSE_LIMIT_PER_HOUR = 600            # IP당 '더 보기' 시간당 상한
 FAVORITES_MAX = 500                    # 사용자당 즐겨찾기 상한
+RECORD_LIMIT_PER_HOUR = 60             # IP당 권리 근거 기록 발급 시간당 상한 (아카이브 호출 남용 방지)

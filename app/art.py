@@ -140,7 +140,7 @@ def get_by_ids(ids: list[int]) -> list[dict]:
 
 
 def get_rights_record(artwork_id: int) -> dict | None:
-    """확인서용 권리 데이터. 판단(R1~R6)은 rights.evaluate가 하므로 여기서는 기관 필터를 걸지 않는다.
+    """권리 근거 기록용 데이터. 판단(R1~R6)은 rights.evaluate가 하므로 여기서는 기관 필터를 걸지 않는다.
     image_url은 프록시 주소가 아니라 기관 원본 주소 그대로 둔다 (R4 판단 근거)."""
     conn = _connect()
     try:

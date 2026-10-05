@@ -1,5 +1,4 @@
 """FastAPI 앱: 회원가입/로그인, 챗봇 질문/응답, 내 대화 로그 조회."""
-import html
 import json
 import logging
 import re
@@ -18,11 +17,11 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import art, auth, chat, db, guardian, rights
+from . import art, auth, chat, db, guardian, records
 from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, BROWSE_LIMIT_PER_HOUR, BROWSE_PAGE_SIZE,
                      CHAT_LIFETIME_LIMIT_FREE, CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM,
                      CHAT_MAX_LENGTH, CONTEXT_TURNS, CRON_SECRET, FAVORITES_MAX, GUEST_TRIAL_LIMIT,
-                     GUEST_TRIAL_WINDOW_SECONDS, AIUnavailableError)
+                     GUEST_TRIAL_WINDOW_SECONDS, RECORD_LIMIT_PER_HOUR, AIUnavailableError)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("app")
@@ -325,85 +324,44 @@ def browse_artworks(request: Request, q: str = "", artist: str | None = None, ye
     return {"artworks": works, "has_more": has_more}
 
 
-CERT_CAUTIONS = [
-    "작품에 사람의 얼굴·이름이 나오면 초상권·퍼블리시티권 문제가 따로 있을 수 있습니다.",
-    "작품 속 상표·로고는 상표법으로 따로 보호될 수 있습니다.",
-    "기관 이름·로고를 써서 기관이 보증·후원하는 것처럼 보이게 하면 안 됩니다.",
-    "출처 표시는 의무가 아니지만 기관들은 권장합니다. 아래 출처 표기 예시를 써 주세요.",
-    "이 확인서는 법률 자문이 아닙니다. 중요한 상업 프로젝트는 사용 직전 출처 페이지를 다시 확인하세요.",
-]
-CERT_VERDICT = {
-    "ok": ("✅ 사용 가능 — CC0 (조건 없이 상업적 이용·수정 가능)", "#0a7d45"),
-    "recheck": ("⚠️ 재확인 필요 — 권리 확인일이 오래되어 출처 페이지에서 다시 확인해야 합니다", "#a86400"),
-    "blocked": ("⛔ 확인서 발급 불가 — 판단 규칙을 통과하지 못한 작품입니다", "#b00020"),
-}
+class RecordRequest(BaseModel):
+    artwork_id: int
 
 
-def credit_example(work: dict, source: rights.Source | None) -> str:
-    parts = [f'"{work["title"]}"', work.get("artist") or "Unknown artist"]
-    if work.get("date_display"):
-        parts.append(work["date_display"])
-    return f'{", ".join(parts)}. {source.name if source else work["source"]}, CC0 (Public Domain). {work["source_url"]}'
+@app.post("/api/records")
+def issue_record(body: RecordRequest, request: Request, session_data: dict | None = Depends(optional_session)):
+    """권리 근거 기록 발급 (docs/rights-policy.md §5): 스냅숏 저장 → 인터넷 아카이브 보관 시도 → 기록 번호."""
+    ip = guardian.client_ip(request)
+    if not guardian.check_rate(f"record:{ip}", limit=RECORD_LIMIT_PER_HOUR, window_seconds=3600):
+        return error(429, "RATE_LIMITED", "요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
+    try:
+        number = records.issue(body.artwork_id, session_data["uid"] if session_data else None)
+    except LookupError:
+        return error(404, "ARTWORK_NOT_FOUND", "작품을 찾을 수 없습니다.")
+    except records.RecordNotAllowed as e:
+        return error(409, "RECORD_NOT_ALLOWED", f"판단 규칙({', '.join(e.failed)})을 통과하지 못해 기록을 발급할 수 없어요.")
+    archives = records.archive_missing(number)  # 실패해도 기록은 이미 저장됨 — 기록 페이지에서 다시 시도 가능
+    return {"number": number, "url": f"/records/{number}", "archived": all(a["archived_url"] for a in archives)}
 
 
-@app.get("/certificate/{artwork_id}", response_class=HTMLResponse)
-def certificate(artwork_id: int):
-    """권리 확인서 (docs/rights-policy.md §5). 인쇄하거나 PDF로 저장해 보관할 수 있는 한 장짜리 문서."""
-    work = art.get_rights_record(artwork_id)
-    if not work:
-        return HTMLResponse("<h1>작품을 찾을 수 없습니다.</h1>", status_code=404)
-    result = rights.evaluate(work)
-    src = rights.SOURCES.get(work["source"])
-    e = html.escape
-    verdict, color = CERT_VERDICT[result["status"]]
-    issuable = result["status"] != "blocked"
-    thumb = art.with_proxy_urls(work).get("thumbnail_url") or work["image_url"]
-    checks = "".join(f"<li>{'✅' if c['ok'] else '❌'} <b>{c['code']}</b> {e(c['label'])}</li>" for c in result["checks"])
-    cautions = "".join(f"<li>{e(c)}</li>" for c in CERT_CAUTIONS)
-    rows = [
-        ("기관", src.name if src else work["source"]),
-        ("기관 작품 ID", work["source_id"]),
-        ("작품 단위 근거", f"{src.basis if src else '-'} (기관 API 값)"),
-        ("라이선스", work["license"]),
-        ("권리 확인일", result["checked_at"] or "-"),
-    ]
-    links = [("기관 정책 페이지", src.policy_url if src else ""), ("작품 상세 페이지", work["source_url"]),
-             ("원본 이미지", work["image_url"])]
-    table = "".join(f"<tr><th>{e(k)}</th><td>{e(str(v))}</td></tr>" for k, v in rows)
-    table += "".join(f'<tr><th>{e(k)}</th><td><a href="{e(v)}" target="_blank" rel="noopener">{e(v)}</a></td></tr>'
-                     for k, v in links if v)
-    number = rights.certificate_number(work) if issuable else "발급 불가"
-    issued = datetime.now(timezone.utc).date().isoformat()
-    page = f"""<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>권리 확인서 — {e(work['title'])}</title>
-<style>
-body{{font-family:-apple-system,'Apple SD Gothic Neo','Noto Sans KR',sans-serif;color:#1a1a1a;background:#f4f4f7;margin:0;padding:16px}}
-.doc{{max-width:760px;margin:0 auto;background:#fff;padding:32px;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,.08)}}
-h1{{font-size:1.4rem;margin:0 0 4px}} .sub{{color:#666;font-size:.85rem;margin:0 0 20px}}
-.verdict{{border:2px solid {color};color:{color};padding:12px 14px;border-radius:8px;font-weight:700;margin:16px 0}}
-.work{{display:flex;gap:16px;align-items:flex-start}} .work img{{width:160px;max-width:40%;border-radius:6px;background:#eee}}
-table{{width:100%;border-collapse:collapse;font-size:.88rem;margin:12px 0}} th{{text-align:left;width:130px;color:#555;vertical-align:top}}
-th,td{{padding:6px 4px;border-bottom:1px solid #eee;word-break:break-all}} h2{{font-size:1rem;margin:22px 0 6px}}
-ul{{padding-left:20px;font-size:.88rem;line-height:1.6}} .credit{{background:#f6f6f8;padding:10px;border-radius:6px;font-size:.85rem;word-break:break-all}}
-.foot{{display:flex;justify-content:space-between;color:#666;font-size:.8rem;margin-top:24px;border-top:1px solid #eee;padding-top:10px}}
-button{{margin:12px auto;display:block;padding:10px 18px;border:0;border-radius:20px;background:#0066ff;color:#fff;font-size:.9rem;cursor:pointer}}
-@media print{{body{{background:#fff;padding:0}} .doc{{box-shadow:none}} button{{display:none}}}}
-</style></head><body><div class="doc">
-<h1>퍼블릭 도메인 권리 확인서</h1>
-<p class="sub">Public Domain Rights Record · 저작권 걱정 없는 퍼블릭 도메인 명화 찾기</p>
-<div class="work"><img src="{e(thumb)}" alt="{e(work['title'])}"><div>
-<h2 style="margin-top:0">{e(work['title'])}</h2>
-<div>{e(work.get('artist') or '작가 미상')}{' · ' + e(work['date_display']) if work.get('date_display') else ''}</div>
-<div style="color:#666;font-size:.85rem">{e(work.get('medium') or '')}</div>
-<div style="color:#666;font-size:.85rem">{e(work.get('credit_line') or '')}</div></div></div>
-<div class="verdict">{e(verdict)}</div>
-<h2>권리 근거</h2><table>{table}</table>
-<h2>판단 결과 (판단 규칙 R1~R6)</h2><ul>{checks}</ul>
-{'<h2>출처 표기 예시</h2><div class="credit">' + e(credit_example(work, src)) + '</div>' if issuable else ''}
-<h2>주의사항</h2><ul>{cautions}</ul>
-<div class="foot"><span>확인서 번호 {e(number)}</span><span>발급일 {issued}</span></div>
-</div><button onclick="window.print()">인쇄 / PDF로 저장</button></body></html>"""
-    return HTMLResponse(page)
+@app.post("/api/records/{number}/archive")
+def retry_archive(number: str, request: Request):
+    ip = guardian.client_ip(request)
+    if not guardian.check_rate(f"archive:{ip}", limit=20, window_seconds=3600):
+        return error(429, "RATE_LIMITED", "요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
+    try:
+        archives = records.archive_missing(number)
+    except LookupError:
+        return error(404, "RECORD_NOT_FOUND", "기록을 찾을 수 없습니다.")
+    return {"archives": archives}
+
+
+@app.get("/records/{number}", response_class=HTMLResponse)
+def show_record(number: str):
+    row = records.get(number)
+    if not row:
+        return HTMLResponse("<h1>기록을 찾을 수 없습니다.</h1>", status_code=404)
+    return HTMLResponse(records.render(row))
 
 
 @app.get("/api/me/favorites")

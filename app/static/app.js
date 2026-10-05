@@ -16,6 +16,7 @@ const ERROR_MESSAGES = {
     GUEST_LIMIT_REACHED: "무료 체험을 모두 사용했어요. 가입하면 계속 이용할 수 있어요. / You've used up the free trial. Sign up to keep going.",
     FAVORITES_FULL: "즐겨찾기가 가득 찼어요. / Your favorites are full.",
     ARTWORK_NOT_FOUND: "작품을 찾을 수 없습니다. / Artwork not found.",
+    RECORD_NOT_ALLOWED: "이 작품은 판단 규칙을 통과하지 못해 권리 근거 기록을 발급할 수 없어요. / This artwork didn't pass our rights rules.",
     DB_ERROR: "데이터베이스에 문제가 생겼어요. 잠시 후 다시 시도해 주세요. / There was a database problem. Please try again shortly.",
     INTERNAL_ERROR: "예상치 못한 오류가 발생했어요. 잠시 후 다시 시도해 주세요. / An unexpected error occurred. Please try again shortly.",
     ART_DB_ERROR: "작품 데이터베이스를 읽지 못했어요. / Couldn't read the artwork database.",
@@ -160,6 +161,24 @@ async function download(w, btn) {
     }
 }
 
+async function issueRecord(w, btn) {
+    // 서버 응답을 기다린 뒤 새 탭을 열면 팝업 차단에 걸려서, 탭을 먼저 열어두고 주소만 나중에 넣는다
+    const tab = window.open("", "_blank");
+    if (tab) tab.document.write("<p style='font-family:sans-serif;padding:24px'>권리 근거 기록을 만들고 인터넷 아카이브에 보관하는 중… (최대 30초)</p>");
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "발급 중…";
+    const { ok, data } = await api("/api/records", { method: "POST", body: JSON.stringify({ artwork_id: w.id }) });
+    btn.disabled = false;
+    btn.textContent = original;
+    if (!ok) {
+        if (tab) tab.close();
+        addMessage("bot error", errorMessage(data.error, GENERIC_CHAT_ERROR));
+        return;
+    }
+    if (tab) tab.location.href = data.url; else window.location.href = data.url;
+}
+
 function renderStar(btn, id) {
     const on = favorites.has(id);
     btn.textContent = on ? "★" : "☆";
@@ -234,9 +253,7 @@ function makeCard(w, index) {
         actionButton("출처 복사", "출처 표기 문구 복사 / Copy credit line", async (b) => {
             flash(b, (await copyText(creditLine(w))) ? "복사됨 ✓" : "실패");
         }),
-        actionButton("확인서", "권리 확인서 보기·저장 / Rights record", () => {
-            window.open(`/certificate/${w.id}`, "_blank", "noopener");
-        }),
+        actionButton("근거 기록", "권리 근거 기록 발급·저장 / Rights evidence record", (b) => issueRecord(w, b)),
     );
 
     const links = document.createElement("div");

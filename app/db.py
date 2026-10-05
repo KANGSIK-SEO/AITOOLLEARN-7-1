@@ -57,6 +57,16 @@ SCHEMA = [
         created_at  TEXT NOT NULL,
         PRIMARY KEY (user_id, artwork_id)
     )""",
+    # 권리 근거 기록: 발급 시점 스냅숏을 그대로 보관한다 (기관 데이터가 바뀌어도 기록은 안 바뀜)
+    """CREATE TABLE IF NOT EXISTS rights_records (
+        number      TEXT PRIMARY KEY,      -- PD-XXXX-XXXX-XXXX
+        artwork_id  INTEGER NOT NULL,
+        user_id     INTEGER,               -- 비로그인 발급이면 NULL
+        snapshot    TEXT NOT NULL,         -- JSON: 작품·기관·판정·출처 표기·주의사항
+        archives    TEXT NOT NULL,         -- JSON: 인터넷 아카이브 보관본 (나중에 채워질 수 있음)
+        signature   TEXT NOT NULL,         -- HMAC(number|issued_at|snapshot) — 변조 확인용
+        issued_at   TEXT NOT NULL
+    )""",
     """CREATE TABLE IF NOT EXISTS rate_counters (
         bucket       TEXT PRIMARY KEY,
         count        INTEGER NOT NULL,

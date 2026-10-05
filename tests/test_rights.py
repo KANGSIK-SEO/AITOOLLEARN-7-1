@@ -11,7 +11,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-test-secret-key-1234")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import art, db, rights  # noqa: E402
+from app import art, db, records, rights  # noqa: E402
 from app.main import app  # noqa: E402
 
 NOW = datetime(2026, 10, 5, tzinfo=timezone.utc)
@@ -54,12 +54,6 @@ def test_pending_sources_can_never_be_enabled_by_env(monkeypatch):
     assert rights.allowed_sources() == ["met"]
 
 
-def test_certificate_number_changes_with_rights_data():
-    a = rights.certificate_number(_work())
-    assert a == rights.certificate_number(_work())
-    assert a != rights.certificate_number(_work(collected_at="2026-10-02 00:00:00"))
-
-
 def test_pilot_mode_limits_search_to_met(monkeypatch):
     monkeypatch.setenv("ALLOWED_SOURCES", "met")
     works = art.search(["landscape"], limit=12)
@@ -76,30 +70,100 @@ def client(tmp_path, monkeypatch):
     return TestClient(app)
 
 
-def test_certificate_page_shows_evidence_and_cautions(client):
+@pytest.fixture()
+def fake_archive(monkeypatch):
+    calls = []
+
+    def _save(url):
+        calls.append(url)
+        return f"https://web.archive.org/web/20261005000000/{url}", None
+    monkeypatch.setattr(records, "save_to_wayback", _save)
+    return calls
+
+
+def _issue(client, artwork_id):
+    return client.post("/api/records", json={"artwork_id": artwork_id})
+
+
+def test_record_is_issued_stored_and_archived(client, fake_archive):
     work = art.search(["landscape"], limit=1)[0]
-    r = client.get(f"/certificate/{work['id']}")
-    assert r.status_code == 200 and "text/html" in r.headers["content-type"]
-    body = r.text
-    assert "퍼블릭 도메인 권리 확인서" in body and "R1" in body and "R6" in body
-    assert "초상권" in body and "법률 자문이 아닙니다" in body
-    assert "PD-" in body  # 확인서 번호
-    assert client.get("/certificate/999999999").status_code == 404
+    r = _issue(client, work["id"])
+    assert r.status_code == 200 and r.json()["archived"] is True
+    number = r.json()["number"]
+    assert number.startswith("PD-") and r.json()["url"] == f"/records/{number}"
+    assert len(fake_archive) == 2  # 기관 작품 페이지 + 근거 필드가 담긴 API 응답
+    body = client.get(f"/records/{number}").text
+    assert "권리 근거 기록" in body and "확인서" not in body
+    assert "공식 인증서가 아닙니다" in body and "초상권" in body
+    assert "web.archive.org/web/20261005000000" in body and "R1" in body and "R6" in body
+    assert "확인됨" in body  # 기록 무결성
+    assert client.get("/records/PD-0000-0000-0000").status_code == 404
 
 
-def test_certificate_refuses_for_disabled_source_in_pilot(client, monkeypatch):
+def test_record_keeps_issue_time_snapshot_when_source_data_changes(client, fake_archive, monkeypatch):
+    work = art.search(["landscape"], limit=1)[0]
+    number = _issue(client, work["id"]).json()["number"]
+    real = art.get_rights_record
+
+    def changed(artwork_id):  # 발급 뒤 기관이 퍼블릭 도메인 표시를 내렸다고 가정
+        return {**real(artwork_id), "is_public_domain": 0, "title": "Changed Title"}
+    monkeypatch.setattr(art, "get_rights_record", changed)
+    body = client.get(f"/records/{number}").text
+    assert work["title"] in body and "Changed Title" not in body   # 기록은 발급 당시 그대로
+    assert "오늘 다시 판단하면" in body                                  # 현재 상태 변화는 참고로만
+
+
+def test_tampered_record_is_flagged(client, fake_archive):
+    work = art.search(["landscape"], limit=1)[0]
+    number = _issue(client, work["id"]).json()["number"]
+    row = records.get(number)
+    db.execute("UPDATE rights_records SET snapshot = ? WHERE number = ?",
+               (row["snapshot"].replace('"CC0"', '"CC-BY"', 1), number))
+    assert "변조 의심" in client.get(f"/records/{number}").text
+
+
+def test_archive_failure_keeps_record_and_can_retry(client, monkeypatch):
+    monkeypatch.setattr(records, "save_to_wayback", lambda url: (None, "HTTP 520"))
+    work = art.search(["landscape"], limit=1)[0]
+    r = _issue(client, work["id"])
+    assert r.status_code == 200 and r.json()["archived"] is False
+    number = r.json()["number"]
+    body = client.get(f"/records/{number}").text
+    assert "아직 보관되지 않음" in body and "HTTP 520" in body and "다시 보관하기" in body
+    monkeypatch.setattr(records, "save_to_wayback", lambda url: (f"https://web.archive.org/web/1/{url}", None))
+    archives = client.post(f"/api/records/{number}/archive").json()["archives"]
+    assert all(a["archived_url"] for a in archives)
+    assert "다시 보관하기" not in client.get(f"/records/{number}").text
+
+
+def test_record_refused_for_blocked_artwork(client, fake_archive, monkeypatch):
     aic = next(w for w in art.search(["landscape"], limit=30) if w["source"] == "aic")
     monkeypatch.setenv("ALLOWED_SOURCES", "met")
-    body = client.get(f"/certificate/{aic['id']}").text
-    assert "발급 불가" in body and 'class="credit"' not in body
+    r = _issue(client, aic["id"])
+    assert r.status_code == 409 and r.json()["error"]["code"] == "RECORD_NOT_ALLOWED"
+    assert fake_archive == []  # 발급 안 하면 아카이브도 안 부른다
+    assert _issue(client, 999999999).status_code == 404
 
 
-def test_certificate_escapes_html(client, monkeypatch):
-    evil = {**_work(), "id": 1, "title": "<script>alert(1)</script>", "artist": None, "date_display": None,
-            "medium": None, "thumbnail_url": None, "credit_line": None, "collected_at": "2026-10-01 00:00:00"}
-    monkeypatch.setattr(art, "get_rights_record", lambda _id: evil)
-    body = client.get("/certificate/1").text
+def test_record_escapes_html(client, fake_archive, monkeypatch):
+    work = art.search(["landscape"], limit=1)[0]
+    real = art.get_rights_record
+    monkeypatch.setattr(art, "get_rights_record",
+                        lambda i: {**real(i), "title": "<script>alert(1)</script>"})
+    number = _issue(client, work["id"]).json()["number"]
+    body = client.get(f"/records/{number}").text
     assert "<script>alert(1)</script>" not in body and "&lt;script&gt;" in body
+
+
+def test_wayback_reads_archived_url_from_redirect(monkeypatch):
+    class Resp:
+        headers = {}
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def geturl(self): return "https://web.archive.org/web/20261005010203/https://metmuseum.org/art/1"
+    monkeypatch.setattr(records.urllib.request, "urlopen", lambda req, timeout: Resp())
+    assert records.save_to_wayback("https://metmuseum.org/art/1") == (
+        "https://web.archive.org/web/20261005010203/https://metmuseum.org/art/1", None)
 
 
 def test_cma_to_row_requires_cc0_and_official_image_host():
