@@ -92,8 +92,15 @@ jobs:
             echo "::warning::VERCEL_TOKEN 시크릿이 없어 배포를 건너뜁니다."
             exit 0
           fi
+          # deploy.yml과 같은 방식: 'vercel link'(토큰 주인 조회)를 건너뛰고 프로젝트 ID로 바로 배포한다
+          Q=""; [ -n "$VERCEL_SCOPE" ] && Q="?slug=$VERCEL_SCOPE"
+          curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com/v9/projects/$VERCEL_PROJECT$Q" > "$RUNNER_TEMP/project.json"
+          PROJECT_ID=$(jq -r '.id // empty' "$RUNNER_TEMP/project.json")
+          ORG_ID=$(jq -r '.accountId // empty' "$RUNNER_TEMP/project.json")
+          if [ -z "$PROJECT_ID" ] || [ -z "$ORG_ID" ]; then
+            echo "::error::프로젝트 '$VERCEL_PROJECT' 정보를 읽지 못했습니다: $(jq -c '.error // .' "$RUNNER_TEMP/project.json")"
+            exit 1
+          fi
           npm i -g vercel@latest
-          SCOPE_ARG=""
-          [ -n "$VERCEL_SCOPE" ] && SCOPE_ARG="--scope $VERCEL_SCOPE"
-          vercel link --yes --project "$VERCEL_PROJECT" --token "$VERCEL_TOKEN" $SCOPE_ARG
-          vercel deploy --prod --yes --token "$VERCEL_TOKEN" $SCOPE_ARG
+          export VERCEL_ORG_ID="$ORG_ID" VERCEL_PROJECT_ID="$PROJECT_ID"
+          vercel deploy --prod --yes --token "$VERCEL_TOKEN"
