@@ -51,6 +51,12 @@ SCHEMA = [
         value       TEXT NOT NULL,
         updated_at  TEXT NOT NULL
     )""",
+    """CREATE TABLE IF NOT EXISTS favorites (
+        user_id     INTEGER NOT NULL REFERENCES users(id),
+        artwork_id  INTEGER NOT NULL,      -- data/art.db artworks.id
+        created_at  TEXT NOT NULL,
+        PRIMARY KEY (user_id, artwork_id)
+    )""",
     """CREATE TABLE IF NOT EXISTS rate_counters (
         bucket       TEXT PRIMARY KEY,
         count        INTEGER NOT NULL,

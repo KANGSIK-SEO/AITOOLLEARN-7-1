@@ -36,9 +36,58 @@ def signup(client, email="a@b.com", pw="password123"):
     return client.post("/api/auth/signup", json={"email": email, "password": pw})
 
 
-def test_chat_requires_login(client):
-    r = client.post("/api/chat", json={"message": "안녕"})
+def test_my_chats_requires_login(client):
+    r = client.get("/api/me/chats")
     assert r.status_code == 401 and r.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_guest_trial_allows_limited_questions_without_login(client, monkeypatch):
+    monkeypatch.setattr(main_module, "GUEST_TRIAL_LIMIT", 2)
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    assert client.get("/api/guest").json()["remaining"] == 2
+    r = client.post("/api/chat", json={"message": "봄 풍경화"})
+    assert r.status_code == 200 and r.json()["artworks"] and r.json()["guest_remaining"] == 1
+    assert r.json()["chat_id"] is None  # 체험 질문은 대화 로그에 남기지 않는다
+    assert client.post("/api/chat", json={"message": "겨울 바다"}).json()["guest_remaining"] == 0
+    r = client.post("/api/chat", json={"message": "세 번째"})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "GUEST_LIMIT_REACHED"
+    # 가입하면 체험 한도와 무관하게 계속 쓸 수 있다
+    signup(client)
+    assert client.post("/api/chat", json={"message": "가입 후 질문"}).status_code == 200
+
+
+def test_guest_trial_does_not_count_failed_ai_calls(client, monkeypatch):
+    monkeypatch.setattr(main_module, "GUEST_TRIAL_LIMIT", 1)
+
+    def boom(*a, **k):
+        raise AIUnavailableError("AI_TIMEOUT", "응답이 지연되고 있어요.")
+    monkeypatch.setattr(llm, "chat_completion", boom)
+    assert client.post("/api/chat", json={"message": "실패"}).status_code == 504
+    assert client.get("/api/guest").json()["remaining"] == 1
+
+
+def test_chat_returns_search_conditions_for_browse(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    body = client.post("/api/chat", json={"message": "봄 풍경화"}).json()
+    assert body["search"]["keywords"] == ["landscape", "spring"]
+    page = client.get("/api/artworks", params={"q": ",".join(body["search"]["keywords"]), "limit": 30}).json()
+    assert len(page["artworks"]) == 30 and page["has_more"] is True
+    nxt = client.get("/api/artworks", params={"q": "landscape,spring", "limit": 30, "offset": 30}).json()
+    assert not {w["id"] for w in page["artworks"]} & {w["id"] for w in nxt["artworks"]}
+
+
+def test_favorites_add_list_remove(client):
+    assert client.get("/api/me/favorites").status_code == 401
+    signup(client)
+    ids = [w["id"] for w in client.get("/api/artworks", params={"q": "landscape", "limit": 2}).json()["artworks"]]
+    for i in ids:
+        assert client.post("/api/me/favorites", json={"artwork_id": i}).status_code == 200
+    assert client.post("/api/me/favorites", json={"artwork_id": ids[0]}).status_code == 200  # 중복은 무시
+    assert client.post("/api/me/favorites", json={"artwork_id": 999999999}).status_code == 404
+    favs = client.get("/api/me/favorites").json()["artworks"]
+    assert sorted(w["id"] for w in favs) == sorted(ids)
+    client.delete(f"/api/me/favorites/{ids[0]}")
+    assert [w["id"] for w in client.get("/api/me/favorites").json()["artworks"]] == [ids[1]]
 
 
 def test_signup_login_validation(client):

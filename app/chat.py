@@ -12,9 +12,10 @@ INTENT_SYSTEM = (
     "너는 퍼블릭 도메인 명화 검색 도우미의 '검색 의도 추출기'다. 사용자의 한국어/영어 요청을 "
     "영어 검색 조건 JSON 하나로만 출력하라. 설명·코드블록 금지.\n"
     '형식: {"chitchat": bool, "keywords": [영어 단어 최대 6개], "artist": 영어 작가명 또는 null, '
-    '"year_from": 정수 또는 null, "year_to": 정수 또는 null}\n'
+    '"year_from": 정수 또는 null, "year_to": 정수 또는 null, "orientation": "landscape" 또는 "portrait" 또는 null}\n'
     "- 작품 검색이 아니라 직전 대화를 묻는 질문(예: 내가 방금 뭘 물어봤지?)이나 인사면 chitchat=true.\n"
-    "- keywords는 주제·분위기·색·소재 등 (예: spring, landscape, flowers, portrait, winter, sea)."
+    "- keywords는 주제·분위기·색·소재 등 (예: spring, landscape, flowers, portrait, winter, sea).\n"
+    "- orientation: PPT·슬라이드·배경화면·배너·가로형이면 landscape, 세로형·포스터·폰 배경이면 portrait, 언급 없으면 null."
 )
 
 ANSWER_SYSTEM = (
@@ -46,6 +47,7 @@ def _parse_intent(text: str) -> dict:
         "artist": data.get("artist") if isinstance(data.get("artist"), str) else None,
         "year_from": data.get("year_from") if isinstance(data.get("year_from"), int) else None,
         "year_to": data.get("year_to") if isinstance(data.get("year_to"), int) else None,
+        "orientation": data.get("orientation") if data.get("orientation") in ("landscape", "portrait") else None,
     }
 
 

@@ -78,3 +78,12 @@ CHAT_LIFETIME_LIMIT_FREE = int(os.environ.get("CHAT_LIFETIME_LIMIT_FREE", "100")
 ART_RESULTS_LIMIT = 6                  # 일반 사용자에게 보여줄 추천 작품 수
 ART_RESULTS_LIMIT_PREMIUM = int(os.environ.get("ART_RESULTS_LIMIT_PREMIUM", "100"))  # 초대코드 사용자 추천 작품 수
 ANSWER_NARRATION_LIMIT = 6             # 답변 본문에서 번호로 설명하는 작품 수 상한 (프리미엄이어도 동일 — 토큰 비용 보호)
+
+# 가입 전 체험: 처음 온 사람이 가치를 먼저 확인할 수 있게 로그인 없이 질문을 허용한다.
+# IP 기준으로 세므로 쿠키를 지워도 늘어나지 않는다 (AI 비용 보호).
+GUEST_TRIAL_LIMIT = int(os.environ.get("GUEST_TRIAL_LIMIT", "3"))
+GUEST_TRIAL_WINDOW_SECONDS = 24 * 3600
+
+BROWSE_PAGE_SIZE = 24                  # '더 보기' 한 번에 보여줄 작품 수 (AI 없이 DB만 조회)
+BROWSE_LIMIT_PER_HOUR = 600            # IP당 '더 보기' 시간당 상한
+FAVORITES_MAX = 500                    # 사용자당 즐겨찾기 상한

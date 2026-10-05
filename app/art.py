@@ -61,8 +61,7 @@ def _diversify(pool: list[dict], limit: int) -> list[dict]:
     return guaranteed + [rest_pool[i] for i in sampled_idx]
 
 
-def search(keywords: list[str], artist: str | None = None,
-           year_from: int | None = None, year_to: int | None = None, limit: int = 6) -> list[dict]:
+def _filters(artist: str | None, year_from: int | None, year_to: int | None) -> tuple[list[str], list]:
     where, params = ["a.is_public_domain = 1"], []
     if artist:
         where.append("a.artist LIKE ?")
@@ -73,21 +72,56 @@ def search(keywords: list[str], artist: str | None = None,
     if year_to is not None:
         where.append("a.year_start <= ?")
         params.append(year_to)
+    return where, params
 
-    pool_size = limit * DIVERSITY_POOL_MULTIPLIER
+
+def _ranked(conn: sqlite3.Connection, keywords: list[str], artist: str | None, year_from: int | None,
+            year_to: int | None, limit: int, offset: int = 0) -> list[dict]:
+    """관련도순(하이라이트 우선) 결정적 정렬. search()의 후보 풀과 browse()의 페이지가 같은 순서를 쓴다."""
+    where, params = _filters(artist, year_from, year_to)
     fts = _fts_query(keywords)
+    if fts:
+        sql = (f"SELECT {CARD_FIELDS} FROM artworks_fts f JOIN artworks a ON a.id = f.rowid "
+               f"WHERE artworks_fts MATCH ? AND {' AND '.join(where)} "
+               "ORDER BY a.is_highlight DESC, bm25(artworks_fts), a.id LIMIT ? OFFSET ?")
+        rows = conn.execute(sql, [fts, *params, limit, offset]).fetchall()
+    else:
+        sql = (f"SELECT {CARD_FIELDS} FROM artworks a WHERE {' AND '.join(where)} "
+               "ORDER BY a.is_highlight DESC, a.id LIMIT ? OFFSET ?")
+        rows = conn.execute(sql, [*params, limit, offset]).fetchall()
+    return [with_proxy_urls(dict(r)) for r in rows]
+
+
+def search(keywords: list[str], artist: str | None = None,
+           year_from: int | None = None, year_to: int | None = None, limit: int = 6) -> list[dict]:
     conn = _connect()
     try:
-        if fts:
-            sql = (f"SELECT {CARD_FIELDS} FROM artworks_fts f JOIN artworks a ON a.id = f.rowid "
-                   f"WHERE artworks_fts MATCH ? AND {' AND '.join(where)} "
-                   "ORDER BY a.is_highlight DESC, bm25(artworks_fts) LIMIT ?")
-            rows = conn.execute(sql, [fts, *params, pool_size]).fetchall()
-        else:
-            sql = (f"SELECT {CARD_FIELDS} FROM artworks a WHERE {' AND '.join(where)} "
-                   "ORDER BY a.is_highlight DESC, a.id LIMIT ?")
-            rows = conn.execute(sql, [*params, pool_size]).fetchall()
-        pool = [with_proxy_urls(dict(r)) for r in rows]
+        pool = _ranked(conn, keywords, artist, year_from, year_to, limit * DIVERSITY_POOL_MULTIPLIER)
         return _diversify(pool, limit)
+    finally:
+        conn.close()
+
+
+def browse(keywords: list[str], artist: str | None = None, year_from: int | None = None,
+           year_to: int | None = None, offset: int = 0, limit: int = 24) -> tuple[list[dict], bool]:
+    """'더 보기'용. AI 없이 같은 조건으로 관련도순 페이지를 넘긴다. 두 번째 값은 다음 페이지가 있는지."""
+    conn = _connect()
+    try:
+        rows = _ranked(conn, keywords, artist, year_from, year_to, limit + 1, offset)
+        return rows[:limit], len(rows) > limit
+    finally:
+        conn.close()
+
+
+def get_by_ids(ids: list[int]) -> list[dict]:
+    """주어진 순서대로 작품 카드를 돌려준다 (없는 id는 건너뜀). 즐겨찾기 목록에 쓴다."""
+    if not ids:
+        return []
+    conn = _connect()
+    try:
+        marks = ", ".join("?" for _ in ids)
+        rows = conn.execute(f"SELECT {CARD_FIELDS} FROM artworks a WHERE a.id IN ({marks})", ids).fetchall()
+        by_id = {r["id"]: with_proxy_urls(dict(r)) for r in rows}
+        return [by_id[i] for i in ids if i in by_id]
     finally:
         conn.close()

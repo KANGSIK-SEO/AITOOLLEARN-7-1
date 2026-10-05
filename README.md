@@ -9,7 +9,8 @@
 - **문제**: PPT·블로그·굿즈·썸네일 제작자는 "저작권 걱정 없는 명화"를 찾을 때 라이선스를 일일이 확인해야 한다.
   범용 챗봇은 라이선스·원본 이미지 링크를 보증하지 못한다.
 - **타깃 사용자**: 디자이너, 콘텐츠 제작자, 학생, 미술 입문자
-- **핵심 시나리오**: 로그인 → "봄 느낌 풍경화 3개, 상업적으로 써도 되는 걸로" → 작품 카드(썸네일·작가·연도·CC0·원본/출처 링크) + 한국어 설명
+- **핵심 시나리오**: (가입 없이 3회 체험 가능) "PPT 배경용 가로형 풍경화" → 작품 카드(썸네일·작가·연도·CC0·가로/세로형·원본/출처 링크) + 한국어 설명
+  → **더 보기**로 같은 조건의 작품을 AI 호출 없이 계속 넘겨 보기 → ☆ 즐겨찾기 · ⬇ 다운로드 · 출처 표기 문구 복사
 - **데이터**: [MET Open Access](https://metmuseum.github.io/), [Art Institute of Chicago API](https://api.artic.edu/docs/) (둘 다 CC0, API 키 불필요)
 
 ## 2. 시스템 구조
@@ -56,7 +57,12 @@
 | POST | `/api/auth/login` | 로그인 → 200, 세션 쿠키 |
 | POST | `/api/auth/logout` | 쿠키 삭제 |
 | GET | `/api/me` | 현재 사용자 |
-| POST | `/api/chat` | **로그인 필요**. 질문 → 답변 + 작품 카드 |
+| POST | `/api/chat` | 질문 → 답변 + 작품 카드 + `search`(더 보기용 검색 조건). **비로그인은 IP당 하루 `GUEST_TRIAL_LIMIT`(3)회 체험** (성공한 질문만 차감, 대화 로그 미저장, 응답에 `guest_remaining`) |
+| GET | `/api/guest` | 체험 남은 횟수 `{limit, remaining}` |
+| GET | `/api/artworks?q=a,b&artist=&year_from=&year_to=&offset=0&limit=24` | **더 보기** — AI 없이 DB만 관련도순 페이지 조회 (`{artworks, has_more}`, 비로그인 가능, IP당 시간당 600회) |
+| GET/POST | `/api/me/favorites` | 즐겨찾기 목록 / 추가 `{artwork_id}` (로그인 필요, 최대 500개) |
+| DELETE | `/api/me/favorites/{artwork_id}` | 즐겨찾기 해제 |
+| GET | `/api/img/aic/{image_id}?w=1686&download=1` | AIC 이미지 프록시 (`download=1`이면 파일로 저장) |
 | GET | `/api/me/chats?limit=20&offset=0` | 내 대화 로그 조회 |
 | GET | `/api/health` | 상태 확인 |
 | GET | `/api/guardian/daily-digest` | 가디언 일일 점검 (`CRON_SECRET` 필요, Vercel Cron 전용) |
@@ -74,7 +80,7 @@
 // 오류 예
 {"error": {"code": "AI_TIMEOUT", "message": "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요."}}
 ```
-오류 코드: `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`/`INVALID_INPUT`(400)
+오류 코드: `GUEST_LIMIT_REACHED`(403, 비로그인 체험 소진) `FAVORITES_FULL`(409) `ARTWORK_NOT_FOUND`(404) `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`/`INVALID_INPUT`(400)
 `RATE_LIMITED`(429, 시간당 일반 30회·초대코드 300회) `FREE_LIMIT_REACHED`(403, 초대코드 없는 계정의 평생 무료 질문 100회 소진)
 `AI_TIMEOUT`(504) `AI_ERROR`(502) `AI_RATE_LIMITED`(429) `AI_BACKED_OFF`/`AI_KEY_MISSING`(503) `DB_ERROR`/`ART_DB_ERROR`(503)
 `INTERNAL_ERROR`(500, 예상 못한 예외는 모두 여기로 모이고 가디언이 기록한다)
@@ -96,8 +102,20 @@
   - `users(id, email UNIQUE, password_hash, is_premium, created_at)`
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
   - `incidents(id, category[reliability|security], code, message, context(JSON), severity, auto_action, diagnosis, created_at)` — 가디언 사건 로그. `diagnosis`는 일일 배치 분석 전까지 NULL.
+  - `favorites(user_id → users.id, artwork_id → art.db artworks.id, created_at)` — 즐겨찾기 (PK: user_id+artwork_id)
   - `runtime_flags(key, value, updated_at)` — AI 백오프·로그인 잠금 등 자동 대응 상태값 (예: `ai_backoff_until`, `lockout:<email>`)
   - `rate_counters(bucket, count, window_start)` — IP/이메일 단위 레이트리밋 카운터
+
+**작품 DB 확장**: `scripts/collect_met.py`는 기본으로 6개 부서(유럽 회화·미국관·아시아·드로잉/판화·리먼·사진),
+`scripts/collect_aic.py`는 회화·판화·드로잉·사진을 수집한다(AIC 1000건 제한은 연도 구간을 자동으로 반씩 쪼개 회피).
+기존 DB에 이어서 저장되므로 그냥 다시 실행하면 된다 (MET는 1건당 0.5초 쉬어 가서 전체 수집에 몇 시간 걸림).
+```bash
+cd scripts && python3 collect_aic.py && python3 collect_met.py
+```
+
+**가로형/세로형 판별**: 카드 이미지가 로드되면 브라우저가 실제 비율로 가로형(≥1.15)/세로형(≤0.87)을 판별하고,
+결과 묶음의 비율 필터(전체/가로형/세로형)로 거른다. "PPT·배너·배경화면"이 들어간 질문은 AI가
+`orientation: landscape`를 뽑아 가로형 필터가 자동으로 켜진다.
 
 **DB 확인 가이드** (택 1 이상)
 1. 로그 조회 API: `curl -b cookies.txt https://<서비스>/api/me/chats`

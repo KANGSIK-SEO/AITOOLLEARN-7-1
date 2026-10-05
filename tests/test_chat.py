@@ -75,3 +75,10 @@ def test_find_artworks_chitchat_returns_empty_not_relaxed():
     works, relaxed = chat.find_artworks({"chitchat": True, "keywords": [], "artist": None,
                                          "year_from": None, "year_to": None})
     assert works == [] and relaxed is False
+
+
+def test_parse_intent_orientation():
+    from app.chat import _parse_intent
+    assert _parse_intent('{"keywords": ["sea"], "orientation": "landscape"}')["orientation"] == "landscape"
+    assert _parse_intent('{"keywords": ["sea"], "orientation": "diagonal"}')["orientation"] is None
+    assert _parse_intent('{"keywords": ["sea"]}')["orientation"] is None
