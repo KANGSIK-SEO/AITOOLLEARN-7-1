@@ -210,10 +210,11 @@ body { min-height: 100vh; height: auto; padding: 16px; box-sizing: border-box; }
     padding: 5px 8px; font-size: 0.8rem; margin-left: auto; }
 /* 비율을 아직 모르는(이미지 로딩 전) 카드는 숨기지 않는다 — 숨기면 lazy 이미지가 영영 로드되지 않는다 */
 .result-group[data-filter="landscape"] .card[data-orient]:not([data-orient="landscape"]),
-.result-group[data-filter="portrait"] .card[data-orient]:not([data-orient="portrait"]) { display: none; }
+.result-group[data-filter="portrait"] .card[data-orient]:not([data-orient="portrait"]),
+.result-group[data-filter="square"] .card[data-orient]:not([data-orient="square"]) { display: none; }
 .badges { display: flex; gap: 4px; flex-wrap: wrap; }
 .orient:not(:empty) { background: rgba(255, 255, 255, 0.08); color: #ccc; border-radius: 6px; padding: 1px 6px; font-size: 0.7rem; }
-.card-actions { display: flex; gap: 4px; margin: 2px 0; }
+.card-actions { display: flex; gap: 4px; margin: 2px 0; flex-wrap: wrap; }
 .card-btn { width: auto; height: 26px; border-radius: 6px; padding: 0 8px; font-size: 0.72rem; font-weight: 600;
     background: rgba(255, 255, 255, 0.08); color: var(--text-color); }
 .card-btn.star.on { color: #ffc400; }

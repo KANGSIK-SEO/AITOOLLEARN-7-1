@@ -234,6 +234,9 @@ function makeCard(w, index) {
         actionButton("출처 복사", "출처 표기 문구 복사 / Copy credit line", async (b) => {
             flash(b, (await copyText(creditLine(w))) ? "복사됨 ✓" : "실패");
         }),
+        actionButton("확인서", "권리 확인서 보기·저장 / Rights record", () => {
+            window.open(`/certificate/${w.id}`, "_blank", "noopener");
+        }),
     );
 
     const links = document.createElement("div");
@@ -257,15 +260,17 @@ function addResultGroup(works, search, heading) {
 
     const toolbar = document.createElement("div");
     toolbar.className = "group-toolbar";
-    if (heading) {
+    const label = heading || (search?.purpose ? `용도: ${search.purpose}` : "");
+    if (label) {
         const h = document.createElement("span");
         h.className = "group-heading";
-        h.textContent = heading;
+        h.textContent = label;
         toolbar.append(h);
     }
     const select = document.createElement("select");
     select.title = "이미지 비율 / Image shape";
-    [["all", "전체 비율 / All shapes"], ["landscape", "가로형만 (PPT·배너) / Landscape"], ["portrait", "세로형만 / Portrait"]]
+    [["all", "전체 비율 / All shapes"], ["landscape", "가로형만 (PPT·배너) / Landscape"],
+     ["portrait", "세로형만 (포스터·액자) / Portrait"], ["square", "정사각만 (SNS) / Square"]]
         .forEach(([v, label]) => select.append(new Option(label, v)));
     select.value = search?.orientation || "all";
     group.dataset.filter = select.value;

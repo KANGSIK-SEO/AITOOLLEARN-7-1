@@ -82,3 +82,10 @@ def test_parse_intent_orientation():
     assert _parse_intent('{"keywords": ["sea"], "orientation": "landscape"}')["orientation"] == "landscape"
     assert _parse_intent('{"keywords": ["sea"], "orientation": "diagonal"}')["orientation"] is None
     assert _parse_intent('{"keywords": ["sea"]}')["orientation"] is None
+
+
+def test_parse_intent_purpose_and_square():
+    from app.chat import _parse_intent
+    i = _parse_intent('{"keywords": ["flowers"], "orientation": "square", "purpose": "인스타그램 게시물"}')
+    assert i["orientation"] == "square" and i["purpose"] == "인스타그램 게시물"
+    assert _parse_intent('{"keywords": [], "purpose": 3}')["purpose"] is None

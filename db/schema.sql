@@ -1,9 +1,10 @@
--- 미술 작품 DB (읽기 전용 데이터). 출처: MET Open Access(CC0), Art Institute of Chicago API(CC0).
--- 수집 스크립트: scripts/collect_met.py, scripts/collect_aic.py
+-- 미술 작품 DB (읽기 전용 데이터). 출처: MET Open Access(CC0), Art Institute of Chicago API(CC0), Cleveland Museum of Art Open Access(CC0).
+-- 수집 스크립트: scripts/collect_met.py, scripts/collect_aic.py, scripts/collect_cma.py
+-- 기관 추가 기준은 docs/rights-policy.md §1 (애매한 기관은 넣지 않는다)
 
 CREATE TABLE IF NOT EXISTS artworks (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    source           TEXT    NOT NULL CHECK (source IN ('met', 'aic')),
+    source           TEXT    NOT NULL CHECK (source IN ('met', 'aic', 'cma')),
     source_id        TEXT    NOT NULL,          -- 출처 기관에서의 작품 ID
     title            TEXT    NOT NULL,
     artist           TEXT,

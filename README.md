@@ -13,6 +13,16 @@
   → **더 보기**로 같은 조건의 작품을 AI 호출 없이 계속 넘겨 보기 → ☆ 즐겨찾기 · ⬇ 다운로드 · 출처 표기 문구 복사
 - **데이터**: [MET Open Access](https://metmuseum.github.io/), [Art Institute of Chicago API](https://api.artic.edu/docs/) (둘 다 CC0, API 키 불필요)
 
+### 권리 데이터 + 판단 규칙 + 확인서
+챗봇 뒤에 세 조각을 붙여 "써도 된다"를 증명한다. **설계도는 [`docs/rights-policy.md`](docs/rights-policy.md)** — 규칙을 바꾸려면 이 문서부터 고친다.
+- **권리 데이터**: 작품마다 기관·기관 작품 ID·작품 단위 근거 필드·라이선스·권리 확인일(`collected_at`, 재수집 시 갱신)
+- **판단 규칙** (`app/rights.py`): 허용 기관(MET·AIC·CMA) + R1~R6. 하나라도 실패하면 검색에서 제외, 확인일 365일 초과는 "재확인 필요"
+  보류 기관(NGA·Smithsonian·Rijksmuseum·e뮤지엄)은 등록만 돼 있고 환경 변수로도 켤 수 없다.
+- **확인서** (`GET /certificate/{작품 id}`): 근거·판단 결과·출처 표기 예시·주의사항·확인서 번호가 담긴 인쇄/PDF용 한 장
+- **파일럿**: `ALLOWED_SOURCES=met`이면 MET CC0 작품만 나온다 — 5명에게 "이 확인서면 안심하고 쓰겠냐"를 먼저 묻는다.
+- **용도 기준 추천**: "카페 벽에 걸 세로형 포스터"처럼 물으면 AI가 용도·비율(가로/세로/정사각)·분위기를 뽑아 필터와 설명에 반영한다.
+  해상도는 아직 작품별 수치가 없어 걸러내지 않고, 원본 링크에서 확인하도록 안내한다.
+
 ## 2. 시스템 구조
 
 **한눈에 보기** (팀원 전원 필독 — 본인 담당 파일은 깊게, 나머지는 이 정도만 알면 충분합니다)
@@ -62,6 +72,7 @@
 | GET | `/api/artworks?q=a,b&artist=&year_from=&year_to=&offset=0&limit=24` | **더 보기** — AI 없이 DB만 관련도순 페이지 조회 (`{artworks, has_more}`, 비로그인 가능, IP당 시간당 600회) |
 | GET/POST | `/api/me/favorites` | 즐겨찾기 목록 / 추가 `{artwork_id}` (로그인 필요, 최대 500개) |
 | DELETE | `/api/me/favorites/{artwork_id}` | 즐겨찾기 해제 |
+| GET | `/certificate/{artwork_id}` | 권리 확인서 (HTML, 인쇄/PDF 저장용). 판단 규칙 미통과 작품은 "발급 불가" |
 | GET | `/api/img/aic/{image_id}?w=1686&download=1` | AIC 이미지 프록시 (`download=1`이면 파일로 저장) |
 | GET | `/api/me/chats?limit=20&offset=0` | 내 대화 로그 조회 |
 | GET | `/api/health` | 상태 확인 |
@@ -107,7 +118,7 @@
   - `rate_counters(bucket, count, window_start)` — IP/이메일 단위 레이트리밋 카운터
 
 **작품 DB 확장**: `scripts/collect_met.py`는 기본으로 6개 부서(유럽 회화·미국관·아시아·드로잉/판화·리먼·사진),
-`scripts/collect_aic.py`는 회화·판화·드로잉·사진을 수집한다(AIC 1000건 제한은 연도 구간을 자동으로 반씩 쪼개 회피).
+`scripts/collect_aic.py`·`scripts/collect_cma.py`(클리블랜드, `share_license_status=CC0`만)는 회화·판화·드로잉·사진을 수집한다(AIC 1000건 제한은 연도 구간을 자동으로 반씩 쪼개 회피).
 기존 DB에 이어서 저장되므로 그냥 다시 실행하면 된다 (MET는 1건당 0.5초 쉬어 가서 전체 수집에 몇 시간 걸림).
 ```bash
 cd scripts && python3 collect_aic.py && python3 collect_met.py

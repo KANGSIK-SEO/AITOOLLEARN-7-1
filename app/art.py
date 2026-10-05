@@ -3,6 +3,7 @@ import random
 import re
 import sqlite3
 
+from . import rights
 from .config import ROOT
 
 ART_DB = ROOT / "data" / "art.db"
@@ -54,15 +55,24 @@ def _diversify(pool: list[dict], limit: int) -> list[dict]:
     원래 관련도 순서를 유지한 채 채운다. pool이 limit보다 작거나 같으면 그대로 반환한다."""
     if len(pool) <= limit:
         return pool
-    guaranteed = pool[:GUARANTEED_TOP]
-    rest_pool = pool[GUARANTEED_TOP:]
+    guaranteed = pool[:min(GUARANTEED_TOP, limit)]
+    rest_pool = pool[len(guaranteed):]
     need = limit - len(guaranteed)
     sampled_idx = sorted(random.sample(range(len(rest_pool)), min(need, len(rest_pool))))
     return guaranteed + [rest_pool[i] for i in sampled_idx]
 
 
+def _source_filter() -> tuple[str, list]:
+    """판단 규칙 R1·R3: 허용된 CC0 기관의 CC0 작품만 (docs/rights-policy.md)."""
+    codes = rights.allowed_sources()
+    if not codes:
+        return "0", []
+    return f"a.source IN ({', '.join('?' for _ in codes)}) AND a.license = 'CC0'", codes
+
+
 def _filters(artist: str | None, year_from: int | None, year_to: int | None) -> tuple[list[str], list]:
-    where, params = ["a.is_public_domain = 1"], []
+    src_sql, src_params = _source_filter()
+    where, params = ["a.is_public_domain = 1", src_sql], list(src_params)
     if artist:
         where.append("a.artist LIKE ?")
         params.append(f"%{artist}%")
@@ -120,8 +130,24 @@ def get_by_ids(ids: list[int]) -> list[dict]:
     conn = _connect()
     try:
         marks = ", ".join("?" for _ in ids)
-        rows = conn.execute(f"SELECT {CARD_FIELDS} FROM artworks a WHERE a.id IN ({marks})", ids).fetchall()
+        src_sql, src_params = _source_filter()
+        rows = conn.execute(f"SELECT {CARD_FIELDS} FROM artworks a WHERE a.id IN ({marks}) AND {src_sql}",
+                            [*ids, *src_params]).fetchall()
         by_id = {r["id"]: with_proxy_urls(dict(r)) for r in rows}
         return [by_id[i] for i in ids if i in by_id]
+    finally:
+        conn.close()
+
+
+def get_rights_record(artwork_id: int) -> dict | None:
+    """확인서용 권리 데이터. 판단(R1~R6)은 rights.evaluate가 하므로 여기서는 기관 필터를 걸지 않는다.
+    image_url은 프록시 주소가 아니라 기관 원본 주소 그대로 둔다 (R4 판단 근거)."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT a.id, a.source, a.source_id, a.title, a.artist, a.date_display, a.medium, a.image_url, "
+            "a.thumbnail_url, a.source_url, a.credit_line, a.license, a.is_public_domain, a.collected_at "
+            "FROM artworks a WHERE a.id = ?", (artwork_id,)).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()

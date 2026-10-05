@@ -6,7 +6,7 @@ name: collect-and-deploy
 on:
   push:
     branches: [claude/trusting-allen-li8f01]
-    paths: [".github/workflows/collect-and-deploy.yml", "scripts/collect_*.py"]
+    paths: [".github/workflows/collect-and-deploy.yml", "scripts/collect_*.py", "scripts/artdb.py"]
   workflow_dispatch:
     inputs:
       skip_collect:
@@ -28,6 +28,8 @@ jobs:
     timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}   # 대기 중 다른 run이 올린 수집 결과까지 포함한 최신 브랜치에서 시작
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -39,13 +41,19 @@ jobs:
         working-directory: scripts
         run: python collect_aic.py
 
-      - name: Commit AIC result
+      - name: Collect CMA (Cleveland, CC0 only)
+        working-directory: scripts
+        continue-on-error: true   # 실패해도 위에서 받은 AIC 결과는 저장한다
+        run: python collect_cma.py
+
+      - name: Commit AIC + CMA result
         run: |
           python scripts/finalize_artdb.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/art.db
-          git diff --cached --quiet || git commit -m "data: AIC 퍼블릭 도메인 작품 수집 확장"
+          git diff --cached --quiet || git commit -m "data: AIC·CMA 퍼블릭 도메인 작품 수집"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
           git push
 
       - name: Collect MET (6 departments, time-boxed)
@@ -63,6 +71,7 @@ jobs:
           python scripts/finalize_artdb.py
           git add data/art.db
           git diff --cached --quiet || git commit -m "data: MET 퍼블릭 도메인 작품 수집 확장"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
           git push
 
   deploy:
