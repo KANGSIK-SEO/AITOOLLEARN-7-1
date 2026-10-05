@@ -61,13 +61,24 @@ def main() -> None:
     for department_id in [int(d) for d in args.departments.split(",") if d.strip()]:
         offset = 0
         while True:
-            page = get_json(f"{SEARCH_BASE}/search", {
-                "departmentId": department_id, "isPublicDomain": "true", "hasImages": "true",
-                "q": "*", "limit": SEARCH_PAGE_SIZE, "offset": offset,
-            })
-            page_ids = (page or {}).get("objectIDs") or []
+            time.sleep(1)  # 목록 조회도 연속으로 보내면 WAF가 403으로 막는다
+            page = None
+            for attempt in range(3):
+                try:
+                    page = get_json(f"{SEARCH_BASE}/search", {
+                        "departmentId": department_id, "isPublicDomain": "true", "hasImages": "true",
+                        "q": "*", "limit": SEARCH_PAGE_SIZE, "offset": offset,
+                    }, retries=1)
+                    break
+                except urllib.error.HTTPError as e:
+                    print(f"  부서 {department_id} 목록 조회 실패({e.code}), {30 * (attempt + 1)}초 후 재시도")
+                    time.sleep(30 * (attempt + 1))
+            if page is None:
+                print(f"  부서 {department_id}: 목록을 끝까지 받지 못해 여기까지만 수집")
+                break
+            page_ids = page.get("objectIDs") or []
             ids.extend(page_ids)
-            total = (page or {}).get("total") or 0
+            total = page.get("total") or 0
             offset += SEARCH_PAGE_SIZE
             if not page_ids or offset >= total:
                 break
