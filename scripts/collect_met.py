@@ -52,7 +52,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=0, help="0이면 전체")
     parser.add_argument("--departments", default=DEFAULT_DEPARTMENTS, help="쉼표로 구분한 MET 부서 ID")
+    parser.add_argument("--max-minutes", type=float, default=0,
+                        help="이 시간이 지나면 저장하고 멈춘다 (0이면 무제한). 다시 실행하면 이어서 받는다")
     args = parser.parse_args()
+    deadline = time.monotonic() + args.max_minutes * 60 if args.max_minutes else None
 
     ids: list[int] = []
     for department_id in [int(d) for d in args.departments.split(",") if d.strip()]:
@@ -82,6 +85,9 @@ def main() -> None:
     saved = skipped = failed = 0
     consecutive_403 = 0
     for n, obj_id in enumerate(ids, 1):
+        if deadline and time.monotonic() > deadline:
+            print(f"  시간 제한 도달 — {n - 1}/{len(ids)}건 처리 후 멈춤 (다시 실행하면 이어서 수집)")
+            break
         time.sleep(0.5)  # WAF(레이트리밋) 회피용 완만한 스로틀, 단일 요청씩만 진행
         try:
             obj = get_json(f"{BASE}/objects/{obj_id}", retries=1)
