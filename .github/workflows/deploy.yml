@@ -1,0 +1,35 @@
+# 코드가 올라올 때마다 수집 없이 Vercel 프로덕션 배포만 한다 (수집 결과 커밋은 봇이 올려서 이 워크플로를 다시 띄우지 않는다).
+# 필요한 값: Settings → Secrets and variables → Actions → Repository secrets 의 VERCEL_TOKEN,
+#           Variables 의 VERCEL_SCOPE (Vercel 팀 이름, 예: customer-auto)
+name: deploy
+
+on:
+  push:
+    branches: [claude/trusting-allen-li8f01]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT: ${{ vars.VERCEL_PROJECT || 'art-chatbot' }}
+      VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check settings (값은 출력하지 않는다)
+        run: |
+          echo "VERCEL_TOKEN 시크릿: $([ -n "$VERCEL_TOKEN" ] && echo '있음' || echo '없음 — Repository secrets에 VERCEL_TOKEN 이름으로 넣어야 함')"
+          echo "VERCEL_SCOPE 변수: ${VERCEL_SCOPE:-없음 — Variables 탭에 VERCEL_SCOPE 필요}"
+          echo "VERCEL_PROJECT: $VERCEL_PROJECT"
+          [ -n "$VERCEL_TOKEN" ] || { echo "::error::VERCEL_TOKEN이 이 워크플로에 전달되지 않았습니다 (Environment secrets가 아니라 Repository secrets에 넣었는지 확인)."; exit 1; }
+      - name: Deploy to Vercel (production)
+        run: |
+          npm i -g vercel@latest
+          SCOPE_ARG=""
+          [ -n "$VERCEL_SCOPE" ] && SCOPE_ARG="--scope $VERCEL_SCOPE"
+          vercel link --yes --project "$VERCEL_PROJECT" --token "$VERCEL_TOKEN" $SCOPE_ARG
+          vercel deploy --prod --yes --token "$VERCEL_TOKEN" $SCOPE_ARG
