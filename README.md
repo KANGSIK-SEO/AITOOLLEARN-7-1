@@ -178,7 +178,14 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 | `CHAT_LIFETIME_LIMIT_FREE` | 초대코드 없는 사용자의 평생 무료 질문 수(기본 100) |
 | `ART_RESULTS_LIMIT_PREMIUM` | 초대코드 사용자에게 보여줄 추천 작품 수(기본 100) |
 
-**Vercel + Turso 배포**
+**자동 배포 (GitHub Actions)**
+- `.github/workflows/deploy.yml`: 브랜치에 코드가 올라올 때마다 수집 없이 Vercel 프로덕션 배포만 한다.
+- `.github/workflows/collect-and-deploy.yml`: 수집기 코드가 바뀌면 미술관 작품을 수집해 `data/art.db`를 커밋한 뒤 배포한다.
+- 필요한 값 (Settings → Secrets and variables → Actions → **Repository secrets**):
+  `VERCEL_TOKEN`(Vercel 토큰, scope는 art-chatbot 프로젝트), `VERCEL_SCOPE`(Vercel 팀 이름 `customer-auto`).
+  Environment secrets에 넣으면 워크플로가 읽지 못한다. 저장한 값은 다시 보이지 않는 게 정상이다.
+
+**Vercel + Turso 배포 (수동)**
 ```bash
 turso db create art-chatbot && turso db show art-chatbot --url && turso db tokens create art-chatbot
 vercel link && vercel env add GPT_ASTRA_API_KEY && vercel env add SECRET_KEY \
