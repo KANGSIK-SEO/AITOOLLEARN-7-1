@@ -48,6 +48,20 @@ def _fts_query(keywords: list[str]) -> str:
     return " OR ".join(f'"{t}"' for t in dict.fromkeys(tokens))
 
 
+def get_by_ids(ids: list[int]) -> dict[int, dict]:
+    """작품 id 목록 → {id: 카드}. 없는 id는 결과에 빠진다 (즐겨찾기 검증·조회용)."""
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return {}
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            f"SELECT {CARD_FIELDS} FROM artworks a WHERE a.id IN ({','.join('?' * len(ids))})", ids).fetchall()
+        return {r["id"]: with_proxy_urls(dict(r)) for r in rows}
+    finally:
+        conn.close()
+
+
 def _diversify(pool: list[dict], limit: int) -> list[dict]:
     """pool은 이미 관련도순(best-first)으로 정렬돼 있다고 가정한다.
     상위 GUARANTEED_TOP개는 그대로 보장하고, 나머지 자리는 pool 전체에서 무작위로 뽑아

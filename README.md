@@ -66,6 +66,9 @@
 | GET | `/api/me` | 현재 사용자 |
 | POST | `/api/chat` | **로그인 필요**. 질문 → 답변 + 작품 카드 |
 | GET | `/api/me/chats?limit=20&offset=0` | 내 대화 로그 조회 |
+| POST | `/api/favorites` | **로그인 필요**. `{artwork_id}` 작품 즐겨찾기 저장 (상세: `docs/track-c.md`) |
+| DELETE | `/api/favorites/{artwork_id}` | **로그인 필요**. 즐겨찾기 해제 |
+| GET | `/api/me/favorites?limit=20&offset=0` | 내 즐겨찾기 작품 카드 조회 |
 | GET | `/api/health` | 상태 확인 |
 | GET | `/api/guardian/daily-digest` | 가디언 일일 점검 (`CRON_SECRET` 필요, Vercel Cron 전용) |
 
@@ -106,6 +109,7 @@
 - Turso/SQLite (쓰기): 
   - `users(id, email UNIQUE, password_hash, is_premium, created_at)`
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
+  - `favorites(id, user_id → users.id, artwork_id(art.db artworks.id), created_at, UNIQUE(user_id, artwork_id))`
   - `incidents(id, category[reliability|security], code, message, context(JSON), severity, auto_action, diagnosis, created_at)` — 가디언 사건 로그. `diagnosis`는 일일 배치 분석 전까지 NULL.
   - `runtime_flags(key, value, updated_at)` — AI 백오프·로그인 잠금 등 자동 대응 상태값 (예: `ai_backoff_until`, `lockout:<email>`)
   - `rate_counters(bucket, count, window_start)` — IP/이메일 단위 레이트리밋 카운터
