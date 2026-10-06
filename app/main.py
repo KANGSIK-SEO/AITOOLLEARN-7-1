@@ -8,7 +8,6 @@ import sqlite3
 import time
 import urllib.error
 import urllib.request
-import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -19,12 +18,13 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, chat, db, explain, guardian
+from . import auth, chat, db, explain, guardian, reqctx
 from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, CHAT_LIFETIME_LIMIT_FREE,
                      CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
                      CONTEXT_TURNS, CRON_SECRET, FREE_LIMIT_WARNING_THRESHOLD, AIUnavailableError)
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+reqctx.install()
+logging.basicConfig(level=logging.INFO, format=reqctx.LOG_FORMAT)
 log = logging.getLogger("app")
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -40,8 +40,25 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],
+    expose_headers=["X-Request-ID"],
     allow_credentials=False,
 )
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    """요청마다 request_id를 정해 로그·응답 헤더(X-Request-ID)에 일관되게 남긴다."""
+    request_id = reqctx.new_request_id(request.headers.get("x-request-id"))
+    reqctx.set_request_id(request_id)
+    started = time.monotonic()
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        # 경로 템플릿만 남긴다 (/explain/{token} 같은 비밀 값·쿼리스트링이 로그에 남지 않도록)
+        route = request.scope.get("route")
+        log.info("request_done method=%s route=%s status=%s latency_ms=%s", request.method,
+                 getattr(route, "path", "unmatched"), response.status_code, int((time.monotonic() - started) * 1000))
+    response.headers["X-Request-ID"] = request_id
+    return response
+
 
 STATUS_BY_CODE = {"AI_TIMEOUT": 504, "AI_ERROR": 502, "AI_RATE_LIMITED": 429,
                   "AI_KEY_MISSING": 503, "AI_BACKED_OFF": 503}
@@ -69,14 +86,15 @@ async def validation_exc(_: Request, __: RequestValidationError):
 @app.exception_handler(db.DbError)
 async def db_exc(_: Request, exc: db.DbError):
     log.error("db_error detail=%s", exc)
-    guardian.record_incident("reliability", "DB_ERROR", str(exc), {}, "high")
+    guardian.record_incident("reliability", "DB_ERROR", str(exc), {"request_id": reqctx.get_request_id()}, "high")
     return error(503, "DB_ERROR", "데이터베이스에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.")
 
 
 @app.exception_handler(Exception)
 async def unhandled_exc(_: Request, exc: Exception):
     log.error("unhandled_exception detail=%r", exc, exc_info=True)
-    guardian.record_incident("reliability", "UNHANDLED_EXCEPTION", repr(exc), {}, "high")
+    guardian.record_incident("reliability", "UNHANDLED_EXCEPTION", repr(exc),
+                             {"request_id": reqctx.get_request_id()}, "high")
     return error(500, "INTERNAL_ERROR", "예상치 못한 오류가 발생했어요. 잠시 후 다시 시도해 주세요.")
 
 
@@ -216,8 +234,8 @@ def _save_chat(user_id, question, answer, status, error_code, latency_ms, artwor
 @app.post("/api/chat")
 def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_session)):
     user_id, is_premium = session_data["uid"], session_data["premium"]
-    request_id = uuid.uuid4().hex[:8]
-    log.info("request_received user_id=%s path=/api/chat request_id=%s", user_id, request_id)
+    request_id = reqctx.get_request_id()
+    log.info("request_received user_id=%s path=/api/chat", user_id)
 
     question = body.message.strip()
     if not question:
@@ -235,7 +253,7 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
     since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
     used_hour = db.execute("SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND created_at > ?", (user_id, since))[0]["n"]
     if used_hour >= hour_limit:
-        log.warning("rate_limited user_id=%s request_id=%s is_premium=%s", user_id, request_id, is_premium)
+        log.warning("rate_limited user_id=%s is_premium=%s", user_id, is_premium)
         return error(429, "RATE_LIMITED", "질문이 너무 많아요. 잠시 후 다시 시도해 주세요.")
 
     remaining_free = None
@@ -243,7 +261,7 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
         used_lifetime = db.execute(
             "SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND status = 'ok'", (user_id,))[0]["n"]
         if used_lifetime >= CHAT_LIFETIME_LIMIT_FREE:
-            log.warning("free_limit_reached user_id=%s request_id=%s", user_id, request_id)
+            log.warning("free_limit_reached user_id=%s", user_id)
             return error(403, "FREE_LIMIT_REACHED",
                         f"무료 이용 {CHAT_LIFETIME_LIMIT_FREE}회를 모두 사용했어요. 초대코드가 있다면 입력해 보세요.")
         remaining_free = CHAT_LIFETIME_LIMIT_FREE - used_lifetime - 1
@@ -253,7 +271,7 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
         (user_id, CONTEXT_TURNS))))
 
     started = time.monotonic()
-    log.info("ai_call_start user_id=%s request_id=%s", user_id, request_id)
+    log.info("ai_call_start user_id=%s", user_id)
     art_limit = ART_RESULTS_LIMIT_PREMIUM if is_premium else ART_RESULTS_LIMIT
     try:
         intent = chat.extract_intent(question)
@@ -261,7 +279,7 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
         answer = chat.compose_answer(question, works, history, relaxed=relaxed)
     except AIUnavailableError as e:
         latency = int((time.monotonic() - started) * 1000)
-        log.error("ai_call_failure request_id=%s code=%s latency_ms=%s", request_id, e.code, latency)
+        log.error("ai_call_failure code=%s latency_ms=%s", e.code, latency)
         _save_chat(user_id, question, None, "error", e.code, latency, [])
         guardian.record_incident("reliability", e.code, str(e), {"request_id": request_id, "latency_ms": latency},
                                  "medium" if e.code == "AI_RATE_LIMITED" else "low")
@@ -269,12 +287,12 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
         return error(STATUS_BY_CODE.get(e.code, 502), e.code, str(e))
     except sqlite3.Error as e:
         latency = int((time.monotonic() - started) * 1000)
-        log.error("art_db_failure request_id=%s detail=%s", request_id, e)
+        log.error("art_db_failure detail=%s", e)
         _save_chat(user_id, question, None, "error", "ART_DB_ERROR", latency, [])
         return error(503, "ART_DB_ERROR", "작품 데이터베이스를 읽지 못했어요.")
 
     latency = int((time.monotonic() - started) * 1000)
-    log.info("ai_call_success request_id=%s latency_ms=%s artworks=%s", request_id, latency, len(works))
+    log.info("ai_call_success latency_ms=%s artworks=%s", latency, len(works))
     chat_id = _save_chat(user_id, question, answer, "ok", None, latency, [w["id"] for w in works])
     show_limit_warning = remaining_free is not None and remaining_free <= FREE_LIMIT_WARNING_THRESHOLD
     return {"chat_id": chat_id, "saved": chat_id is not None, "request_id": request_id,

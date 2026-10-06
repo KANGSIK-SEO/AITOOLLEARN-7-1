@@ -354,3 +354,52 @@ def test_art_db_error_returns_503_and_logs_error_chat(client, monkeypatch):
     assert r.status_code == 503 and r.json()["error"]["code"] == "ART_DB_ERROR"
     saved = client.get("/api/me/chats").json()["chats"][0]
     assert saved["status"] == "error" and saved["error_code"] == "ART_DB_ERROR"
+
+
+# ---- request_id 로그 일관성 ----
+def _app_records(caplog):
+    return [r for r in caplog.records if r.name == "app" or r.name.startswith("app.")]
+
+
+def test_every_log_line_in_a_request_shares_request_id(client, monkeypatch, caplog):
+    import logging
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        r = client.post("/api/chat", json={"message": "봄 풍경"})
+    rid = r.headers["X-Request-ID"]
+    assert r.json()["request_id"] == rid
+    records = _app_records(caplog)
+    events = {r.getMessage().split()[0] for r in records}
+    assert {"request_received", "ai_call_start", "ai_call_success", "db_save_success", "request_done"} <= events
+    assert {rec.request_id for rec in records} == {rid}  # 스레드풀·하위 로거(app.db 등)까지 같은 값
+
+
+def test_request_ids_differ_between_requests_and_exist_on_errors(client):
+    a = client.get("/api/health").headers["X-Request-ID"]
+    b = client.get("/api/health").headers["X-Request-ID"]
+    assert a != b
+    assert client.get("/api/me").headers["X-Request-ID"]  # 401 응답에도 붙는다
+
+
+def test_incoming_request_id_is_reused_only_if_safe(client):
+    assert client.get("/api/health", headers={"X-Request-ID": "edge-abc_123"}).headers["X-Request-ID"] == "edge-abc_123"
+    bad = client.get("/api/health", headers={"X-Request-ID": "x\" injected=1"}).headers["X-Request-ID"]
+    assert bad != "x\" injected=1" and len(bad) == 8
+
+
+def test_request_done_logs_route_template_not_raw_path(client, caplog):
+    import logging
+    with caplog.at_level(logging.INFO):
+        client.get("/api/me/chats?limit=5&secret=leak")
+    done = [r.getMessage() for r in _app_records(caplog) if r.getMessage().startswith("request_done")]
+    assert len(done) == 1 and done[0].startswith("request_done method=GET route=/api/me/chats status=401 ")
+    assert "leak" not in done[0]
+
+
+def test_logs_outside_requests_use_placeholder(caplog):
+    import logging
+    with caplog.at_level(logging.INFO):
+        logging.getLogger("app.test").info("startup_event")
+    assert caplog.records[-1].request_id == "-"
