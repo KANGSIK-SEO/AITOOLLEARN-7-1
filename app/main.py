@@ -22,10 +22,15 @@ from pydantic import BaseModel
 from . import art, auth, chat, db, explain, guardian
 from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, CHAT_LIFETIME_LIMIT_FREE,
                      CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
-                     CONTEXT_TURNS, CRON_SECRET, FREE_LIMIT_WARNING_THRESHOLD, AIUnavailableError)
+                     CONTEXT_TURNS, CRON_SECRET, FREE_LIMIT_WARNING_THRESHOLD, AIUnavailableError,
+                     validate_env)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("app")
+
+# 필수 환경변수가 틀리면 첫 요청이 아니라 서버 시작 시점에 고칠 방법과 함께 실패한다
+for _warning in validate_env():
+    log.warning("config_warning %s", _warning)
 
 STATIC_DIR = Path(__file__).parent / "static"
 COOKIE = "session"
