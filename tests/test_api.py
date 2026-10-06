@@ -326,3 +326,22 @@ def test_cors_preflight_allows_authorization_header(client):
     })
     assert r.status_code == 200
     assert r.headers.get("access-control-allow-origin") == "*"
+
+
+def test_cors_preflight_allows_favorite_delete(client):
+    r = client.options("/api/favorites/1", headers={
+        "Origin": "http://example.com",
+        "Access-Control-Request-Method": "DELETE",
+        "Access-Control-Request-Headers": "authorization",
+    })
+    assert r.status_code == 200 and "DELETE" in r.headers.get("access-control-allow-methods", "")
+
+
+def test_favorites_work_with_bearer_token(client):
+    (a,) = _artwork_ids(1)
+    token = signup(client).json()["token"]
+    tv = TestClient(app)
+    headers = {"Authorization": f"Bearer {token}"}
+    assert tv.post("/api/favorites", json={"artwork_id": a}, headers=headers).status_code == 201
+    assert [f["id"] for f in tv.get("/api/me/favorites", headers=headers).json()["favorites"]] == [a]
+    assert tv.delete(f"/api/favorites/{a}", headers=headers).json()["removed"] is True
