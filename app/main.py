@@ -256,9 +256,9 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
     log.info("ai_call_start user_id=%s request_id=%s", user_id, request_id)
     art_limit = ART_RESULTS_LIMIT_PREMIUM if is_premium else ART_RESULTS_LIMIT
     try:
-        intent = chat.extract_intent(question)
-        works, relaxed = chat.find_artworks(intent, limit=art_limit)
-        answer = chat.compose_answer(question, works, history, relaxed=relaxed)
+        intent = chat.extract_intent(question, request_id=request_id)
+        works, relaxed = chat.find_artworks(intent, limit=art_limit, request_id=request_id)
+        answer = chat.compose_answer(question, works, history, relaxed=relaxed, request_id=request_id)
     except AIUnavailableError as e:
         latency = int((time.monotonic() - started) * 1000)
         log.error("ai_call_failure request_id=%s code=%s latency_ms=%s", request_id, e.code, latency)
