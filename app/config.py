@@ -67,7 +67,11 @@ def get_premium_code() -> str:
     return os.environ.get("PREMIUM_CODE", "")
 
 
-LLM_TIMEOUT_SECONDS = float(os.environ.get("LLM_TIMEOUT_SECONDS", "20"))
+LLM_TIMEOUT_SECONDS = float(os.environ.get("LLM_TIMEOUT_SECONDS", "20"))  # 요청 1회의 소켓 타임아웃
+# chat_completion 1번(재시도·폴백 포함)에 쓸 수 있는 총 시간. /api/chat은 AI를 2번(의도 추출, 답변) 부르고
+# Vercel 함수 최대 실행시간이 60초(vercel.json)이므로 2번 × 25초 + DB 여유가 그 안에 들어오게 잡았다.
+LLM_CALL_BUDGET_SECONDS = float(os.environ.get("LLM_CALL_BUDGET_SECONDS", "25"))
+LLM_MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "1"))  # 일시 장애(5xx·연결 오류) 시 같은 제공자 재시도 횟수
 LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "low")  # low|medium|high|xhigh|max
 CHAT_MAX_LENGTH = 500          # 질문 최대 글자 수
 CONTEXT_TURNS = 5              # 문맥으로 넘기는 최근 대화 수
