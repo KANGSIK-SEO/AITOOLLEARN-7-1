@@ -66,7 +66,8 @@
 | GET | `/api/me` | 현재 사용자 |
 | POST | `/api/chat` | **로그인 필요**. 질문 → 답변 + 작품 카드 |
 | GET | `/api/me/chats?limit=20&offset=0` | 내 대화 로그 조회 |
-| GET | `/api/health` | 상태 확인 |
+| GET | `/api/health` | 프로세스 생존 확인 (항상 200) |
+| GET | `/healthz` | 의존성 상태 확인: 사용자 DB·미술 DB에 실제 쿼리 → 모두 정상 200, 하나라도 실패 503 (`{"status": "ok|degraded", "checks": {...}}`) |
 | GET | `/api/guardian/daily-digest` | 가디언 일일 점검 (`CRON_SECRET` 필요, Vercel Cron 전용) |
 
 `POST /api/chat`
