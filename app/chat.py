@@ -2,11 +2,27 @@
 import json
 import logging
 import re
+import time
+from contextlib import contextmanager
 
 from . import art, llm
 from .config import ANSWER_NARRATION_LIMIT
 
 log = logging.getLogger("app.chat")
+
+
+@contextmanager
+def _stage(name: str, request_id: str | None):
+    """단계별 소요시간을 chat_stage 로그로 남긴다. 실패해도(예외) ok=False로 기록한 뒤 예외를 그대로 올린다.
+    /api/chat 전체 지연(ai_call_success latency_ms)만으로는 AI(의도·답변)와 DB 검색 중 어디가 느린지 알 수 없다."""
+    started = time.monotonic()
+    ok = False
+    try:
+        yield
+        ok = True
+    finally:
+        log.info("chat_stage stage=%s request_id=%s latency_ms=%s ok=%s",
+                 name, request_id or "-", int((time.monotonic() - started) * 1000), ok)
 
 INTENT_SYSTEM = (
     "너는 퍼블릭 도메인 명화 검색 도우미의 '검색 의도 추출기'다. 사용자의 한국어/영어 요청을 "
@@ -49,23 +65,25 @@ def _parse_intent(text: str) -> dict:
     }
 
 
-def extract_intent(question: str) -> dict:
-    raw = llm.chat_completion(
-        [{"role": "system", "content": INTENT_SYSTEM}, {"role": "user", "content": question}],
-        max_tokens=200,
-    )
+def extract_intent(question: str, request_id: str | None = None) -> dict:
+    with _stage("intent", request_id):
+        raw = llm.chat_completion(
+            [{"role": "system", "content": INTENT_SYSTEM}, {"role": "user", "content": question}],
+            max_tokens=200,
+        )
     return _parse_intent(raw)
 
 
-def find_artworks(intent: dict, limit: int = 6) -> tuple[list[dict], bool]:
+def find_artworks(intent: dict, limit: int = 6, request_id: str | None = None) -> tuple[list[dict], bool]:
     """두 번째 반환값(relaxed)은 작가/연도 조건을 빼고 키워드만으로 다시 찾았는지 여부.
     사용자가 '왜 이 작품이 나왔는지' 판단하는 비용을 줄이려면 이걸 숨기면 안 된다."""
     if intent["chitchat"]:
         return [], False
-    found = art.search(intent["keywords"], intent["artist"], intent["year_from"], intent["year_to"], limit=limit)
-    if not found and (intent["artist"] or intent["year_from"] or intent["year_to"]):
-        found = art.search(intent["keywords"], limit=limit)  # 조건이 너무 좁으면 키워드만으로 완화
-        return found, bool(found)
+    with _stage("search", request_id):
+        found = art.search(intent["keywords"], intent["artist"], intent["year_from"], intent["year_to"], limit=limit)
+        if not found and (intent["artist"] or intent["year_from"] or intent["year_to"]):
+            found = art.search(intent["keywords"], limit=limit)  # 조건이 너무 좁으면 키워드만으로 완화
+            return found, bool(found)
     return found, False
 
 
@@ -79,7 +97,8 @@ def _format_results(works: list[dict]) -> str:
     )
 
 
-def compose_answer(question: str, works: list[dict], history: list[dict], relaxed: bool = False) -> str:
+def compose_answer(question: str, works: list[dict], history: list[dict], relaxed: bool = False,
+                   request_id: str | None = None) -> str:
     """works가 ANSWER_NARRATION_LIMIT보다 많아도(예: 프리미엄 100개) 모델에는 그 안에서만 넘긴다.
     본문에서 100개를 전부 한 줄씩 설명시키면 토큰 비용이 폭증하고 잘릴 수 있어서, 나머지는
     카드로만 보여주고 몇 개 더 있는지 한 줄 안내를 덧붙인다.
@@ -93,10 +112,11 @@ def compose_answer(question: str, works: list[dict], history: list[dict], relaxe
     relax_note = "작가/연도 조건에는 맞는 작품이 없어 그 조건을 빼고 키워드만으로 찾은 결과입니다." if relaxed else "(없음)"
     user = (f"[이전 대화]\n{past}\n\n[완화 안내]\n{relax_note}\n\n"
            f"[검색 결과]\n{_format_results(narrated)}\n\n[질문]\n{question}")
-    answer = llm.chat_completion(
-        [{"role": "system", "content": ANSWER_SYSTEM}, {"role": "user", "content": user}],
-        max_tokens=900,
-    )
+    with _stage("answer", request_id):
+        answer = llm.chat_completion(
+            [{"role": "system", "content": ANSWER_SYSTEM}, {"role": "user", "content": user}],
+            max_tokens=900,
+        )
     extra = len(works) - len(narrated)
     if extra > 0:
         answer += (f"\n\n그 외에도 관련 작품 {extra}개를 더 찾았어요. 아래 카드에서 확인해 보세요. / "

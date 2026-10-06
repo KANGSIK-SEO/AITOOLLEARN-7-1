@@ -1,5 +1,9 @@
 -- 미술 작품 DB (읽기 전용 데이터). 출처: MET Open Access(CC0), Art Institute of Chicago API(CC0).
 -- 수집 스크립트: scripts/collect_met.py, scripts/collect_aic.py
+--
+-- 이 파일은 미술 DB(data/art.db) 전용이다. 사용자 데이터(users, chats, favorites)는
+-- 별도 DB(Turso 또는 data/app.db)에 있으며 스키마는 app/db.py의 SCHEMA에 정의되어 있다.
+-- favorites.artwork_id는 이 파일의 artworks.id를 가리키지만 DB가 달라 FOREIGN KEY는 없다.
 
 CREATE TABLE IF NOT EXISTS artworks (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,

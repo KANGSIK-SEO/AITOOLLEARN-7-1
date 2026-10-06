@@ -68,6 +68,9 @@
 | GET | `/api/me` | **로그인 필요**. 현재 사용자 |
 | POST | `/api/chat` | **로그인 필요**. 질문 → 답변(한국어+영어) + 작품 카드 + 남은 무료 횟수 |
 | GET | `/api/me/chats?limit=20&offset=0` | **로그인 필요**. 내 대화 로그 (최신순, `limit` 1~100) |
+| POST | `/api/favorites` | **로그인 필요**. `{artwork_id}` 작품 즐겨찾기 저장 (상세: `docs/track-c.md`) |
+| DELETE | `/api/favorites/{artwork_id}` | **로그인 필요**. 즐겨찾기 해제 |
+| GET | `/api/me/favorites?limit=20&offset=0` | 내 즐겨찾기 작품 카드 조회 |
 | GET | `/api/health` | 상태 확인 → `{"status": "ok"}` |
 | GET | `/api/guardian/daily-digest` | 가디언 일일 점검 (`CRON_SECRET` 필요, Vercel Cron 전용) |
 | POST | `/api/explain` | 피어 리뷰용 설명 에이전트. `{question, secret}` → `{"answer": "..."}` (`EXPLAIN_AGENT_SECRET` 미설정 시 항상 401) |
@@ -142,6 +145,7 @@
 - Turso/SQLite (쓰기): 
   - `users(id, email UNIQUE, password_hash, is_premium, created_at)`
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
+  - `favorites(id, user_id → users.id, artwork_id(art.db artworks.id), created_at, UNIQUE(user_id, artwork_id))`
   - `incidents(id, category[reliability|security], code, message, context(JSON), severity, auto_action, diagnosis, created_at)` — 가디언 사건 로그. `diagnosis`는 일일 배치 분석 전까지 NULL.
   - `runtime_flags(key, value, updated_at)` — AI 백오프·로그인 잠금 등 자동 대응 상태값 (예: `ai_backoff_until`, `lockout:<email>`)
   - `rate_counters(bucket, count, window_start)` — IP/이메일 단위 레이트리밋 카운터
@@ -149,7 +153,7 @@
 **DB 확인 가이드** (택 1 이상)
 1. 로그 조회 API: `curl -b cookies.txt https://<서비스>/api/me/chats`
 2. 확인용 SQL: `scripts/check_logs.sql` (`turso db shell <db-name> < scripts/check_logs.sql`)
-3. 서버 로그: `request_received`, `ai_call_start`, `ai_call_success|ai_call_failure`, `db_save_success|db_save_failure` 이벤트를 stdout(Vercel Logs)에 남긴다.
+3. 서버 로그: `request_received`, `ai_call_start`, `ai_call_success|ai_call_failure`, `db_save_success|db_save_failure` 이벤트를 stdout(Vercel Logs)에 남긴다. 한 요청 안의 단계별 소요시간은 `chat_stage stage=intent|search|answer request_id=… latency_ms=… ok=…`로 따로 남는다(`app/chat.py`).
 
 ## 5. 실행·배포
 ```bash
