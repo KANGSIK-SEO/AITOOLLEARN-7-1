@@ -43,6 +43,29 @@ SCHEMA = [
         UNIQUE (user_id, artwork_id)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_favorites_user_time ON favorites (user_id, created_at)",
+    # 가디언: 장애·보안 사건 로그 + 자동 대응용 상태값
+    """CREATE TABLE IF NOT EXISTS incidents (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        category    TEXT NOT NULL CHECK (category IN ('reliability', 'security')),
+        code        TEXT NOT NULL,
+        message     TEXT NOT NULL,
+        context     TEXT,              -- JSON
+        severity    TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high')),
+        auto_action TEXT,               -- 자동으로 적용한 대응 (없으면 NULL)
+        diagnosis   TEXT,               -- gpt-6-astra 일일 분석 결과 (분석 전 NULL)
+        created_at  TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_incidents_time ON incidents (created_at)",
+    """CREATE TABLE IF NOT EXISTS runtime_flags (
+        key         TEXT PRIMARY KEY,
+        value       TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS rate_counters (
+        bucket       TEXT PRIMARY KEY,
+        count        INTEGER NOT NULL,
+        window_start TEXT NOT NULL
+    )""",
 ]
 
 # SCHEMA는 신규 DB 기준. 이미 배포된 DB에 컬럼을 추가할 때는 여기 ALTER TABLE을 쓴다.

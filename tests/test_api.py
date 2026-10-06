@@ -270,3 +270,59 @@ def test_favorites_are_isolated_between_users(client):
     assert other.post("/api/favorites", json={"artwork_id": a}).status_code == 201
     assert other.delete(f"/api/favorites/{a}").json()["removed"] is True
     assert [f["id"] for f in client.get("/api/me/favorites").json()["favorites"]] == [a]
+
+
+# ---- TV 앱 등 다른 오리진 클라이언트를 위한 Bearer 토큰 인증 ----
+
+def test_login_returns_bearer_token_in_body(client):
+    signup(client)
+    r = client.post("/api/auth/login", json={"email": "a@b.com", "password": "password123"})
+    assert r.status_code == 200
+    token = r.json()["token"]
+    assert isinstance(token, str) and "." in token
+
+
+def test_bearer_token_authenticates_chat_without_cookie(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(llm, "chat_completion", fake_llm(calls))
+    token = signup(client).json()["token"]
+    # 쿠키를 전혀 받지 않은 새 클라이언트로, 헤더만으로 인증되는지 확인한다.
+    headerless = TestClient(app)
+    r = headerless.post("/api/chat", json={"message": "봄 느낌 풍경화 보여줘"},
+                        headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.json()["artworks"]
+
+
+def test_bearer_token_works_for_get_me_and_my_chats(client):
+    token = signup(client).json()["token"]
+    other = TestClient(app)
+    headers = {"Authorization": f"Bearer {token}"}
+    assert other.get("/api/me", headers=headers).status_code == 200
+    assert other.get("/api/me/chats", headers=headers).status_code == 200
+
+
+def test_invalid_bearer_token_is_rejected(client):
+    other = TestClient(app)
+    r = other.get("/api/me", headers={"Authorization": "Bearer garbage.notavalidtoken"})
+    assert r.status_code == 401 and r.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_cookie_flow_still_works_unaffected(client, monkeypatch):
+    """Bearer 경로 추가가 기존 쿠키 기반 웹 클라이언트 동작을 바꾸지 않는지 확인하는 회귀 테스트."""
+    calls = []
+    monkeypatch.setattr(llm, "chat_completion", fake_llm(calls))
+    signup(client)  # client는 쿠키 저장소를 가진 TestClient라 이후 요청에 쿠키만 자동으로 붙는다.
+    r = client.post("/api/chat", json={"message": "봄 느낌 풍경화 보여줘"})
+    assert r.status_code == 200
+    assert r.json()["artworks"]
+
+
+def test_cors_preflight_allows_authorization_header(client):
+    r = client.options("/api/chat", headers={
+        "Origin": "http://example.com",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type",
+    })
+    assert r.status_code == 200
+    assert r.headers.get("access-control-allow-origin") == "*"

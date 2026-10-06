@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>프로젝트 설명 에이전트 / Project Explainer</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <main class="chat-container">
+        <header class="chat-header">
+            <div>🧑‍💻 프로젝트 설명 에이전트<br>이 서비스에 대해 뭐든 물어보세요</div>
+        </header>
+
+        <section id="chat-panel">
+            <div id="chat-log" class="chat-log">
+                <div class="message bot">안녕하세요! 이 프로젝트의 코드·설계·문서화 등 뭐든 물어보세요.<br>예) "비밀번호는 어떻게 저장하나요?", "이 함수는 왜 이렇게 짰나요?"</div>
+            </div>
+            <form id="ask-form" class="input-area">
+                <input type="text" id="question-input" maxlength="500" placeholder="질문을 입력하세요" autocomplete="off">
+                <button id="send-btn" type="submit" title="보내기">➤</button>
+            </form>
+        </section>
+    </main>
+<script>
+// 비밀번호 입력 없이, 이 페이지 주소(/explain/<token>)의 마지막 조각을 그대로 토큰으로 쓴다.
+const TOKEN = location.pathname.split('/').filter(Boolean).pop();
+const chatLog = document.getElementById('chat-log');
+const askForm = document.getElementById('ask-form');
+const questionInput = document.getElementById('question-input');
+const sendBtn = document.getElementById('send-btn');
+
+function addMessage(text, cls) {
+    const div = document.createElement('div');
+    div.className = 'message ' + cls;
+    div.textContent = text;
+    chatLog.appendChild(div);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    return div;
+}
+
+async function callApi(question) {
+    const res = await fetch('/api/explain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, secret: TOKEN }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || '오류가 발생했어요.');
+    return data.answer;
+}
+
+askForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const question = questionInput.value.trim();
+    if (!question) return;
+    addMessage(question, 'user');
+    questionInput.value = '';
+    sendBtn.disabled = true;
+    const pending = addMessage('생각 중... (코드 전체를 보고 있어서 몇 초 걸릴 수 있어요)', 'bot system');
+    try {
+        const answer = await callApi(question);
+        pending.textContent = answer;
+        pending.className = 'message bot';
+    } catch (err) {
+        pending.textContent = '[오류] ' + err.message;
+        pending.className = 'message error';
+    } finally {
+        sendBtn.disabled = false;
+    }
+});
+
+questionInput.focus();
+</script>
+</body>
+</html>

@@ -118,6 +118,13 @@ body {
     align-self: center;
 }
 
+.warning {
+    color: #ffb84d;
+    border: 1px solid #ffb84d;
+    background: rgba(255, 184, 77, 0.1);
+    align-self: center;
+}
+
 .input-area {
     padding: 15px;
     background-color: #252530;
@@ -190,6 +197,43 @@ body { min-height: 100vh; height: auto; padding: 16px; box-sizing: border-box; }
 .badge { align-self: flex-start; background: rgba(0, 255, 136, 0.12); color: #00ff88; border-radius: 6px; padding: 1px 6px; font-size: 0.7rem; }
 .card a { color: var(--accent); text-decoration: none; }
 .typing { color: #888; font-size: 0.85rem; }
+
+/* ---- 온디바이스 추천 (Datalog) ---- */
+.ondevice-toggle { width: 100%; background: none; border: none; border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08); color: var(--accent); font-size: 0.78rem;
+    padding: 8px 15px; border-radius: 0; height: auto; cursor: pointer; }
+.ondevice-panel { padding: 12px 15px; display: flex; flex-direction: column; gap: 10px;
+    background: rgba(255, 255, 255, 0.02); border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+.ondevice-row { display: flex; gap: 8px; }
+.ondevice-row select, .ondevice-row input { flex: 1; background: #111; border: 1px solid #333; color: #fff;
+    padding: 8px; border-radius: 8px; font-size: 0.82rem; outline: none; min-width: 0; }
+.rule-preview { background: #0a0a10; border: 1px solid rgba(0, 242, 255, 0.25); border-radius: 8px;
+    padding: 8px 10px; font-size: 0.72rem; color: var(--accent); white-space: pre-wrap; word-break: break-all;
+    font-family: 'SFMono-Regular', Consolas, monospace; margin: 0; }
+#od-run-btn { width: 100%; border-radius: 10px; }
+body.light-theme .ondevice-toggle { border-color: rgba(0, 0, 0, 0.08); }
+body.light-theme .ondevice-panel { background: rgba(0, 0, 0, 0.02); border-color: rgba(0, 0, 0, 0.08); }
+body.light-theme .ondevice-row select, body.light-theme .ondevice-row input { background: #fff; border-color: #dadade; color: #1a1a1a; }
+body.light-theme .rule-preview { background: #f4f9ff; }
+
+/* ---- 앱 설치 배너/모달 ---- */
+.install-banner { padding: 10px 16px 0; }
+.install-btn { width: 100%; border-radius: 12px; background: rgba(0, 242, 255, 0.12);
+    color: var(--accent); border: 1px solid var(--accent); font-size: 0.85rem; padding: 10px; }
+
+.modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6);
+    display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+.modal-box { background: var(--chat-bg); border-radius: 14px; padding: 22px; max-width: 360px;
+    width: 100%; border: 1px solid rgba(255, 255, 255, 0.1); }
+.modal-box h2 { margin: 0 0 14px; font-size: 1.05rem; }
+.install-steps { list-style: none; margin: 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.install-steps li { display: flex; align-items: center; gap: 12px; font-size: 0.85rem; line-height: 1.4; }
+.install-steps .step-icon { flex: none; width: 36px; height: 36px; border-radius: 10px;
+    background: rgba(0, 242, 255, 0.12); color: var(--accent); display: flex; align-items: center; justify-content: center; }
+.modal-box .pill { width: 100%; }
+body.light-theme .install-btn { background: rgba(0, 102, 255, 0.08); }
+body.light-theme .modal-overlay { background: rgba(0, 0, 0, 0.4); }
+body.light-theme .install-steps .step-icon { background: rgba(0, 102, 255, 0.1); }
 
 /* ---- 초대코드 회원 화이트 테마 ---- */
 body.light-theme {

@@ -1,10 +1,11 @@
-"""AI 모델 사용 정책.
+"""AI 모델 설정과 외부 API 키.
 
-- solar-pro4만 허용한다. 다른 모델은 과금되므로 코드 어디서도 호출할 수 없다.
-- 2027-04-01부터는 solar-pro4도 과금되므로 모든 모델을 무효화한다.
+주 모델: OpenAI GPT-6 Astra(모델 ID `gpt-6-astra`). GPT 쪽 키가 소진·장애(429/401/403)일 때만
+비상용으로 Upstage solar-pro4로 넘어간다 (`UPSTAGE_API_KEY`가 설정된 경우에만 활성).
+solar-pro4는 2026-10 기준 무료·무제한이지만, 2027-04-01부터는 Upstage 쪽에서 모든 모델을 과금 전환해
+무효화한다고 공지했다 — 그 날짜 이후엔 이 폴백도 더 이상 쓸 수 없다.
 """
 import os
-from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,35 +26,33 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
-ALLOWED_MODEL = "solar-pro4"
-AI_CUTOFF_DATE = date(2027, 4, 1)  # 이 날짜 이후(포함) 모든 AI 호출 차단
+OPENAI_MODEL = "gpt-6-astra"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+CRON_SECRET = os.environ.get("CRON_SECRET", "")
+
+# 비상 폴백 (GPT 키 소진/장애 시에만 사용)
+UPSTAGE_MODEL = "solar-pro4"
 UPSTAGE_BASE_URL = "https://api.upstage.ai/v1"
 
 
 class AIUnavailableError(RuntimeError):
-    """정책상 AI 호출이 허용되지 않을 때 발생. code는 API 오류 응답에 그대로 쓴다."""
+    """AI 호출이 실패했을 때 발생. code는 API 오류 응답에 그대로 쓴다."""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
 
 
-def ensure_ai_allowed(model: str, today: date | None = None) -> str:
-    """호출 직전에 반드시 통과시킬 것. 허용되면 모델명을 그대로 반환한다."""
-    if (today or date.today()) >= AI_CUTOFF_DATE:
-        raise AIUnavailableError(
-            "AI_EXPIRED", "2027-04 이후에는 모든 AI 모델이 과금되어 사용이 종료되었습니다."
-        )
-    if model != ALLOWED_MODEL:
-        raise AIUnavailableError("AI_MODEL_NOT_ALLOWED", f"허용되지 않은 모델입니다: {model}")
-    return model
-
-
 def get_api_key() -> str:
-    key = os.environ.get("UPSTAGE_API_KEY", "")
+    key = os.environ.get("GPT_ASTRA_API_KEY", "")
     if not key:
-        raise AIUnavailableError("AI_KEY_MISSING", "UPSTAGE_API_KEY가 설정되지 않았습니다.")
+        raise AIUnavailableError("AI_KEY_MISSING", "GPT_ASTRA_API_KEY가 설정되지 않았습니다.")
     return key
+
+
+def get_fallback_api_key() -> str:
+    """비어 있으면 폴백 비활성 (에러를 던지지 않는다 — 있으면 쓰고, 없으면 그냥 넘어간다)."""
+    return os.environ.get("UPSTAGE_API_KEY", "")
 
 
 def get_secret_key() -> str:
@@ -69,11 +68,13 @@ def get_premium_code() -> str:
 
 
 LLM_TIMEOUT_SECONDS = float(os.environ.get("LLM_TIMEOUT_SECONDS", "20"))
+LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "low")  # low|medium|high|xhigh|max
 CHAT_MAX_LENGTH = 500          # 질문 최대 글자 수
 CONTEXT_TURNS = 5              # 문맥으로 넘기는 최근 대화 수
-CHAT_LIMIT_PER_HOUR = 30               # 일반 사용자 시간당 질문 상한 (버스트 방지)
+CHAT_LIMIT_PER_HOUR = 30               # 일반 사용자 시간당 질문 상한 (버스트 방지 + 비용 보호)
 CHAT_LIMIT_PER_HOUR_PREMIUM = int(os.environ.get("CHAT_LIMIT_PER_HOUR_PREMIUM", "300"))  # 초대코드 사용자 시간당 상한
 CHAT_LIFETIME_LIMIT_FREE = int(os.environ.get("CHAT_LIFETIME_LIMIT_FREE", "100"))  # 초대코드 없는 사용자의 평생 무료 질문 수
+FREE_LIMIT_WARNING_THRESHOLD = int(os.environ.get("FREE_LIMIT_WARNING_THRESHOLD", "10"))  # 남은 무료 질문이 이 수 이하면 화면에 안내
 
 ART_RESULTS_LIMIT = 6                  # 일반 사용자에게 보여줄 추천 작품 수
 ART_RESULTS_LIMIT_PREMIUM = int(os.environ.get("ART_RESULTS_LIMIT_PREMIUM", "100"))  # 초대코드 사용자 추천 작품 수

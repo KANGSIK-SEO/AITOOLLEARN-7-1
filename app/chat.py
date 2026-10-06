@@ -18,14 +18,18 @@ INTENT_SYSTEM = (
 )
 
 ANSWER_SYSTEM = (
-    "너는 '퍼블릭 도메인 명화 찾기' 챗봇이다. 한국어로 간결하게 답한다.\n"
+    "너는 '퍼블릭 도메인 명화 찾기' 챗봇이다. 먼저 한국어로 간결하게 답하고, 빈 줄을 하나 띄운 뒤 "
+    "'English:'로 시작하는 동일한 내용의 영어 번역을 덧붙인다 — 두 언어 모두 아래 규칙을 똑같이 "
+    "따른다 (서비스가 한/영 병용이라 항상 두 언어 모두 보여준다).\n"
     "규칙:\n"
     "1. 아래 [검색 결과]에 있는 작품만 언급한다. 없는 작품·작가·연도를 지어내지 않는다.\n"
     "2. 작품은 [1], [2] 번호로 인용하고, 각 작품이 왜 요청에 맞는지 한 줄씩 설명한다.\n"
     "3. 검색 결과는 MET·Art Institute of Chicago가 CC0(퍼블릭 도메인)로 공개한 것이다. "
     "상업적 이용이 가능하지만 사용 전 '출처 페이지'에서 조건을 확인하도록 한 줄 안내한다.\n"
     "4. 검색 결과가 비어 있으면 없다고 말하고 더 구체적인 조건(작가, 시대, 주제)을 제안한다.\n"
-    "5. 직전 대화를 묻는 질문이면 [이전 대화]를 근거로 답한다."
+    "5. 직전 대화를 묻는 질문이면 [이전 대화]를 근거로 답한다.\n"
+    "6. [완화 안내]가 있으면, 작가/연도 조건에는 맞는 작품을 못 찾아 조건을 일부 빼고 찾았다는 걸 "
+    "한 줄로 먼저 알려준다 — 사용자가 결과를 보기 전에 '왜 이게 나왔는지' 판단할 수 있어야 한다."
 )
 
 
@@ -48,18 +52,21 @@ def _parse_intent(text: str) -> dict:
 def extract_intent(question: str) -> dict:
     raw = llm.chat_completion(
         [{"role": "system", "content": INTENT_SYSTEM}, {"role": "user", "content": question}],
-        max_tokens=200, temperature=0.0,
+        max_tokens=200,
     )
     return _parse_intent(raw)
 
 
-def find_artworks(intent: dict, limit: int = 6) -> list[dict]:
+def find_artworks(intent: dict, limit: int = 6) -> tuple[list[dict], bool]:
+    """두 번째 반환값(relaxed)은 작가/연도 조건을 빼고 키워드만으로 다시 찾았는지 여부.
+    사용자가 '왜 이 작품이 나왔는지' 판단하는 비용을 줄이려면 이걸 숨기면 안 된다."""
     if intent["chitchat"]:
-        return []
+        return [], False
     found = art.search(intent["keywords"], intent["artist"], intent["year_from"], intent["year_to"], limit=limit)
     if not found and (intent["artist"] or intent["year_from"] or intent["year_to"]):
         found = art.search(intent["keywords"], limit=limit)  # 조건이 너무 좁으면 키워드만으로 완화
-    return found
+        return found, bool(found)
+    return found, False
 
 
 def _format_results(works: list[dict]) -> str:
@@ -72,18 +79,26 @@ def _format_results(works: list[dict]) -> str:
     )
 
 
-def compose_answer(question: str, works: list[dict], history: list[dict]) -> str:
+def compose_answer(question: str, works: list[dict], history: list[dict], relaxed: bool = False) -> str:
     """works가 ANSWER_NARRATION_LIMIT보다 많아도(예: 프리미엄 100개) 모델에는 그 안에서만 넘긴다.
     본문에서 100개를 전부 한 줄씩 설명시키면 토큰 비용이 폭증하고 잘릴 수 있어서, 나머지는
-    카드로만 보여주고 몇 개 더 있는지 한 줄 안내를 덧붙인다."""
+    카드로만 보여주고 몇 개 더 있는지 한 줄 안내를 덧붙인다.
+
+    relaxed=True면 작가/연도 조건을 빼고 키워드만으로 다시 찾은 결과라는 뜻 — ANSWER_SYSTEM
+    규칙 6에 따라 모델이 이를 먼저 알려주게 한다(사용자의 '사전 판단 비용'을 줄이기 위함).
+
+    서비스가 한/영 상시 병기라 ANSWER_SYSTEM이 늘 한국어+영어 답변을 함께 생성한다(토글 없음)."""
     narrated = works[:ANSWER_NARRATION_LIMIT]
     past = "\n".join(f"Q: {h['question']}\nA: {(h['answer'] or '')[:300]}" for h in history) or "(없음)"
-    user = f"[이전 대화]\n{past}\n\n[검색 결과]\n{_format_results(narrated)}\n\n[질문]\n{question}"
+    relax_note = "작가/연도 조건에는 맞는 작품이 없어 그 조건을 빼고 키워드만으로 찾은 결과입니다." if relaxed else "(없음)"
+    user = (f"[이전 대화]\n{past}\n\n[완화 안내]\n{relax_note}\n\n"
+           f"[검색 결과]\n{_format_results(narrated)}\n\n[질문]\n{question}")
     answer = llm.chat_completion(
         [{"role": "system", "content": ANSWER_SYSTEM}, {"role": "user", "content": user}],
-        max_tokens=700, temperature=0.3,
+        max_tokens=900,
     )
     extra = len(works) - len(narrated)
     if extra > 0:
-        answer += f"\n\n그 외에도 관련 작품 {extra}개를 더 찾았어요. 아래 카드에서 확인해 보세요."
+        answer += (f"\n\n그 외에도 관련 작품 {extra}개를 더 찾았어요. 아래 카드에서 확인해 보세요. / "
+                   f"Found {extra} more related works — check the cards below.")
     return answer

@@ -7,3 +7,5 @@ data/*.db-journal
 data/app.db
 .vercel
 .env*
+tv-app/.buildResult/
+dist/

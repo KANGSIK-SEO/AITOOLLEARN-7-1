@@ -1,4 +1,5 @@
 """읽기 전용 미술 DB(data/art.db) 검색."""
+import random
 import re
 import sqlite3
 
@@ -9,6 +10,14 @@ CARD_FIELDS = (
     "a.id, a.source, a.title, a.artist, a.date_display, a.medium, a.image_url, "
     "a.thumbnail_url, a.source_url, a.license, a.credit_line, a.is_highlight"
 )
+
+# 같은 질문이면 늘 똑같은 top-N만 보여주면(결정적 랭킹, PRP) 매칭 후보가 아무리 많아도
+# 컬렉션의 일부만 영원히 노출된다. Tennenholtz & Kurland(CACM, 2019)가 보이듯, 약간의
+# 무작위성을 섞으면 알고리즘/시스템 오버헤드 거의 없이 콘텐츠 다양성(content breadth)이
+# 늘어난다. 가장 관련도 높은 GUARANTEED_TOP개는 항상 그대로 보장하고(정밀도 보호),
+# 나머지 자리만 후보 풀에서 무작위로 채운다.
+DIVERSITY_POOL_MULTIPLIER = 5
+GUARANTEED_TOP = 2
 
 
 AIC_IMAGE_RE = re.compile(r"/iiif/2/([0-9a-f-]{36})/")
@@ -53,6 +62,19 @@ def get_by_ids(ids: list[int]) -> dict[int, dict]:
         conn.close()
 
 
+def _diversify(pool: list[dict], limit: int) -> list[dict]:
+    """pool은 이미 관련도순(best-first)으로 정렬돼 있다고 가정한다.
+    상위 GUARANTEED_TOP개는 그대로 보장하고, 나머지 자리는 pool 전체에서 무작위로 뽑아
+    원래 관련도 순서를 유지한 채 채운다. pool이 limit보다 작거나 같으면 그대로 반환한다."""
+    if len(pool) <= limit:
+        return pool
+    guaranteed = pool[:GUARANTEED_TOP]
+    rest_pool = pool[GUARANTEED_TOP:]
+    need = limit - len(guaranteed)
+    sampled_idx = sorted(random.sample(range(len(rest_pool)), min(need, len(rest_pool))))
+    return guaranteed + [rest_pool[i] for i in sampled_idx]
+
+
 def search(keywords: list[str], artist: str | None = None,
            year_from: int | None = None, year_to: int | None = None, limit: int = 6) -> list[dict]:
     where, params = ["a.is_public_domain = 1"], []
@@ -66,6 +88,7 @@ def search(keywords: list[str], artist: str | None = None,
         where.append("a.year_start <= ?")
         params.append(year_to)
 
+    pool_size = limit * DIVERSITY_POOL_MULTIPLIER
     fts = _fts_query(keywords)
     conn = _connect()
     try:
@@ -73,11 +96,12 @@ def search(keywords: list[str], artist: str | None = None,
             sql = (f"SELECT {CARD_FIELDS} FROM artworks_fts f JOIN artworks a ON a.id = f.rowid "
                    f"WHERE artworks_fts MATCH ? AND {' AND '.join(where)} "
                    "ORDER BY a.is_highlight DESC, bm25(artworks_fts) LIMIT ?")
-            rows = conn.execute(sql, [fts, *params, limit]).fetchall()
+            rows = conn.execute(sql, [fts, *params, pool_size]).fetchall()
         else:
             sql = (f"SELECT {CARD_FIELDS} FROM artworks a WHERE {' AND '.join(where)} "
                    "ORDER BY a.is_highlight DESC, a.id LIMIT ?")
-            rows = conn.execute(sql, [*params, limit]).fetchall()
-        return [with_proxy_urls(dict(r)) for r in rows]
+            rows = conn.execute(sql, [*params, pool_size]).fetchall()
+        pool = [with_proxy_urls(dict(r)) for r in rows]
+        return _diversify(pool, limit)
     finally:
         conn.close()
