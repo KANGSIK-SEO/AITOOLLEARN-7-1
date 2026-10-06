@@ -7,10 +7,14 @@ gpt-6-astra(app/llm.py와 동일한 호출·폴백)가 대신 답한다. 만든 
 EXPLAIN_AGENT_SECRET으로 보호한다 — 비어 있으면(기본값) 항상 401. 평가가 끝나면
 Vercel 환경변수에서 지워서 끄면 된다.
 """
+import logging
 import os
 from pathlib import Path
 
+from .config import AIUnavailableError
 from .llm import chat_completion
+
+log = logging.getLogger("app.explain")
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -52,6 +56,24 @@ SYSTEM_PROMPT = """당신은 "저작권 걱정 없는 퍼블릭 도메인 명화
 
 _context_cache: str | None = None
 
+# 평가 자리에서 동료가 보는 화면이라, 내부 사정(환경변수 이름, 제공자 이름) 대신 "지금 무엇을 하면 되는지"를 말한다.
+# 코드(AI_TIMEOUT 등)는 그대로 두고 메시지만 바꾼다 — 상태 코드·로그·가디언 집계는 기존과 같다.
+FRIENDLY_AI_ERRORS = {
+    "AI_TIMEOUT": "프로젝트 코드 전체를 읽고 답하느라 시간이 너무 걸렸어요. 질문을 조금 더 짧고 구체적으로"
+                  "(예: 파일이나 함수 이름을 넣어서) 다시 물어봐 주세요.",
+    "AI_RATE_LIMITED": "지금 질문이 몰려 AI가 잠시 쉬고 있어요. 1분쯤 뒤에 다시 물어봐 주세요.",
+    "AI_KEY_MISSING": "설명 에이전트가 지금 AI에 연결되어 있지 않아요. 발표자에게 알려 주세요.",
+}
+DEFAULT_AI_ERROR = "AI가 답을 만들지 못했어요. 같은 질문을 한 번 더 보내 보시고, 계속되면 질문을 바꿔 주세요."
+
+
+class ExplainUnavailable(RuntimeError):
+    """AI 호출 전 단계(프로젝트 코드 읽기)에서 실패. 사용자에게 보여줄 메시지를 담는다."""
+
+
+def friendly_ai_message(code: str) -> str:
+    return FRIENDLY_AI_ERRORS.get(code, DEFAULT_AI_ERROR)
+
 
 def get_secret() -> str:
     return os.environ.get("EXPLAIN_AGENT_SECRET", "")
@@ -71,8 +93,14 @@ def build_context() -> str:
 
 
 def ask(question: str) -> str:
+    """AI 실패는 AIUnavailableError(코드 유지), 코드 읽기 실패는 ExplainUnavailable로 올린다."""
+    try:
+        context = build_context()
+    except (OSError, UnicodeDecodeError) as e:
+        log.error("explain_context_failure detail=%s", e)
+        raise ExplainUnavailable("설명 에이전트가 프로젝트 코드를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.") from e
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT.format(context=build_context())},
+        {"role": "system", "content": SYSTEM_PROMPT.format(context=context)},
         {"role": "user", "content": question},
     ]
     return chat_completion(messages, max_tokens=1200)
