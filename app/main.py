@@ -38,7 +38,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET", "POST", "DELETE"],  # DELETE: 즐겨찾기 해제
+    allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],
     allow_credentials=False,
 )
