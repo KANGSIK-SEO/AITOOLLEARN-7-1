@@ -74,6 +74,7 @@ CONTEXT_TURNS = 5              # 문맥으로 넘기는 최근 대화 수
 CHAT_LIMIT_PER_HOUR = 30               # 일반 사용자 시간당 질문 상한 (버스트 방지 + 비용 보호)
 CHAT_LIMIT_PER_HOUR_PREMIUM = int(os.environ.get("CHAT_LIMIT_PER_HOUR_PREMIUM", "300"))  # 초대코드 사용자 시간당 상한
 CHAT_LIFETIME_LIMIT_FREE = int(os.environ.get("CHAT_LIFETIME_LIMIT_FREE", "100"))  # 초대코드 없는 사용자의 평생 무료 질문 수
+FREE_LIMIT_WARNING_THRESHOLD = int(os.environ.get("FREE_LIMIT_WARNING_THRESHOLD", "10"))  # 남은 무료 질문이 이 수 이하면 화면에 안내
 
 ART_RESULTS_LIMIT = 6                  # 일반 사용자에게 보여줄 추천 작품 수
 ART_RESULTS_LIMIT_PREMIUM = int(os.environ.get("ART_RESULTS_LIMIT_PREMIUM", "100"))  # 초대코드 사용자 추천 작품 수

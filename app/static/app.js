@@ -132,6 +132,11 @@ $("chat-form").addEventListener("submit", async (e) => {
     }
     addMessage("bot", data.reply);
     addCards(data.artworks);
+    if (data.show_limit_warning) {
+        addMessage("bot warning",
+            `무료 질문이 ${data.remaining_free}개 남았어요. 초대코드가 있다면 입력해 보세요. / ` +
+            `${data.remaining_free} free questions left. Enter an invite code if you have one.`);
+    }
 });
 
 $("login-btn").addEventListener("click", () => submitAuth("login"));

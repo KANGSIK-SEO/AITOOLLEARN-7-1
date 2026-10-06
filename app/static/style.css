@@ -118,6 +118,13 @@ body {
     align-self: center;
 }
 
+.warning {
+    color: #ffb84d;
+    border: 1px solid #ffb84d;
+    background: rgba(255, 184, 77, 0.1);
+    align-self: center;
+}
+
 .input-area {
     padding: 15px;
     background-color: #252530;

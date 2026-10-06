@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from . import auth, chat, db, explain, guardian
 from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, CHAT_LIFETIME_LIMIT_FREE,
                      CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
-                     CONTEXT_TURNS, CRON_SECRET, AIUnavailableError)
+                     CONTEXT_TURNS, CRON_SECRET, FREE_LIMIT_WARNING_THRESHOLD, AIUnavailableError)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("app")
@@ -238,6 +238,7 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
         log.warning("rate_limited user_id=%s request_id=%s is_premium=%s", user_id, request_id, is_premium)
         return error(429, "RATE_LIMITED", "질문이 너무 많아요. 잠시 후 다시 시도해 주세요.")
 
+    remaining_free = None
     if not is_premium:
         used_lifetime = db.execute(
             "SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND status = 'ok'", (user_id,))[0]["n"]
@@ -245,6 +246,7 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
             log.warning("free_limit_reached user_id=%s request_id=%s", user_id, request_id)
             return error(403, "FREE_LIMIT_REACHED",
                         f"무료 이용 {CHAT_LIFETIME_LIMIT_FREE}회를 모두 사용했어요. 초대코드가 있다면 입력해 보세요.")
+        remaining_free = CHAT_LIFETIME_LIMIT_FREE - used_lifetime - 1
 
     history = list(reversed(db.execute(
         "SELECT question, answer FROM chats WHERE user_id = ? AND status = 'ok' ORDER BY id DESC LIMIT ?",
@@ -274,8 +276,10 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
     latency = int((time.monotonic() - started) * 1000)
     log.info("ai_call_success request_id=%s latency_ms=%s artworks=%s", request_id, latency, len(works))
     chat_id = _save_chat(user_id, question, answer, "ok", None, latency, [w["id"] for w in works])
+    show_limit_warning = remaining_free is not None and remaining_free <= FREE_LIMIT_WARNING_THRESHOLD
     return {"chat_id": chat_id, "saved": chat_id is not None, "request_id": request_id,
-            "reply": answer, "artworks": works}
+            "reply": answer, "artworks": works,
+            "remaining_free": remaining_free, "show_limit_warning": show_limit_warning}
 
 
 @app.get("/api/me/chats")

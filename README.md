@@ -78,7 +78,10 @@
  "reply": "[1] Spring in France — ...",
  "artworks": [{"id": 101, "source": "aic", "title": "Spring in France", "artist": "Robert William Vonnoh",
                "date_display": "1890", "image_url": "https://...", "source_url": "https://www.artic.edu/artworks/...",
-               "license": "CC0"}]}
+               "license": "CC0"}],
+ "remaining_free": 7, "show_limit_warning": true}
+// remaining_free: 초대코드(프리미엄) 사용자는 상한이 없어 항상 null. show_limit_warning은
+// 남은 무료 질문이 FREE_LIMIT_WARNING_THRESHOLD(기본 10) 이하일 때만 true.
 // 오류 예
 {"error": {"code": "AI_TIMEOUT", "message": "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요."}}
 ```
