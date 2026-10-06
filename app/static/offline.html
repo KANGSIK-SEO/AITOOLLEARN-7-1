@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0b0c10">
+    <title>오프라인 / Offline</title>
+    <style>
+        :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+        body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0d0d12; color: #e0e0e0; }
+        main { max-width: 30rem; padding: 2rem; text-align: center; }
+        h1 { color: #00f2ff; font-size: 1.5rem; }
+        p { line-height: 1.6; }
+        button { padding: 0.7rem 1.2rem; border: 0; border-radius: 999px; background: #00f2ff; color: #000; font-weight: 700; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <main role="main">
+        <h1>현재 오프라인입니다</h1>
+        <p>인터넷 연결을 확인한 뒤 다시 시도해 주세요.<br>현재 저장된 앱 화면은 계속 사용할 수 있습니다.</p>
+        <button type="button" onclick="location.reload()">다시 시도 / Retry</button>
+    </main>
+</body>
+</html>
