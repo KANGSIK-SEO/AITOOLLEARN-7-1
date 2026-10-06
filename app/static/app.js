@@ -222,3 +222,52 @@ if (!isStandalone() && isMobile()) {
         if (e.target.id === "install-modal") $("install-modal").hidden = true;
     });
 }
+
+// ---- 온디바이스 추천 (Datalog 규칙, 서버/AI 호출 없음) ----
+function currentOnDeviceFilters() {
+    const yearFrom = $("od-year-from").value.trim();
+    const yearTo = $("od-year-to").value.trim();
+    return {
+        style: $("od-style").value,
+        subject: $("od-subject").value.trim().toLowerCase(),
+        yearFrom: yearFrom ? Number(yearFrom) : null,
+        yearTo: yearTo ? Number(yearTo) : null,
+    };
+}
+
+function refreshRulePreview() {
+    $("od-rule-preview").textContent = OnDevice.buildRuleText(currentOnDeviceFilters());
+}
+
+let onDeviceReady = false;
+$("ondevice-toggle").addEventListener("click", async () => {
+    const panel = $("ondevice-panel");
+    panel.hidden = !panel.hidden;
+    if (panel.hidden || onDeviceReady) return;
+    const facts = await OnDevice.loadFacts();
+    const styleSelect = $("od-style");
+    OnDevice.styleOptions(facts).forEach((style) => {
+        const opt = document.createElement("option");
+        opt.value = style;
+        opt.textContent = style;
+        styleSelect.appendChild(opt);
+    });
+    onDeviceReady = true;
+    refreshRulePreview();
+});
+
+["od-style", "od-subject", "od-year-from", "od-year-to"].forEach((id) => {
+    $(id).addEventListener("input", refreshRulePreview);
+});
+
+$("od-run-btn").addEventListener("click", async () => {
+    const filters = currentOnDeviceFilters();
+    const facts = await OnDevice.loadFacts();
+    const works = OnDevice.evalRule(facts, filters);
+    addMessage("system", `🧠 온디바이스 추천 (서버·AI 호출 없음, 브라우저에서 규칙 평가) / On-device recommendation (no server/AI call — evaluated in your browser)\n${OnDevice.buildRuleText(filters)}`);
+    if (!works.length) {
+        addMessage("bot", "조건에 맞는 작품이 없어요. 필터를 줄여보세요. / No matching works. Try loosening the filters.");
+        return;
+    }
+    addCards(works);
+});

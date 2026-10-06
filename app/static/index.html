@@ -42,6 +42,21 @@
             <div id="chat-log" class="chat-log">
                 <div class="message bot">안녕하세요! 어떤 명화를 찾으세요? / Hi! What masterpiece are you looking for?<br>예) "봄 느낌 풍경화 보여줘" / e.g. "Show me a spring landscape"</div>
             </div>
+
+            <button id="ondevice-toggle" type="button" class="ondevice-toggle">🧠 온디바이스 추천 (서버 호출 없음) / On-device recommend (no server call)</button>
+            <div id="ondevice-panel" class="ondevice-panel" hidden>
+                <div class="ondevice-row">
+                    <select id="od-style"><option value="">화풍 전체 / Any style</option></select>
+                    <input type="text" id="od-subject" placeholder="주제 키워드 / subject keyword (예: landscape)">
+                </div>
+                <div class="ondevice-row">
+                    <input type="number" id="od-year-from" placeholder="연도부터 / year from">
+                    <input type="number" id="od-year-to" placeholder="연도까지 / year to">
+                </div>
+                <pre id="od-rule-preview" class="rule-preview"></pre>
+                <button id="od-run-btn" type="button" class="pill">추천받기 (내 기기에서 바로) / Recommend on this device</button>
+            </div>
+
             <form id="chat-form" class="input-area">
                 <input type="text" id="message-input" maxlength="500" placeholder="질문을 입력하세요 (최대 500자) / Type your question (max 500 chars)" autocomplete="off">
                 <button id="send-btn" type="submit" title="보내기 / Send">➤</button>
@@ -57,6 +72,7 @@
         </div>
     </div>
 
+    <script src="/static/ondevice.js"></script>
     <script src="/static/app.js"></script>
     <script>
         if ('serviceWorker' in navigator) {

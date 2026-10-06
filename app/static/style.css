@@ -191,6 +191,24 @@ body { min-height: 100vh; height: auto; padding: 16px; box-sizing: border-box; }
 .card a { color: var(--accent); text-decoration: none; }
 .typing { color: #888; font-size: 0.85rem; }
 
+/* ---- 온디바이스 추천 (Datalog) ---- */
+.ondevice-toggle { width: 100%; background: none; border: none; border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08); color: var(--accent); font-size: 0.78rem;
+    padding: 8px 15px; border-radius: 0; height: auto; cursor: pointer; }
+.ondevice-panel { padding: 12px 15px; display: flex; flex-direction: column; gap: 10px;
+    background: rgba(255, 255, 255, 0.02); border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+.ondevice-row { display: flex; gap: 8px; }
+.ondevice-row select, .ondevice-row input { flex: 1; background: #111; border: 1px solid #333; color: #fff;
+    padding: 8px; border-radius: 8px; font-size: 0.82rem; outline: none; min-width: 0; }
+.rule-preview { background: #0a0a10; border: 1px solid rgba(0, 242, 255, 0.25); border-radius: 8px;
+    padding: 8px 10px; font-size: 0.72rem; color: var(--accent); white-space: pre-wrap; word-break: break-all;
+    font-family: 'SFMono-Regular', Consolas, monospace; margin: 0; }
+#od-run-btn { width: 100%; border-radius: 10px; }
+body.light-theme .ondevice-toggle { border-color: rgba(0, 0, 0, 0.08); }
+body.light-theme .ondevice-panel { background: rgba(0, 0, 0, 0.02); border-color: rgba(0, 0, 0, 0.08); }
+body.light-theme .ondevice-row select, body.light-theme .ondevice-row input { background: #fff; border-color: #dadade; color: #1a1a1a; }
+body.light-theme .rule-preview { background: #f4f9ff; }
+
 /* ---- 앱 설치 배너/모달 ---- */
 .install-banner { padding: 10px 16px 0; }
 .install-btn { width: 100%; border-radius: 12px; background: rgba(0, 242, 255, 0.12);

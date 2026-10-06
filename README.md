@@ -47,6 +47,13 @@
 
 문맥 유지: 같은 사용자의 최근 `CONTEXT_TURNS`(5)개 Q/A를 답변 프롬프트에 포함한다.
 
+### 2.1 온디바이스 추천 (Datalog, 서버/AI 호출 없음)
+채팅창 안 "🧠 온디바이스 추천" 패널은 서버나 gpt-6-astra를 전혀 거치지 않고, **브라우저 안에서만** 작품을 고른다.
+- `scripts/export_artworks_json.py`가 `data/art.db`(CC0만, `is_public_domain = 1`)를 `app/static/artworks.json`으로 내보낸다. `data/art.db`가 바뀔 때만 다시 실행하면 된다.
+- `app/static/ondevice.js`가 이 JSON을 최초 1회만 받아 메모리에 캐시하고, 사용자가 고른 화풍/주제/연도 조건을 **Datalog 스타일 conjunctive 규칙**으로 조합해 그 자리에서 배열 필터링한다 (예: `candidate(W) :- style(W, "Impressionism"), subject(W, "landscape").`). 재귀가 필요 없는 질의라 naive bottom-up 평가로 충분하다.
+- 카드 렌더링은 채팅과 동일한 `addCards()`를 그대로 재사용 — 결과 화면이 100% 같은 스타일.
+- Oxford Semantic Technologies(RDFox)가 갤럭시 기기에 Datalog 추론 엔진을 온디바이스로 넣은 것과 같은 설계 철학: 클라우드로 보내지 않고 기기에서 바로 추론한다.
+
 ## 3. API 명세
 오류는 항상 `{"error": {"code": "...", "message": "..."}}`.
 
