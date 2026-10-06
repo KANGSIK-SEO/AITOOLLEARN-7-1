@@ -6,13 +6,20 @@ TURSO_DATABASE_URL이 있으면 Turso(HTTP API), 없으면 로컬 SQLite 파일(
 import json
 import logging
 import os
+import re
 import sqlite3
+import time
 import urllib.error
 import urllib.request
 
 from .config import ROOT
 
 log = logging.getLogger("app.db")
+
+# 이 시간(ms) 이상 걸린 쿼리는 db_slow_query 경고로 남긴다. Turso는 HTTP 왕복이 있어 로컬보다 느리므로
+# 평소 왕복(수십~200ms)보다 넉넉히 잡았다. 0이면 모든 쿼리를 기록한다(로컬 디버깅용).
+SLOW_QUERY_MS = int(os.environ.get("DB_SLOW_QUERY_MS", "500") or 500)
+_SQL_LOG_MAX = 160
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS users (
@@ -148,7 +155,25 @@ def execute(sql: str, params=()) -> list[dict]:
 
 def _raw_execute(sql: str, params=()) -> list[dict]:
     base = _turso_url()
-    return _turso_execute(base, sql, params) if base else _local_execute(sql, params)
+    started = time.monotonic()
+    ok = False
+    try:
+        rows = _turso_execute(base, sql, params) if base else _local_execute(sql, params)
+        ok = True
+        return rows
+    finally:
+        _log_if_slow(sql, int((time.monotonic() - started) * 1000), "turso" if base else "local_sqlite", ok)
+
+
+def _log_if_slow(sql: str, latency_ms: int, backend: str, ok: bool) -> None:
+    """실패한 쿼리도 기록한다 (Turso 타임아웃처럼 느려서 실패한 경우가 가장 중요하다).
+    params에는 이메일·비밀번호 해시·질문 본문이 들어가므로 SQL 문장만 남긴다."""
+    if latency_ms < SLOW_QUERY_MS:
+        return
+    compact = re.sub(r"\s+", " ", sql).strip()
+    if len(compact) > _SQL_LOG_MAX:
+        compact = compact[:_SQL_LOG_MAX] + "…"
+    log.warning("db_slow_query latency_ms=%s backend=%s ok=%s sql=%s", latency_ms, backend, ok, compact)
 
 
 def ensure_schema() -> None:
