@@ -49,19 +49,40 @@ ANSWER_SYSTEM = (
 )
 
 
+def _as_year(v) -> int | None:
+    """bool은 int의 하위 타입이라 isinstance(True, int)가 참이다 → 명시적으로 제외한다."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str) and v.strip().lstrip("-").isdigit():
+        return int(v)
+    return None
+
+
 def _parse_intent(text: str) -> dict:
-    match = re.search(r"\{.*\}", text, re.S)
-    try:
-        data = json.loads(match.group(0)) if match else {}
-    except json.JSONDecodeError:
+    """모델 출력에서 첫 JSON 객체를 꺼낸다. 형식이 깨지거나 타입이 틀리면 해당 필드만 기본값으로 둔다."""
+    data = {}
+    start = text.find("{")
+    if start != -1:
+        try:
+            data, _ = json.JSONDecoder().raw_decode(text, start)
+        except json.JSONDecodeError:
+            data = {}
+    if not isinstance(data, dict):
         data = {}
     kw = data.get("keywords")
+    if isinstance(kw, str):
+        kw = [kw]
+    chitchat = data.get("chitchat")
+    artist = data.get("artist")
     return {
-        "chitchat": bool(data.get("chitchat")),
-        "keywords": [str(k) for k in kw][:6] if isinstance(kw, list) else [],
-        "artist": data.get("artist") if isinstance(data.get("artist"), str) else None,
-        "year_from": data.get("year_from") if isinstance(data.get("year_from"), int) else None,
-        "year_to": data.get("year_to") if isinstance(data.get("year_to"), int) else None,
+        # "false" 같은 문자열이 참으로 읽혀 검색을 건너뛰지 않도록 명시적인 참만 인정한다
+        "chitchat": chitchat is True or (isinstance(chitchat, str) and chitchat.strip().lower() == "true"),
+        "keywords": [k.strip() for k in kw if isinstance(k, str) and k.strip()][:6] if isinstance(kw, list) else [],
+        "artist": (artist.strip() or None) if isinstance(artist, str) else None,
+        "year_from": _as_year(data.get("year_from")),
+        "year_to": _as_year(data.get("year_to")),
     }
 
 

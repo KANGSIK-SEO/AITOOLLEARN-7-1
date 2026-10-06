@@ -326,3 +326,129 @@ def test_cors_preflight_allows_authorization_header(client):
     })
     assert r.status_code == 200
     assert r.headers.get("access-control-allow-origin") == "*"
+
+
+# ---- 429(시간당 한도) · DB 오류 경로 ----
+def _insert_chats(user_id, n, minutes_ago, status="ok"):
+    from datetime import datetime, timedelta, timezone
+    at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat(timespec="seconds")
+    for _ in range(n):
+        db.execute("INSERT INTO chats (user_id, question, answer, status, created_at) VALUES (?, 'q', 'a', ?, ?)",
+                   (user_id, status, at))
+
+
+def test_rate_limit_429_at_default_30_per_hour(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(llm, "chat_completion", fake_llm(calls))
+    uid = signup(client).json()["user"]["id"]
+    assert main_module.CHAT_LIMIT_PER_HOUR == 30
+    _insert_chats(uid, 29, minutes_ago=10)
+    assert client.post("/api/chat", json={"message": "30번째"}).status_code == 200  # 30번째까지는 허용
+
+    calls.clear()
+    r = client.post("/api/chat", json={"message": "31번째"})
+    assert r.status_code == 429 and r.json()["error"]["code"] == "RATE_LIMITED"
+    assert calls == []  # 한도 초과 시 AI를 호출하지 않는다
+    assert len(client.get("/api/me/chats?limit=100").json()["chats"]) == 30  # 거절된 요청은 기록하지 않는다
+
+
+def test_rate_limit_counts_only_last_hour_and_includes_errors(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    uid = signup(client).json()["user"]["id"]
+    _insert_chats(uid, 50, minutes_ago=61)                 # 1시간 지난 기록은 세지 않는다
+    assert client.post("/api/chat", json={"message": "ok"}).status_code == 200
+    _insert_chats(uid, 29, minutes_ago=5, status="error")  # 실패한 요청도 한도에 포함 (재시도 폭주 방지)
+    assert client.post("/api/chat", json={"message": "x"}).json()["error"]["code"] == "RATE_LIMITED"
+
+
+def test_rate_limit_is_per_user(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    uid = signup(client, "busy@x.com").json()["user"]["id"]
+    _insert_chats(uid, 30, minutes_ago=1)
+    assert client.post("/api/chat", json={"message": "x"}).status_code == 429
+    other = TestClient(app)
+    signup(other, "calm@x.com")
+    assert other.post("/api/chat", json={"message": "x"}).status_code == 200
+
+
+def test_db_error_returns_503_db_error(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    real_execute = db.execute
+
+    def broken(sql, params=()):
+        if sql.startswith("SELECT COUNT(*)"):
+            raise db.DbError("Turso 연결 실패: timed out")
+        return real_execute(sql, params)
+
+    monkeypatch.setattr(db, "execute", broken)
+    r = client.post("/api/chat", json={"message": "봄 풍경"})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "DB_ERROR"
+    assert "Turso" not in r.json()["error"]["message"]  # 내부 오류 내용은 사용자에게 노출하지 않는다
+
+
+def test_chat_log_save_failure_still_returns_answer(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    real_execute = db.execute
+
+    def broken_insert(sql, params=()):
+        if sql.startswith("INSERT INTO chats"):
+            raise db.DbError("disk I/O error")
+        return real_execute(sql, params)
+
+    monkeypatch.setattr(db, "execute", broken_insert)
+    r = client.post("/api/chat", json={"message": "봄 풍경"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["saved"] is False and body["chat_id"] is None and body["reply"]
+
+
+def test_art_db_error_returns_503_and_logs_error_chat(client, monkeypatch):
+    import sqlite3
+    from app import chat as chat_module
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+
+    def broken_find(*a, **k):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(chat_module, "find_artworks", broken_find)
+    r = client.post("/api/chat", json={"message": "봄 풍경"})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "ART_DB_ERROR"
+    saved = client.get("/api/me/chats").json()["chats"][0]
+    assert saved["status"] == "error" and saved["error_code"] == "ART_DB_ERROR"
+
+
+# ---- request_id 로그 일관성 ----
+def _app_records(caplog):
+    return [r for r in caplog.records if r.name == "app" or r.name.startswith("app.")]
+
+
+def test_every_log_line_in_a_request_shares_request_id(client, monkeypatch, caplog):
+    import logging
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        r = client.post("/api/chat", json={"message": "봄 풍경"})
+    rid = r.json()["request_id"]
+    records = _app_records(caplog)
+    events = {r.getMessage().split()[0] for r in records}
+    assert {"request_received", "ai_call_start", "ai_call_success", "db_save_success"} <= events
+    assert {rec.request_id for rec in records} == {rid}  # 스레드풀·하위 로거(app.db 등)까지 같은 값
+
+
+def test_request_ids_differ_between_requests(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    a = client.post("/api/chat", json={"message": "1"}).json()["request_id"]
+    b = client.post("/api/chat", json={"message": "2"}).json()["request_id"]
+    assert a != b
+
+
+def test_logs_outside_requests_use_placeholder(caplog):
+    import logging
+    with caplog.at_level(logging.INFO):
+        logging.getLogger("app.test").info("startup_event")
+    assert caplog.records[-1].request_id == "-"
