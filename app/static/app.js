@@ -186,8 +186,19 @@ function showInstallSteps(steps) {
     $("install-modal").hidden = false;
 }
 
+const IOS_AUTO_PROMPT_KEY = "iosInstallPromptShown";
+
 if (!isStandalone() && isMobile()) {
     $("install-banner").hidden = false;
+
+    if (isIOS()) {
+        let alreadyShown = false;
+        try { alreadyShown = localStorage.getItem(IOS_AUTO_PROMPT_KEY) === "1"; } catch (_) { /* 프라이빗 모드 등 */ }
+        if (!alreadyShown) {
+            showInstallSteps(IOS_STEPS);
+            try { localStorage.setItem(IOS_AUTO_PROMPT_KEY, "1"); } catch (_) { /* 저장 실패해도 무시 */ }
+        }
+    }
 
     let deferredPrompt = null;
     window.addEventListener("beforeinstallprompt", (e) => {
