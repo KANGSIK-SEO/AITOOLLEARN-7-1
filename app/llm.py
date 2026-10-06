@@ -2,33 +2,71 @@
 
 주 모델: OpenAI gpt-6-astra. 429/401/403(=키 소진·장애)일 때만 Upstage solar-pro4로
 한 번 더 시도한다 (UPSTAGE_API_KEY가 없으면 폴백 없이 원래 에러를 그대로 던진다).
+
+재시도와 타임아웃:
+- 5xx·연결 오류(일시 장애)는 같은 제공자에게 LLM_MAX_RETRIES번까지 짧게 쉬었다 다시 보낸다.
+- 타임아웃은 재시도하지 않는다 — 이미 LLM_TIMEOUT_SECONDS를 기다렸으므로 다시 보내면 응답이 두 배로 늦어진다.
+- 429·401·403·기타 4xx도 재시도하지 않는다 (같은 요청을 다시 보내도 결과가 같다. 429는 폴백이 처리).
+- 재시도·폴백을 모두 합쳐 LLM_CALL_BUDGET_SECONDS 안에서만 시도하고, 남은 시간이 부족하면 AI_TIMEOUT으로 끝낸다.
 """
 import json
 import logging
 import socket
+import time
 import urllib.error
 import urllib.request
 
-from .config import (LLM_REASONING_EFFORT, LLM_TIMEOUT_SECONDS, OPENAI_BASE_URL,
-                     OPENAI_MODEL, UPSTAGE_BASE_URL, UPSTAGE_MODEL, AIUnavailableError,
-                     get_api_key, get_fallback_api_key)
+from .config import (LLM_CALL_BUDGET_SECONDS, LLM_MAX_RETRIES, LLM_REASONING_EFFORT,
+                     LLM_TIMEOUT_SECONDS, OPENAI_BASE_URL, OPENAI_MODEL, UPSTAGE_BASE_URL,
+                     UPSTAGE_MODEL, AIUnavailableError, get_api_key, get_fallback_api_key)
 
 log = logging.getLogger("app.llm")
 
 _FALLBACK_CODES = {"AI_RATE_LIMITED", "AI_KEY_MISSING"}  # GPT 쪽 "소진" 신호로 보는 코드
+_RETRY_STATUS = {500, 502, 503, 504}
+RETRY_BACKOFF_SECONDS = 0.5  # n번째 재시도 전 0.5×n초 대기
+MIN_ATTEMPT_SECONDS = 2.0    # 남은 예산이 이보다 적으면 새 시도를 시작하지 않는다
 
 
 def chat_completion(messages: list[dict], max_tokens: int = 700) -> str:
+    deadline = time.monotonic() + LLM_CALL_BUDGET_SECONDS
     try:
-        return _openai_chat_completion(messages, max_tokens)
+        return _openai_chat_completion(messages, max_tokens, deadline)
     except AIUnavailableError as e:
         if e.code not in _FALLBACK_CODES or not get_fallback_api_key():
             raise
         log.warning("llm_fallback_to_upstage reason=%s", e.code)
-        return _upstage_chat_completion(messages, max_tokens)
+        return _upstage_chat_completion(messages, max_tokens, deadline)
 
 
-def _openai_chat_completion(messages: list[dict], max_tokens: int) -> str:
+def _urlopen_json(req: urllib.request.Request, deadline: float, provider: str) -> dict:
+    """일시 장애만 재시도한다. 소켓 타임아웃은 남은 예산을 넘지 않게 줄인다.
+    예산이 부족하면 TimeoutError를 던져 호출부가 AI_TIMEOUT으로 바꾸게 한다."""
+    attempt = 0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining < MIN_ATTEMPT_SECONDS:
+            raise TimeoutError(f"LLM 호출 시간 예산({LLM_CALL_BUDGET_SECONDS}s) 소진")
+        try:
+            with urllib.request.urlopen(req, timeout=min(LLM_TIMEOUT_SECONDS, remaining)) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as e:
+            if e.code not in _RETRY_STATUS or attempt >= LLM_MAX_RETRIES:
+                raise
+            reason = f"http_{e.code}"
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, (socket.timeout, TimeoutError)) or attempt >= LLM_MAX_RETRIES:
+                raise
+            reason = "connection_error"
+        attempt += 1
+        wait = RETRY_BACKOFF_SECONDS * attempt
+        if deadline - time.monotonic() - wait < MIN_ATTEMPT_SECONDS:
+            raise TimeoutError(f"LLM 호출 시간 예산({LLM_CALL_BUDGET_SECONDS}s) 소진 (재시도 전)")
+        log.warning("llm_retry provider=%s attempt=%s reason=%s wait_s=%s", provider, attempt, reason, wait)
+        time.sleep(wait)
+
+
+def _openai_chat_completion(messages: list[dict], max_tokens: int, deadline: float) -> str:
     body = json.dumps({
         "model": OPENAI_MODEL, "messages": messages,
         "max_completion_tokens": max_tokens, "reasoning_effort": LLM_REASONING_EFFORT,
@@ -38,8 +76,7 @@ def _openai_chat_completion(messages: list[dict], max_tokens: int) -> str:
         headers={"Authorization": f"Bearer {get_api_key()}", "Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_SECONDS) as resp:
-            data = json.load(resp)
+        data = _urlopen_json(req, deadline, "openai")
         return data["choices"][0]["message"]["content"].strip()
     except (socket.timeout, TimeoutError) as e:
         raise AIUnavailableError("AI_TIMEOUT", "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요.") from e
@@ -57,7 +94,7 @@ def _openai_chat_completion(messages: list[dict], max_tokens: int) -> str:
         raise AIUnavailableError("AI_ERROR", "AI 응답을 해석하지 못했어요.") from e
 
 
-def _upstage_chat_completion(messages: list[dict], max_tokens: int) -> str:
+def _upstage_chat_completion(messages: list[dict], max_tokens: int, deadline: float) -> str:
     body = json.dumps({
         "model": UPSTAGE_MODEL, "messages": messages, "max_tokens": max_tokens, "temperature": 0.3,
     }).encode()
@@ -66,8 +103,7 @@ def _upstage_chat_completion(messages: list[dict], max_tokens: int) -> str:
         headers={"Authorization": f"Bearer {get_fallback_api_key()}", "Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_SECONDS) as resp:
-            data = json.load(resp)
+        data = _urlopen_json(req, deadline, "upstage")
         return data["choices"][0]["message"]["content"].strip()
     except (socket.timeout, TimeoutError) as e:
         raise AIUnavailableError("AI_TIMEOUT", "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요.") from e
