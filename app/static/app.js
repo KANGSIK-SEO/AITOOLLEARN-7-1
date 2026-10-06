@@ -227,9 +227,11 @@ if (!isStandalone() && isMobile()) {
 function currentOnDeviceFilters() {
     const yearFrom = $("od-year-from").value.trim();
     const yearTo = $("od-year-to").value.trim();
+    const subjects = $("od-subject").value.trim().toLowerCase()
+        .split(",").map((s) => s.trim()).filter(Boolean);
     return {
         style: $("od-style").value,
-        subject: $("od-subject").value.trim().toLowerCase(),
+        subjects,
         yearFrom: yearFrom ? Number(yearFrom) : null,
         yearTo: yearTo ? Number(yearTo) : null,
     };
@@ -258,6 +260,21 @@ $("ondevice-toggle").addEventListener("click", async () => {
 
 ["od-style", "od-subject", "od-year-from", "od-year-to"].forEach((id) => {
     $(id).addEventListener("input", refreshRulePreview);
+});
+
+$("od-parse-btn").addEventListener("click", () => {
+    const text = $("od-freetext").value.trim();
+    if (!text) return;
+    const parsed = OnDevice.parseFreeText(text);
+    $("od-style").value = parsed.style || "";
+    $("od-subject").value = parsed.subjects.join(", ");
+    $("od-year-from").value = parsed.yearFrom ?? "";
+    $("od-year-to").value = parsed.yearTo ?? "";
+    refreshRulePreview();
+    const explain = parsed.matchedTerms.length
+        ? parsed.matchedTerms.map(([ko, en]) => `"${ko}"→${en}`).join(", ")
+        : "인식된 키워드가 없어요. 아래 조건을 직접 선택해보세요. / No recognized keywords — try the filters below.";
+    addMessage("system", `🔤 키워드 사전으로 해석 (AI 없음) / Parsed via keyword dictionary, no AI: ${explain}`);
 });
 
 $("od-run-btn").addEventListener("click", async () => {

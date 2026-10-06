@@ -45,9 +45,14 @@
 
             <button id="ondevice-toggle" type="button" class="ondevice-toggle">🧠 온디바이스 추천 (서버 호출 없음) / On-device recommend (no server call)</button>
             <div id="ondevice-panel" class="ondevice-panel" hidden>
+                <p class="hint">자유롭게 써보세요, AI 없이 키워드 사전으로 해석해요 / Type freely — parsed on-device, no AI<br>(예: "봄 느낌 풍경화", "19세기 인상주의 바다")</p>
+                <div class="ondevice-row">
+                    <input type="text" id="od-freetext" placeholder="예: 봄 느낌 풍경화 / e.g. spring landscape">
+                    <button id="od-parse-btn" type="button" class="pill secondary">AI 없이 이해하기 / Parse (no AI)</button>
+                </div>
                 <div class="ondevice-row">
                     <select id="od-style"><option value="">화풍 전체 / Any style</option></select>
-                    <input type="text" id="od-subject" placeholder="주제 키워드 / subject keyword (예: landscape)">
+                    <input type="text" id="od-subject" placeholder="주제 키워드, 여러 개는 콤마로 / subject keywords, comma-separated">
                 </div>
                 <div class="ondevice-row">
                     <input type="number" id="od-year-from" placeholder="연도부터 / year from">
