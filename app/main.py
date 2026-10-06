@@ -117,6 +117,12 @@ def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/sw.js")
+def service_worker():
+    # 정적 마운트(/static)가 아니라 루트에서 서빙해야 서비스워커 적용 범위가 사이트 전체(/)가 된다.
+    return FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript")
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
