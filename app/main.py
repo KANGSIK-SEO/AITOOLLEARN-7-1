@@ -311,19 +311,23 @@ def explain_page(token: str):
 def explain_endpoint(body: ExplainRequest, request: Request):
     secret = explain.get_secret()
     if not secret or not hmac.compare_digest(body.secret, secret):
-        return error(401, "UNAUTHENTICATED", "암호가 올바르지 않습니다.")
+        return error(401, "UNAUTHENTICATED", "링크가 올바르지 않거나 만료됐어요. 받은 링크를 다시 확인해 주세요.")
     ip = guardian.client_ip(request)
     if not guardian.check_rate(f"explain:{ip}", limit=30, window_seconds=3600):
-        return error(429, "RATE_LIMITED", "질문이 너무 많아요. 잠시 후 다시 시도해 주세요.")
+        return error(429, "RATE_LIMITED", "질문은 1시간에 30개까지 할 수 있어요. 잠시 후 다시 물어봐 주세요.")
     question = body.question.strip()
     if not question:
         return error(400, "EMPTY_MESSAGE", "질문을 입력해 주세요.")
     if len(question) > CHAT_MAX_LENGTH:
-        return error(400, "MESSAGE_TOO_LONG", f"질문은 {CHAT_MAX_LENGTH}자 이하로 입력해 주세요.")
+        return error(400, "MESSAGE_TOO_LONG",
+                     f"질문이 너무 길어요 ({len(question)}자). {CHAT_MAX_LENGTH}자 이하로 줄여서 물어봐 주세요.")
     try:
         return {"answer": explain.ask(question)}
     except AIUnavailableError as e:
-        return error(STATUS_BY_CODE.get(e.code, 502), e.code, str(e))
+        log.warning("explain_ai_failure code=%s detail=%s", e.code, e)  # 원래 메시지는 로그에만
+        return error(STATUS_BY_CODE.get(e.code, 502), e.code, explain.friendly_ai_message(e.code))
+    except explain.ExplainUnavailable as e:
+        return error(503, "EXPLAIN_UNAVAILABLE", str(e))
 
 
 # ---- AIC 이미지 프록시 ----
