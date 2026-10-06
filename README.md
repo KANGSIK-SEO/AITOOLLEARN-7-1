@@ -113,7 +113,7 @@
 **DB 확인 가이드** (택 1 이상)
 1. 로그 조회 API: `curl -b cookies.txt https://<서비스>/api/me/chats`
 2. 확인용 SQL: `scripts/check_logs.sql` (`turso db shell <db-name> < scripts/check_logs.sql`)
-3. 서버 로그: `request_received`, `ai_call_start`, `ai_call_success|ai_call_failure`, `db_save_success|db_save_failure` 이벤트를 stdout(Vercel Logs)에 남긴다.
+3. 서버 로그: `request_received`, `ai_call_start`, `ai_call_success|ai_call_failure`, `db_save_success|db_save_failure`, `request_done` 이벤트를 stdout(Vercel Logs)에 남긴다. 모든 줄 끝에 `request_id`가 붙고 응답 헤더 `X-Request-ID`와 같다. 전체 목록: [`docs/logging.md`](docs/logging.md)
 
 ## 5. 실행·배포
 ```bash
