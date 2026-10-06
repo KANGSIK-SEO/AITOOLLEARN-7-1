@@ -368,34 +368,19 @@ def test_every_log_line_in_a_request_shares_request_id(client, monkeypatch, capl
     caplog.clear()
     with caplog.at_level(logging.INFO):
         r = client.post("/api/chat", json={"message": "봄 풍경"})
-    rid = r.headers["X-Request-ID"]
-    assert r.json()["request_id"] == rid
+    rid = r.json()["request_id"]
     records = _app_records(caplog)
     events = {r.getMessage().split()[0] for r in records}
-    assert {"request_received", "ai_call_start", "ai_call_success", "db_save_success", "request_done"} <= events
+    assert {"request_received", "ai_call_start", "ai_call_success", "db_save_success"} <= events
     assert {rec.request_id for rec in records} == {rid}  # 스레드풀·하위 로거(app.db 등)까지 같은 값
 
 
-def test_request_ids_differ_between_requests_and_exist_on_errors(client):
-    a = client.get("/api/health").headers["X-Request-ID"]
-    b = client.get("/api/health").headers["X-Request-ID"]
+def test_request_ids_differ_between_requests(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    a = client.post("/api/chat", json={"message": "1"}).json()["request_id"]
+    b = client.post("/api/chat", json={"message": "2"}).json()["request_id"]
     assert a != b
-    assert client.get("/api/me").headers["X-Request-ID"]  # 401 응답에도 붙는다
-
-
-def test_incoming_request_id_is_reused_only_if_safe(client):
-    assert client.get("/api/health", headers={"X-Request-ID": "edge-abc_123"}).headers["X-Request-ID"] == "edge-abc_123"
-    bad = client.get("/api/health", headers={"X-Request-ID": "x\" injected=1"}).headers["X-Request-ID"]
-    assert bad != "x\" injected=1" and len(bad) == 8
-
-
-def test_request_done_logs_route_template_not_raw_path(client, caplog):
-    import logging
-    with caplog.at_level(logging.INFO):
-        client.get("/api/me/chats?limit=5&secret=leak")
-    done = [r.getMessage() for r in _app_records(caplog) if r.getMessage().startswith("request_done")]
-    assert len(done) == 1 and done[0].startswith("request_done method=GET route=/api/me/chats status=401 ")
-    assert "leak" not in done[0]
 
 
 def test_logs_outside_requests_use_placeholder(caplog):

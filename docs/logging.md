@@ -10,16 +10,14 @@ INFO ai_call_success latency_ms=812 artworks=6 request_id=71732be3
 ## request_id
 
 - 모든 줄 끝에 `request_id`가 자동으로 붙는다(`app/reqctx.py`). 메시지에 직접 쓰지 않는다.
-- 요청마다 새로 만들고(8자리 hex), 응답 헤더 `X-Request-ID`와 `POST /api/chat` 응답 body의 `request_id`도 같은 값이다.
-- 클라이언트·프록시가 `X-Request-ID`(영문·숫자·`._-`, 64자 이하)를 보내면 그 값을 이어 쓴다.
+- 요청마다 새로 만들고(8자리 hex), `POST /api/chat` 응답 body의 `request_id`도 같은 값이다.
 - 요청 밖에서 남는 로그(서버 시작 등)는 `request_id=-`.
-- 사용자가 오류를 신고하면 화면/헤더의 request_id로 Vercel Logs를 검색해 그 요청의 로그를 한 번에 모아 본다.
+- 사용자가 오류를 신고하면 응답의 request_id로 Vercel Logs를 검색해 그 요청의 로그를 한 번에 모아 본다.
 
 ## 이벤트 목록
 
 | 이벤트 | 레벨 | 필드 | 언제 |
 |---|---|---|---|
-| `request_done` | INFO | `method` `route` `status` `latency_ms` | 모든 `/api/*` 요청이 끝날 때. `route`는 경로 템플릿(예: `/api/favorites/{artwork_id}`)이라 토큰·쿼리스트링이 남지 않는다 |
 | `signup_success` | INFO | `user_id` `is_premium` | 회원가입 성공 |
 | `login_success` | INFO | `user_id` `is_premium` | 로그인 성공 |
 | `login_failed` | INFO | — | 이메일/비밀번호 불일치 (어느 쪽이 틀렸는지·이메일은 남기지 않음) |
@@ -49,7 +47,6 @@ INFO request_received user_id=1 path=/api/chat request_id=71732be3
 INFO ai_call_start user_id=1 request_id=71732be3
 INFO ai_call_success latency_ms=3 artworks=6 request_id=71732be3
 INFO db_save_success user_id=1 chat_id=1 status=ok request_id=71732be3
-INFO request_done method=POST route=/api/chat status=200 latency_ms=6 request_id=71732be3
 ```
 
 ## 남기지 않는 것
@@ -58,5 +55,5 @@ INFO request_done method=POST route=/api/chat status=200 latency_ms=6 request_id
 
 ## 테스트
 
-`tests/test_api.py`의 `test_every_log_line_in_a_request_shares_request_id` 외 4개가
-request_id 일관성, 수신 헤더 검증, 경로 템플릿 기록, 요청 밖 기본값을 확인한다.
+`tests/test_api.py`의 `test_every_log_line_in_a_request_shares_request_id` 외 2개가
+한 요청 안의 request_id 일관성, 요청마다 다른 값, 요청 밖 기본값을 확인한다.

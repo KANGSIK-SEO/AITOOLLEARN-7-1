@@ -40,24 +40,14 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],
-    expose_headers=["X-Request-ID"],
     allow_credentials=False,
 )
 
 @app.middleware("http")
 async def request_context(request: Request, call_next):
-    """요청마다 request_id를 정해 로그·응답 헤더(X-Request-ID)에 일관되게 남긴다."""
-    request_id = reqctx.new_request_id(request.headers.get("x-request-id"))
-    reqctx.set_request_id(request_id)
-    started = time.monotonic()
-    response = await call_next(request)
-    if request.url.path.startswith("/api/"):
-        # 경로 템플릿만 남긴다 (/explain/{token} 같은 비밀 값·쿼리스트링이 로그에 남지 않도록)
-        route = request.scope.get("route")
-        log.info("request_done method=%s route=%s status=%s latency_ms=%s", request.method,
-                 getattr(route, "path", "unmatched"), response.status_code, int((time.monotonic() - started) * 1000))
-    response.headers["X-Request-ID"] = request_id
-    return response
+    """요청마다 request_id를 정해, 그 요청에서 남는 모든 로그 줄에 같은 값이 붙게 한다 (app/reqctx.py)."""
+    reqctx.set_request_id(reqctx.new_request_id())
+    return await call_next(request)
 
 
 STATUS_BY_CODE = {"AI_TIMEOUT": 504, "AI_ERROR": 502, "AI_RATE_LIMITED": 429,
@@ -86,15 +76,14 @@ async def validation_exc(_: Request, __: RequestValidationError):
 @app.exception_handler(db.DbError)
 async def db_exc(_: Request, exc: db.DbError):
     log.error("db_error detail=%s", exc)
-    guardian.record_incident("reliability", "DB_ERROR", str(exc), {"request_id": reqctx.get_request_id()}, "high")
+    guardian.record_incident("reliability", "DB_ERROR", str(exc), {}, "high")
     return error(503, "DB_ERROR", "데이터베이스에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.")
 
 
 @app.exception_handler(Exception)
 async def unhandled_exc(_: Request, exc: Exception):
     log.error("unhandled_exception detail=%r", exc, exc_info=True)
-    guardian.record_incident("reliability", "UNHANDLED_EXCEPTION", repr(exc),
-                             {"request_id": reqctx.get_request_id()}, "high")
+    guardian.record_incident("reliability", "UNHANDLED_EXCEPTION", repr(exc), {}, "high")
     return error(500, "INTERNAL_ERROR", "예상치 못한 오류가 발생했어요. 잠시 후 다시 시도해 주세요.")
 
 

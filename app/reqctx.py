@@ -6,17 +6,14 @@ contextvar라 동기 엔드포인트가 도는 스레드풀로도 값이 전달�
 """
 import contextvars
 import logging
-import re
 import uuid
 
 _request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
-_INCOMING_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 LOG_FORMAT = "%(levelname)s %(message)s request_id=%(request_id)s"
 
 
-def new_request_id(incoming: str | None = None) -> str:
-    """클라이언트/프록시가 준 X-Request-ID가 안전한 형식이면 이어 쓰고, 아니면 새로 만든다."""
-    return incoming if incoming and _INCOMING_RE.match(incoming) else uuid.uuid4().hex[:8]
+def new_request_id() -> str:
+    return uuid.uuid4().hex[:8]
 
 
 def set_request_id(value: str) -> None:
