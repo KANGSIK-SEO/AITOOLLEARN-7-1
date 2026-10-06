@@ -74,3 +74,81 @@ def test_search_always_includes_highlighted_work_first(seeded_art_db):
     for _ in range(10):
         results = art.search(["spring", "landscape"], limit=6)
         assert results[0]["is_highlight"] == 1
+
+
+# ---- search: 연도·작가 필터, FTS 특수문자 ----
+# (title, artist, year_start, year_end, is_public_domain)
+FILTER_ROWS = [
+    ("Sea A", "Claude Monet", 1870, 1872, 1),
+    ("Sea B", "Claude Monet", 1890, 1890, 1),
+    ("Sea C", "J. M. W. Turner", 1820, 1825, 1),
+    ("Sea D", "Winslow Homer", 1899, 1901, 1),
+    ("Sea E", "Claude Monet", 1880, 1880, 0),   # 퍼블릭 도메인 아님 → 항상 제외
+]
+
+
+@pytest.fixture()
+def filter_art_db(tmp_path, monkeypatch):
+    db_path = tmp_path / "filter_art.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript((ROOT / "db" / "schema.sql").read_text(encoding="utf-8"))
+    for i, (title, artist, y0, y1, pd) in enumerate(FILTER_ROWS):
+        conn.execute(
+            "INSERT INTO artworks (source, source_id, title, artist, year_start, year_end, image_url, "
+            "source_url, subjects, is_public_domain) VALUES ('met', ?, ?, ?, ?, ?, 'https://x/i.jpg', "
+            "'https://x', 'sea marine', ?)", (str(i), title, artist, y0, y1, pd))
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(art, "ART_DB", db_path)
+
+
+def _titles(results):
+    return sorted(w["title"] for w in results)
+
+
+def test_search_year_filter_uses_range_overlap(filter_art_db):
+    # 제작 기간이 [year_from, year_to]와 겹치면 포함 (경계값 포함)
+    assert _titles(art.search(["sea"], year_from=1872, year_to=1890, limit=50)) == ["Sea A", "Sea B"]
+    assert _titles(art.search(["sea"], year_from=1900, limit=50)) == ["Sea D"]
+    assert _titles(art.search(["sea"], year_to=1825, limit=50)) == ["Sea C"]
+    assert art.search(["sea"], year_from=1950, limit=50) == []
+
+
+def test_search_artist_filter_is_partial_case_insensitive_match(filter_art_db):
+    assert _titles(art.search(["sea"], artist="monet", limit=50)) == ["Sea A", "Sea B"]
+    assert _titles(art.search(["sea"], artist="Turner", limit=50)) == ["Sea C"]
+    assert art.search(["sea"], artist="Rembrandt", limit=50) == []
+
+
+def test_search_combines_artist_and_year_filters(filter_art_db):
+    assert _titles(art.search(["sea"], artist="Monet", year_from=1885, limit=50)) == ["Sea B"]
+
+
+def test_search_filters_work_without_keywords(filter_art_db):
+    # 한국어만 있어 FTS 토큰이 없으면 필터만으로 검색한다
+    assert _titles(art.search(["바다"], artist="Homer", limit=50)) == ["Sea D"]
+
+
+def test_search_never_returns_non_public_domain(filter_art_db):
+    assert "Sea E" not in _titles(art.search(["sea"], limit=50))
+    assert "Sea E" not in _titles(art.search([], artist="Monet", year_from=1880, year_to=1880, limit=50))
+
+
+@pytest.mark.parametrize("keywords", [
+    ['"'], ['sea"'], ["sea*"], ["^sea"], ["NOT"], ["AND", "OR"], ["NEAR(sea"], ["sea:marine"],
+    ["(sea)"], ["-sea"], ["sea'; DROP TABLE artworks; --"], [""], ["   "], [],
+])
+def test_search_fts_special_characters_never_raise(filter_art_db, keywords):
+    results = art.search(keywords, limit=50)
+    assert all(w["title"].startswith("Sea") for w in results)
+
+
+@pytest.mark.parametrize("keywords, expected", [
+    (['"sea"'], '"sea"'),
+    (["sea*", "^marine"], '"sea" OR "marine"'),
+    (["NEAR(sea, sky)"], '"NEAR" OR "sea" OR "sky"'),
+    (["sea", "SEA", "sea"], '"sea" OR "SEA"'),
+    (["봄", "!!!"], ""),
+])
+def test_fts_query_quotes_every_token(keywords, expected):
+    assert art._fts_query(keywords) == expected

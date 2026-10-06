@@ -57,38 +57,77 @@
 
 ## 3. API 명세
 오류는 항상 `{"error": {"code": "...", "message": "..."}}`.
+인증: 웹은 로그인 시 발급되는 `session` 쿠키(HttpOnly)로, TV 앱 등 다른 오리진 클라이언트는 응답의 `token`을
+`Authorization: Bearer <token>` 헤더로 보낸다. 둘 다 있으면 쿠키가 우선한다. 토큰 유효기간은 7일.
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| POST | `/api/auth/signup` | `{email, password(8자+), private_code?}` → 201, 세션 쿠키 발급 (`private_code`가 `PREMIUM_CODE`와 일치하면 프리미엄 가입) |
-| POST | `/api/auth/login` | 로그인 → 200, 세션 쿠키 |
-| POST | `/api/auth/logout` | 쿠키 삭제 |
-| GET | `/api/me` | 현재 사용자 |
-| POST | `/api/chat` | **로그인 필요**. 질문 → 답변 + 작품 카드 |
-| GET | `/api/me/chats?limit=20&offset=0` | 내 대화 로그 조회 |
-| GET | `/api/health` | 상태 확인 |
+| POST | `/api/auth/signup` | `{email, password(8~128자), private_code?}` → 201, `{user, token}` + 세션 쿠키 (`private_code`가 `PREMIUM_CODE`와 일치하면 프리미엄 가입) |
+| POST | `/api/auth/login` | `{email, password}` → 200, `{user, token}` + 세션 쿠키 |
+| POST | `/api/auth/logout` | 쿠키 삭제 → `{"ok": true}` |
+| GET | `/api/me` | **로그인 필요**. 현재 사용자 |
+| POST | `/api/chat` | **로그인 필요**. 질문 → 답변(한국어+영어) + 작품 카드 + 남은 무료 횟수 |
+| GET | `/api/me/chats?limit=20&offset=0` | **로그인 필요**. 내 대화 로그 (최신순, `limit` 1~100) |
+| POST | `/api/favorites` | **로그인 필요**. `{artwork_id}` 작품 즐겨찾기 저장 (상세: `docs/track-c.md`) |
+| DELETE | `/api/favorites/{artwork_id}` | **로그인 필요**. 즐겨찾기 해제 |
+| GET | `/api/me/favorites?limit=20&offset=0` | 내 즐겨찾기 작품 카드 조회 |
+| GET | `/api/health` | 상태 확인 → `{"status": "ok"}` |
 | GET | `/api/guardian/daily-digest` | 가디언 일일 점검 (`CRON_SECRET` 필요, Vercel Cron 전용) |
+| POST | `/api/explain` | 피어 리뷰용 설명 에이전트. `{question, secret}` → `{"answer": "..."}` (`EXPLAIN_AGENT_SECRET` 미설정 시 항상 401) |
+| GET | `/explain/{token}` | 설명 에이전트 화면 (토큰이 틀리거나 비활성이면 404) |
+
+아래 예시는 로컬 서버에 실제로 요청해 받은 응답의 형태 그대로다 (`token`은 줄였고, AI 답변 문장과 `latency_ms`는 예시 값).
+
+`POST /api/auth/signup` · `POST /api/auth/login`
+```json
+// 요청
+{"email": "a@b.com", "password": "password123"}
+// 응답 201(가입) / 200(로그인) — Set-Cookie: session=...
+{"user": {"id": 1, "email": "a@b.com", "is_premium": false}, "token": "eyJ1aWQiOiAx..."}
+```
+
+`GET /api/me`
+```json
+{"user": {"id": 1, "email": "a@b.com", "created_at": "2026-10-06T13:50:08+00:00", "is_premium": false}}
+```
 
 `POST /api/chat`
 ```json
 // 요청
 {"message": "봄 느낌 풍경화 3개 찾아줘"}
-// 응답 200
-{"chat_id": 12, "saved": true, "request_id": "7489f728",
- "reply": "[1] Spring in France — ...",
- "artworks": [{"id": 101, "source": "aic", "title": "Spring in France", "artist": "Robert William Vonnoh",
-               "date_display": "1890", "image_url": "https://...", "source_url": "https://www.artic.edu/artworks/...",
-               "license": "CC0"}],
- "remaining_free": 7, "show_limit_warning": true}
-// remaining_free: 초대코드(프리미엄) 사용자는 상한이 없어 항상 null. show_limit_warning은
-// 남은 무료 질문이 FREE_LIMIT_WARNING_THRESHOLD(기본 10) 이하일 때만 true.
+// 응답 200 (artworks는 1개만 표시)
+{"chat_id": 1, "saved": true, "request_id": "d20def8c",
+ "reply": "[1] Spring in Brittany — ...\n\nEnglish: [1] Spring in Brittany — ...",
+ "artworks": [{"id": 4613, "source": "met", "title": "Spring in Brittany", "artist": "Paul Sébillot",
+               "date_display": "1874", "medium": "Oil on wood",
+               "image_url": "https://images.metmuseum.org/CRDImages/ep/original/DP-17429-001.jpg",
+               "thumbnail_url": "https://images.metmuseum.org/CRDImages/ep/web-large/DP-17429-001.jpg",
+               "source_url": "https://metmuseum.org/art/collection/search/437647", "license": "CC0",
+               "credit_line": "Gift of Paul-Yves Sébillot, 1949", "is_highlight": 0}],
+ "remaining_free": 99, "show_limit_warning": false}
+// saved: 대화 로그 저장 성공 여부 (DB 저장에 실패해도 답변은 200으로 준다 → chat_id null, saved false)
+// remaining_free: 이번 질문을 포함해 남은 평생 무료 질문 수. 초대코드(프리미엄) 사용자는 상한이 없어 항상 null.
+// show_limit_warning: 남은 무료 질문이 FREE_LIMIT_WARNING_THRESHOLD(기본 10) 이하일 때만 true.
+// AIC 작품의 image_url·thumbnail_url은 서버 프록시 주소(/api/img/aic/<id>?w=1686|400)로 바뀌어 나온다.
 // 오류 예
 {"error": {"code": "AI_TIMEOUT", "message": "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요."}}
 ```
-오류 코드: `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`/`INVALID_INPUT`(400)
-`RATE_LIMITED`(429, 시간당 일반 30회·초대코드 300회) `FREE_LIMIT_REACHED`(403, 초대코드 없는 계정의 평생 무료 질문 100회 소진)
-`AI_TIMEOUT`(504) `AI_ERROR`(502) `AI_RATE_LIMITED`(429) `AI_BACKED_OFF`/`AI_KEY_MISSING`(503) `DB_ERROR`/`ART_DB_ERROR`(503)
-`INTERNAL_ERROR`(500, 예상 못한 예외는 모두 여기로 모이고 가디언이 기록한다)
+
+`GET /api/me/chats?limit=1`
+```json
+{"chats": [{"id": 1, "question": "봄 느낌 풍경화 3개 찾아줘", "answer": "[1] Spring in Brittany — ...",
+            "status": "ok", "error_code": null, "latency_ms": 2310, "created_at": "2026-10-06T13:50:08+00:00"}]}
+// 실패한 질문은 status "error", answer null, error_code "AI_TIMEOUT" 등으로 남는다.
+```
+
+오류 코드:
+- 공통: `UNAUTHENTICATED`(401) `INVALID_INPUT`(422 요청 형식 오류 / 400 의심스러운 입력 차단) `DB_ERROR`(503)
+  `INTERNAL_ERROR`(500, 예상 못한 예외는 모두 여기로 모이고 가디언이 기록한다)
+- 가입·로그인: `INVALID_EMAIL`/`INVALID_PASSWORD`(400) `EMAIL_TAKEN`(409) `INVALID_CREDENTIALS`(401)
+  `RATE_LIMITED`(429, 같은 IP의 가입 시간당 10회·로그인 10분당 20회 초과 또는 같은 이메일 로그인 5회 실패 후 15분 잠금)
+- 챗봇: `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`(400) `RATE_LIMITED`(429, 시간당 일반 30회·초대코드 300회)
+  `FREE_LIMIT_REACHED`(403, 초대코드 없는 계정의 평생 무료 질문 100회 소진)
+  `AI_TIMEOUT`(504) `AI_ERROR`(502) `AI_RATE_LIMITED`(429) `AI_BACKED_OFF`/`AI_KEY_MISSING`(503) `ART_DB_ERROR`(503)
 
 **초대코드(프리미엄)**: 회원가입 시 `private_code`로 `PREMIUM_CODE`(서버 환경변수)와 일치하는 값을 보내면 해당 계정은
 - 시간당 질문 한도가 `CHAT_LIMIT_PER_HOUR_PREMIUM`(기본 300)으로 상향되고, **평생 무료 질문 100회 제한이 적용되지 않는다**
@@ -106,6 +145,7 @@
 - Turso/SQLite (쓰기): 
   - `users(id, email UNIQUE, password_hash, is_premium, created_at)`
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
+  - `favorites(id, user_id → users.id, artwork_id(art.db artworks.id), created_at, UNIQUE(user_id, artwork_id))`
   - `incidents(id, category[reliability|security], code, message, context(JSON), severity, auto_action, diagnosis, created_at)` — 가디언 사건 로그. `diagnosis`는 일일 배치 분석 전까지 NULL.
   - `runtime_flags(key, value, updated_at)` — AI 백오프·로그인 잠금 등 자동 대응 상태값 (예: `ai_backoff_until`, `lockout:<email>`)
   - `rate_counters(bucket, count, window_start)` — IP/이메일 단위 레이트리밋 카운터
@@ -113,7 +153,7 @@
 **DB 확인 가이드** (택 1 이상)
 1. 로그 조회 API: `curl -b cookies.txt https://<서비스>/api/me/chats`
 2. 확인용 SQL: `scripts/check_logs.sql` (`turso db shell <db-name> < scripts/check_logs.sql`)
-3. 서버 로그: `request_received`, `ai_call_start`, `ai_call_success|ai_call_failure`, `db_save_success|db_save_failure` 이벤트를 stdout(Vercel Logs)에 남긴다.
+3. 서버 로그: `request_received`, `ai_call_start`, `ai_call_success|ai_call_failure`, `db_save_success|db_save_failure` 이벤트를 stdout(Vercel Logs)에 남긴다. 모든 줄 끝에 `request_id`가 붙는다. 한 요청 안의 단계별 소요시간은 `chat_stage stage=intent|search|answer request_id=… latency_ms=… ok=…`로 따로 남는다(`app/chat.py`). 전체 이벤트 목록: [`docs/logging.md`](docs/logging.md)
 
 ## 5. 실행·배포
 ```bash

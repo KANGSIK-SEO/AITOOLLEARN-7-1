@@ -1,4 +1,4 @@
-"""FastAPI 앱: 회원가입/로그인, 챗봇 질문/응답, 내 대화 로그 조회."""
+"""FastAPI 앱: 회원가입/로그인, 챗봇 질문/응답, 내 대화 로그 조회, 작품 즐겨찾기."""
 import hmac
 import json
 import logging
@@ -8,7 +8,6 @@ import sqlite3
 import time
 import urllib.error
 import urllib.request
-import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -19,13 +18,19 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, chat, db, explain, guardian
+from . import art, auth, chat, db, explain, guardian, reqctx
 from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, CHAT_LIFETIME_LIMIT_FREE,
                      CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
-                     CONTEXT_TURNS, CRON_SECRET, FREE_LIMIT_WARNING_THRESHOLD, AIUnavailableError)
+                     CONTEXT_TURNS, CRON_SECRET, FREE_LIMIT_WARNING_THRESHOLD, AIUnavailableError,
+                     validate_env)
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+reqctx.install()
+logging.basicConfig(level=logging.INFO, format=reqctx.LOG_FORMAT)
 log = logging.getLogger("app")
+
+# 필수 환경변수가 틀리면 첫 요청이 아니라 서버 시작 시점에 고칠 방법과 함께 실패한다
+for _warning in validate_env():
+    log.warning("config_warning %s", _warning)
 
 STATIC_DIR = Path(__file__).parent / "static"
 COOKIE = "session"
@@ -42,6 +47,13 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
     allow_credentials=False,
 )
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    """요청마다 request_id를 정해, 그 요청에서 남는 모든 로그 줄에 같은 값이 붙게 한다 (app/reqctx.py)."""
+    reqctx.set_request_id(reqctx.new_request_id())
+    return await call_next(request)
+
 
 STATUS_BY_CODE = {"AI_TIMEOUT": 504, "AI_ERROR": 502, "AI_RATE_LIMITED": 429,
                   "AI_KEY_MISSING": 503, "AI_BACKED_OFF": 503}
@@ -105,6 +117,10 @@ class Credentials(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+
+
+class FavoriteRequest(BaseModel):
+    artwork_id: int
 
 
 def _set_cookie(resp: JSONResponse, token: str, request: Request) -> None:
@@ -216,8 +232,8 @@ def _save_chat(user_id, question, answer, status, error_code, latency_ms, artwor
 @app.post("/api/chat")
 def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_session)):
     user_id, is_premium = session_data["uid"], session_data["premium"]
-    request_id = uuid.uuid4().hex[:8]
-    log.info("request_received user_id=%s path=/api/chat request_id=%s", user_id, request_id)
+    request_id = reqctx.get_request_id()
+    log.info("request_received user_id=%s path=/api/chat", user_id)
 
     question = body.message.strip()
     if not question:
@@ -235,7 +251,7 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
     since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
     used_hour = db.execute("SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND created_at > ?", (user_id, since))[0]["n"]
     if used_hour >= hour_limit:
-        log.warning("rate_limited user_id=%s request_id=%s is_premium=%s", user_id, request_id, is_premium)
+        log.warning("rate_limited user_id=%s is_premium=%s", user_id, is_premium)
         return error(429, "RATE_LIMITED", "질문이 너무 많아요. 잠시 후 다시 시도해 주세요.")
 
     remaining_free = None
@@ -243,7 +259,7 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
         used_lifetime = db.execute(
             "SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND status = 'ok'", (user_id,))[0]["n"]
         if used_lifetime >= CHAT_LIFETIME_LIMIT_FREE:
-            log.warning("free_limit_reached user_id=%s request_id=%s", user_id, request_id)
+            log.warning("free_limit_reached user_id=%s", user_id)
             return error(403, "FREE_LIMIT_REACHED",
                         f"무료 이용 {CHAT_LIFETIME_LIMIT_FREE}회를 모두 사용했어요. 초대코드가 있다면 입력해 보세요.")
         remaining_free = CHAT_LIFETIME_LIMIT_FREE - used_lifetime - 1
@@ -253,15 +269,15 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
         (user_id, CONTEXT_TURNS))))
 
     started = time.monotonic()
-    log.info("ai_call_start user_id=%s request_id=%s", user_id, request_id)
+    log.info("ai_call_start user_id=%s", user_id)
     art_limit = ART_RESULTS_LIMIT_PREMIUM if is_premium else ART_RESULTS_LIMIT
     try:
-        intent = chat.extract_intent(question)
-        works, relaxed = chat.find_artworks(intent, limit=art_limit)
-        answer = chat.compose_answer(question, works, history, relaxed=relaxed)
+        intent = chat.extract_intent(question, request_id=request_id)
+        works, relaxed = chat.find_artworks(intent, limit=art_limit, request_id=request_id)
+        answer = chat.compose_answer(question, works, history, relaxed=relaxed, request_id=request_id)
     except AIUnavailableError as e:
         latency = int((time.monotonic() - started) * 1000)
-        log.error("ai_call_failure request_id=%s code=%s latency_ms=%s", request_id, e.code, latency)
+        log.error("ai_call_failure code=%s latency_ms=%s", e.code, latency)
         _save_chat(user_id, question, None, "error", e.code, latency, [])
         guardian.record_incident("reliability", e.code, str(e), {"request_id": request_id, "latency_ms": latency},
                                  "medium" if e.code == "AI_RATE_LIMITED" else "low")
@@ -269,12 +285,12 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
         return error(STATUS_BY_CODE.get(e.code, 502), e.code, str(e))
     except sqlite3.Error as e:
         latency = int((time.monotonic() - started) * 1000)
-        log.error("art_db_failure request_id=%s detail=%s", request_id, e)
+        log.error("art_db_failure detail=%s", e)
         _save_chat(user_id, question, None, "error", "ART_DB_ERROR", latency, [])
         return error(503, "ART_DB_ERROR", "작품 데이터베이스를 읽지 못했어요.")
 
     latency = int((time.monotonic() - started) * 1000)
-    log.info("ai_call_success request_id=%s latency_ms=%s artworks=%s", request_id, latency, len(works))
+    log.info("ai_call_success latency_ms=%s artworks=%s", latency, len(works))
     chat_id = _save_chat(user_id, question, answer, "ok", None, latency, [w["id"] for w in works])
     show_limit_warning = remaining_free is not None and remaining_free <= FREE_LIMIT_WARNING_THRESHOLD
     return {"chat_id": chat_id, "saved": chat_id is not None, "request_id": request_id,
@@ -289,6 +305,55 @@ def my_chats(limit: int = 20, offset: int = 0, user_id: int = Depends(current_us
         "SELECT id, question, answer, status, error_code, latency_ms, created_at FROM chats "
         "WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?", (user_id, limit, max(0, offset)))
     return {"chats": rows}
+
+
+# ---- 작품 즐겨찾기 ----
+def _artwork_or_404(artwork_id: int) -> None:
+    try:
+        exists = artwork_id in art.get_by_ids([artwork_id])
+    except sqlite3.Error as e:
+        log.error("art_db_failure path=/api/favorites detail=%s", e)
+        raise HTTPException(503, {"code": "ART_DB_ERROR", "message": "작품 데이터베이스를 읽지 못했어요."})
+    if not exists:
+        raise HTTPException(404, {"code": "ARTWORK_NOT_FOUND", "message": "존재하지 않는 작품입니다."})
+
+
+@app.post("/api/favorites")
+def add_favorite(body: FavoriteRequest, user_id: int = Depends(current_user)):
+    """이미 저장한 작품이면 200(created=false), 새로 저장하면 201. 같은 요청을 반복해도 안전하다."""
+    _artwork_or_404(body.artwork_id)
+    created = db.execute(
+        "INSERT INTO favorites (user_id, artwork_id, created_at) VALUES (?, ?, ?) "
+        "ON CONFLICT (user_id, artwork_id) DO NOTHING RETURNING id",
+        (user_id, body.artwork_id, _now()))
+    log.info("favorite_add user_id=%s artwork_id=%s created=%s", user_id, body.artwork_id, bool(created))
+    return JSONResponse({"artwork_id": body.artwork_id, "created": bool(created)},
+                        status_code=201 if created else 200)
+
+
+@app.delete("/api/favorites/{artwork_id}")
+def remove_favorite(artwork_id: int, user_id: int = Depends(current_user)):
+    """저장하지 않은 작품을 지워도 오류가 아니다(removed=false)."""
+    removed = db.execute("DELETE FROM favorites WHERE user_id = ? AND artwork_id = ? RETURNING id",
+                         (user_id, artwork_id))
+    log.info("favorite_remove user_id=%s artwork_id=%s removed=%s", user_id, artwork_id, bool(removed))
+    return {"artwork_id": artwork_id, "removed": bool(removed)}
+
+
+@app.get("/api/me/favorites")
+def my_favorites(limit: int = 20, offset: int = 0, user_id: int = Depends(current_user)):
+    """최근 저장 순. 미술 DB에서 사라진 작품은 목록에서 빠진다."""
+    limit = max(1, min(limit, 100))
+    rows = db.execute(
+        "SELECT artwork_id, created_at FROM favorites WHERE user_id = ? "
+        "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", (user_id, limit, max(0, offset)))
+    try:
+        cards = art.get_by_ids([r["artwork_id"] for r in rows])
+    except sqlite3.Error as e:
+        log.error("art_db_failure path=/api/me/favorites detail=%s", e)
+        return error(503, "ART_DB_ERROR", "작품 데이터베이스를 읽지 못했어요.")
+    return {"favorites": [{**cards[r["artwork_id"]], "favorited_at": r["created_at"]}
+                          for r in rows if r["artwork_id"] in cards]}
 
 
 # ---- 설명 에이전트 (피어 리뷰용) ----
@@ -311,19 +376,23 @@ def explain_page(token: str):
 def explain_endpoint(body: ExplainRequest, request: Request):
     secret = explain.get_secret()
     if not secret or not hmac.compare_digest(body.secret, secret):
-        return error(401, "UNAUTHENTICATED", "암호가 올바르지 않습니다.")
+        return error(401, "UNAUTHENTICATED", "링크가 올바르지 않거나 만료됐어요. 받은 링크를 다시 확인해 주세요.")
     ip = guardian.client_ip(request)
     if not guardian.check_rate(f"explain:{ip}", limit=30, window_seconds=3600):
-        return error(429, "RATE_LIMITED", "질문이 너무 많아요. 잠시 후 다시 시도해 주세요.")
+        return error(429, "RATE_LIMITED", "질문은 1시간에 30개까지 할 수 있어요. 잠시 후 다시 물어봐 주세요.")
     question = body.question.strip()
     if not question:
         return error(400, "EMPTY_MESSAGE", "질문을 입력해 주세요.")
     if len(question) > CHAT_MAX_LENGTH:
-        return error(400, "MESSAGE_TOO_LONG", f"질문은 {CHAT_MAX_LENGTH}자 이하로 입력해 주세요.")
+        return error(400, "MESSAGE_TOO_LONG",
+                     f"질문이 너무 길어요 ({len(question)}자). {CHAT_MAX_LENGTH}자 이하로 줄여서 물어봐 주세요.")
     try:
         return {"answer": explain.ask(question)}
     except AIUnavailableError as e:
-        return error(STATUS_BY_CODE.get(e.code, 502), e.code, str(e))
+        log.warning("explain_ai_failure code=%s detail=%s", e.code, e)  # 원래 메시지는 로그에만
+        return error(STATUS_BY_CODE.get(e.code, 502), e.code, explain.friendly_ai_message(e.code))
+    except explain.ExplainUnavailable as e:
+        return error(503, "EXPLAIN_UNAVAILABLE", str(e))
 
 
 # ---- AIC 이미지 프록시 ----
