@@ -142,3 +142,72 @@ $("logout-btn").addEventListener("click", async () => { await api("/api/auth/log
     const { ok, data } = await api("/api/me");
     show(ok, ok ? data.user.email : "", ok ? data.user.is_premium : false);
 })();
+
+// ---- 앱 설치 (PWA) ----
+const SHARE_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9"/></svg>`;
+const ADD_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M12 8v8M8 12h8"/></svg>`;
+const MENU_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/></svg>`;
+const CHECK_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+
+const IOS_STEPS = [
+    [SHARE_ICON, "Safari 하단(또는 상단)의 공유 버튼을 탭하세요. / Tap the Share button in Safari."],
+    [ADD_ICON, "아래로 스크롤해서 \"홈 화면에 추가\"를 선택하세요. / Scroll down and tap \"Add to Home Screen\"."],
+    [CHECK_ICON, "오른쪽 위 \"추가\"를 탭하면 완료! / Tap \"Add\" in the top right to finish."],
+];
+const GENERIC_STEPS = [
+    [MENU_ICON, "브라우저 메뉴(⋮)를 여세요. / Open the browser menu (⋮)."],
+    [ADD_ICON, "\"앱 설치\" 또는 \"홈 화면에 추가\"를 선택하세요. / Tap \"Install app\" or \"Add to Home screen\"."],
+];
+
+function isStandalone() {
+    return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+function isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent)
+        || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+function isMobile() {
+    return isIOS() || /Android/i.test(navigator.userAgent);
+}
+
+function showInstallSteps(steps) {
+    const list = $("install-steps");
+    list.innerHTML = "";
+    steps.forEach(([icon, text]) => {
+        const li = document.createElement("li");
+        const iconSpan = document.createElement("span");
+        iconSpan.className = "step-icon";
+        iconSpan.innerHTML = icon;
+        const textSpan = document.createElement("span");
+        textSpan.textContent = text;
+        li.append(iconSpan, textSpan);
+        list.appendChild(li);
+    });
+    $("install-modal").hidden = false;
+}
+
+if (!isStandalone() && isMobile()) {
+    $("install-banner").hidden = false;
+
+    let deferredPrompt = null;
+    window.addEventListener("beforeinstallprompt", (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+    });
+    window.addEventListener("appinstalled", () => { $("install-banner").hidden = true; });
+
+    $("install-btn").addEventListener("click", async () => {
+        if (deferredPrompt) {
+            deferredPrompt.prompt();
+            const choice = await deferredPrompt.userChoice;
+            deferredPrompt = null;
+            if (choice.outcome === "accepted") $("install-banner").hidden = true;
+            return;
+        }
+        showInstallSteps(isIOS() ? IOS_STEPS : GENERIC_STEPS);
+    });
+    $("install-modal-close").addEventListener("click", () => { $("install-modal").hidden = true; });
+    $("install-modal").addEventListener("click", (e) => {
+        if (e.target.id === "install-modal") $("install-modal").hidden = true;
+    });
+}

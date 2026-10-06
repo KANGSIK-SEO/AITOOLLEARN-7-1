@@ -22,6 +22,10 @@
             <button id="logout-btn" class="link-btn" hidden>로그아웃 / Log out</button>
         </header>
 
+        <div id="install-banner" class="install-banner" hidden>
+            <button id="install-btn" class="pill install-btn">📲 앱으로 설치하기 / Install app</button>
+        </div>
+
         <section id="auth-panel" class="auth-panel">
             <p class="hint">상업적으로 써도 되는 CC0 명화를 한국어나 영어로 물어보세요. / Ask for CC0 masterpieces you can use commercially, in Korean or English.<br>(MET · Art Institute of Chicago 공개 데이터 / Open data from the MET and the Art Institute of Chicago)</p>
             <input type="email" id="email" placeholder="이메일 / Email" autocomplete="username">
@@ -44,6 +48,15 @@
             </form>
         </section>
     </main>
+
+    <div id="install-modal" class="modal-overlay" hidden>
+        <div class="modal-box">
+            <h2 id="install-modal-title">앱으로 설치하기 / Install app</h2>
+            <ol id="install-steps" class="install-steps"></ol>
+            <button id="install-modal-close" class="pill">닫기 / Close</button>
+        </div>
+    </div>
+
     <script src="/static/app.js"></script>
     <script>
         if ('serviceWorker' in navigator) {

@@ -191,6 +191,25 @@ body { min-height: 100vh; height: auto; padding: 16px; box-sizing: border-box; }
 .card a { color: var(--accent); text-decoration: none; }
 .typing { color: #888; font-size: 0.85rem; }
 
+/* ---- 앱 설치 배너/모달 ---- */
+.install-banner { padding: 10px 16px 0; }
+.install-btn { width: 100%; border-radius: 12px; background: rgba(0, 242, 255, 0.12);
+    color: var(--accent); border: 1px solid var(--accent); font-size: 0.85rem; padding: 10px; }
+
+.modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6);
+    display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+.modal-box { background: var(--chat-bg); border-radius: 14px; padding: 22px; max-width: 360px;
+    width: 100%; border: 1px solid rgba(255, 255, 255, 0.1); }
+.modal-box h2 { margin: 0 0 14px; font-size: 1.05rem; }
+.install-steps { list-style: none; margin: 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.install-steps li { display: flex; align-items: center; gap: 12px; font-size: 0.85rem; line-height: 1.4; }
+.install-steps .step-icon { flex: none; width: 36px; height: 36px; border-radius: 10px;
+    background: rgba(0, 242, 255, 0.12); color: var(--accent); display: flex; align-items: center; justify-content: center; }
+.modal-box .pill { width: 100%; }
+body.light-theme .install-btn { background: rgba(0, 102, 255, 0.08); }
+body.light-theme .modal-overlay { background: rgba(0, 0, 0, 0.4); }
+body.light-theme .install-steps .step-icon { background: rgba(0, 102, 255, 0.1); }
+
 /* ---- 초대코드 회원 화이트 테마 ---- */
 body.light-theme {
     --bg-color: #f4f4f7;
