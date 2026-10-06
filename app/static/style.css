@@ -203,7 +203,12 @@ body { min-height: 100vh; height: auto; padding: 16px; box-sizing: border-box; }
     border-bottom: 1px solid rgba(255, 255, 255, 0.08); color: var(--accent); font-size: 0.78rem;
     padding: 8px 15px; border-radius: 0; height: auto; cursor: pointer; }
 .ondevice-panel { padding: 12px 15px; display: flex; flex-direction: column; gap: 10px;
-    background: rgba(255, 255, 255, 0.02); border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+    background: rgba(255, 255, 255, 0.02); border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    opacity: 0; max-height: 0; overflow: hidden; padding-top: 0; padding-bottom: 0;
+    transform: translateY(-8px); transition: opacity 0.2s ease, max-height 0.25s ease,
+    padding 0.25s ease, transform 0.25s ease; }
+.ondevice-panel.is-visible {
+    opacity: 1; max-height: 420px; padding-top: 12px; padding-bottom: 12px; transform: translateY(0); }
 .ondevice-row { display: flex; gap: 8px; }
 .ondevice-row select, .ondevice-row input { flex: 1; background: #111; border: 1px solid #333; color: #fff;
     padding: 8px; border-radius: 8px; font-size: 0.82rem; outline: none; min-width: 0; }
