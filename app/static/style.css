@@ -259,3 +259,58 @@ body.light-theme .badge { background: rgba(0, 120, 80, 0.1); color: #067a4c; }
 body.light-theme .typing { color: #777; }
 body.light-theme .error { background: rgba(255, 0, 60, 0.06); }
 body.light-theme .success { background: rgba(0, 150, 90, 0.06); }
+
+/* ---- 시스템 테마 지원 ---- */
+@media (prefers-color-scheme: light) {
+    body:not(.light-theme) {
+        --bg-color: #f4f4f7;
+        --chat-bg: #ffffff;
+        --accent: #0066ff;
+        --accent-secondary: #6a5cff;
+        --text-color: #1a1a1a;
+        --bot-msg-bg: #eef1f6;
+        --user-msg-bg: #0066ff;
+    }
+
+    body:not(.light-theme) .chat-container {
+        border-color: rgba(0, 0, 0, 0.08);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+    }
+
+    body:not(.light-theme) .input-area {
+        background-color: #f3f3f6;
+        border-top-color: rgba(0, 0, 0, 0.06);
+    }
+
+    body:not(.light-theme) input[type="text"],
+    body:not(.light-theme) .auth-panel input,
+    body:not(.light-theme) .ondevice-row select,
+    body:not(.light-theme) .ondevice-row input {
+        background: #ffffff;
+        border-color: #dadade;
+        color: #1a1a1a;
+    }
+
+    body:not(.light-theme) button { color: #ffffff; }
+    body:not(.light-theme) .link-btn { background: rgba(0, 0, 0, 0.08); color: #1a1a1a; }
+    body:not(.light-theme) .hint { color: #555; }
+    body:not(.light-theme) .card { background: #fafafa; border-color: rgba(0, 0, 0, 0.08); }
+    body:not(.light-theme) .card img { background: #eee; }
+    body:not(.light-theme) .card .sub { color: #666; }
+    body:not(.light-theme) .badge { background: rgba(0, 120, 80, 0.1); color: #067a4c; }
+    body:not(.light-theme) .typing { color: #777; }
+    body:not(.light-theme) .error { background: rgba(255, 0, 60, 0.06); }
+    body:not(.light-theme) .success { background: rgba(0, 150, 90, 0.06); }
+    body:not(.light-theme) .ondevice-toggle { border-color: rgba(0, 0, 0, 0.08); }
+    body:not(.light-theme) .ondevice-panel { background: rgba(0, 0, 0, 0.02); border-color: rgba(0, 0, 0, 0.08); }
+    body:not(.light-theme) .rule-preview { background: #f4f9ff; }
+    body:not(.light-theme) .install-btn { background: rgba(0, 102, 255, 0.08); }
+    body:not(.light-theme) .modal-overlay { background: rgba(0, 0, 0, 0.4); }
+    body:not(.light-theme) .install-steps .step-icon { background: rgba(0, 102, 255, 0.1); }
+}
+
+@media (prefers-color-scheme: dark) {
+    body:not(.light-theme) {
+        color-scheme: dark;
+    }
+}
