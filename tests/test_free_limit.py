@@ -3,6 +3,8 @@
 한도 판정은 app/main.py의 chat_endpoint에서 하고, "초대코드(프리미엄) 계정인가"는 app/auth.py가
 서명한 세션 토큰의 premium 값으로 정해진다. 그래서 토큰 위조·구버전 토큰도 함께 확인한다.
 """
+import base64
+import json
 import os
 import sys
 from pathlib import Path
@@ -14,7 +16,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-test-secret-key-1234")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import db, llm  # noqa: E402
+from app import auth, db, llm  # noqa: E402
 from app import main as main_module  # noqa: E402
 from app.config import AIUnavailableError  # noqa: E402
 from app.main import app  # noqa: E402
@@ -114,3 +116,43 @@ def test_free_limit_applies_to_bearer_token_clients(client, ai):
     for _ in range(FREE):
         assert ask(tv, headers=headers).status_code == 200
     assert ask(tv, headers=headers).json()["error"]["code"] == "FREE_LIMIT_REACHED"
+
+
+# ---- 프리미엄 여부는 서명된 토큰에서 온다 (app/auth.py) ----
+def _forge_premium(token: str) -> str:
+    """서명은 그대로 두고 payload의 premium만 true로 바꾼 토큰."""
+    payload, sig = token.split(".", 1)
+    data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    data["premium"] = True
+    forged = base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip("=")
+    return f"{forged}.{sig}"
+
+
+def test_forged_premium_token_is_rejected(client, ai):
+    token = signup(client).json()["token"]
+    forged = _forge_premium(token)
+    assert auth.read_token(forged) is None
+    r = TestClient(app).post("/api/chat", json={"message": "x"}, headers={"Authorization": f"Bearer {forged}"})
+    assert r.status_code == 401
+
+
+def test_token_without_premium_field_is_treated_as_free(client, ai):
+    """premium 필드가 생기기 전에 발급된 토큰도 일반 계정으로 동작한다."""
+    payload = base64.urlsafe_b64encode(json.dumps({"uid": 1, "exp": 4_102_444_800}).encode()).decode().rstrip("=")
+    legacy = f"{payload}.{auth._sign(payload)}"
+    assert auth.read_token(legacy) == {"uid": 1, "premium": False}
+
+
+def test_expired_token_is_rejected():
+    token = auth.make_token(1, is_premium=True, now=1_000_000)
+    assert auth.read_token(token, now=1_000_000 + auth.TOKEN_TTL_SECONDS - 1)["premium"] is True
+    assert auth.read_token(token, now=1_000_000 + auth.TOKEN_TTL_SECONDS + 1) is None
+
+
+def test_premium_status_is_fixed_at_login_time(client, ai, monkeypatch):
+    """DB에서 프리미엄이 바뀌어도 기존 토큰은 재로그인 전까지 이전 상태를 쓴다 (auth.read_token 문서화된 동작)."""
+    uid = signup(client).json()["user"]["id"]
+    db.execute("UPDATE users SET is_premium = 1 WHERE id = ?", (uid,))
+    assert ask(client).json()["remaining_free"] == FREE - 1  # 아직 일반 토큰
+    client.post("/api/auth/login", json={"email": "free@x.com", "password": "password123"})
+    assert ask(client).json()["remaining_free"] is None      # 재로그인 후 프리미엄
