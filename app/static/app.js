@@ -76,6 +76,15 @@ function addMessage(kind, text) {
     return div;
 }
 
+const STATUS_MESSAGE_TYPES = new Set(["error", "success", "warning"]);
+
+function addStatusMessage(type, text) {
+    if (!STATUS_MESSAGE_TYPES.has(type)) {
+        throw new TypeError(`지원하지 않는 상태 메시지 유형입니다: ${type}`);
+    }
+    return addMessage(`message-status ${type}`, text);
+}
+
 function addCards(works) {
     if (!works.length) return;
     const wrap = document.createElement("div");
@@ -127,13 +136,13 @@ $("chat-form").addEventListener("submit", async (e) => {
     if (status === 401) { show(false); return; }
     if (!ok) {
         const msg = errorMessage(data.error, GENERIC_CHAT_ERROR);
-        addMessage("bot error", `${msg} (${data.error?.code || status})`);
+        addStatusMessage("error", `${msg} (${data.error?.code || status})`);
         return;
     }
     addMessage("bot", data.reply);
     addCards(data.artworks);
     if (data.show_limit_warning) {
-        addMessage("bot warning",
+        addStatusMessage("warning",
             `무료 질문이 ${data.remaining_free}개 남았어요. 초대코드가 있다면 입력해 보세요. / ` +
             `${data.remaining_free} free questions left. Enter an invite code if you have one.`);
     }
