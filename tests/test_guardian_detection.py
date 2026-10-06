@@ -175,3 +175,26 @@ def test_record_incident_returns_none_and_logs_on_db_error(monkeypatch, caplog):
 def test_client_ip(headers, host, expected):
     request = SimpleNamespace(headers=headers, client=SimpleNamespace(host=host) if host else None)
     assert guardian.client_ip(request) == expected
+
+
+# ---- 일일 점검: 긴급도 판정 ----
+@pytest.mark.parametrize("diagnosis, urgency, opens_issue", [
+    ("요약...\nURGENCY: high", "high", True),
+    ("요약...\nurgency: Medium", "medium", True),
+    ("요약...\nURGENCY: low", "low", False),
+    ("요약만 있고 긴급도 줄이 없음", "low", False),  # 형식이 깨지면 이슈를 남발하지 않도록 low
+])
+def test_daily_digest_urgency_parsing(fresh_db, monkeypatch, diagnosis, urgency, opens_issue):
+    _incident("AI_TIMEOUT")
+    issues = []
+    monkeypatch.setattr(llm, "chat_completion", lambda *a, **k: diagnosis)
+    monkeypatch.setattr(guardian, "open_github_issue", lambda title, body: issues.append(title))
+    assert guardian.run_daily_digest() == {"analyzed": 1, "urgency": urgency}
+    assert bool(issues) is opens_issue
+
+
+def test_daily_digest_does_not_reanalyze(fresh_db, monkeypatch):
+    _incident("AI_TIMEOUT")
+    monkeypatch.setattr(llm, "chat_completion", lambda *a, **k: "URGENCY: low")
+    assert guardian.run_daily_digest()["analyzed"] == 1
+    assert guardian.run_daily_digest() == {"analyzed": 0}  # 이미 diagnosis가 채워진 사건은 제외
