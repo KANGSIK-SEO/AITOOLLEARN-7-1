@@ -123,3 +123,12 @@ def search(keywords: list[str], artist: str | None = None,
         return _diversify(pool, limit)
     finally:
         conn.close()
+
+
+def ping() -> None:
+    """미술 DB 파일을 열고 읽을 수 있는지 확인한다 (/healthz). 실패하면 sqlite3.Error."""
+    conn = _connect()
+    try:
+        conn.execute("SELECT 1 FROM artworks LIMIT 1").fetchall()
+    finally:
+        conn.close()
