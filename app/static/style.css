@@ -67,6 +67,15 @@ body {
     animation: fadeIn 0.3s ease;
     line-height: 1.4;
 }
+.message-time {
+    display: block;
+    margin-top: 5px;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 0.7rem;
+    line-height: 1;
+    text-align: right;
+}
+body.light-theme .message-time { color: rgba(0, 0, 0, 0.5); }
 
 @keyframes fadeIn {
     from {
