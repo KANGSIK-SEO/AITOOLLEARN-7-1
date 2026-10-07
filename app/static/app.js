@@ -70,6 +70,7 @@ async function submitAuth(kind) {
 function addMessage(kind, text) {
     const div = document.createElement("div");
     div.className = `message ${kind}`;
+    div.setAttribute("role", "article");
     div.textContent = text;   // 사용자·AI 텍스트는 항상 textContent로 넣어 XSS를 막는다
     chatLog.appendChild(div);
     chatLog.scrollTop = chatLog.scrollHeight;
@@ -250,6 +251,7 @@ let onDeviceReady = false;
 $("ondevice-toggle").addEventListener("click", async () => {
     const panel = $("ondevice-panel");
     panel.hidden = !panel.hidden;
+    $("ondevice-toggle").setAttribute("aria-expanded", String(!panel.hidden));
     if (panel.hidden || onDeviceReady) return;
     const facts = await OnDevice.loadFacts();
     const styleSelect = $("od-style");
