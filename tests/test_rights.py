@@ -236,3 +236,23 @@ def test_cma_to_row_requires_cc0_and_official_image_host():
     assert row["image_url"].endswith("a_print.jpg") and row["license"] == "CC0"
     assert collect_cma.to_row({**base, "share_license_status": "Copyrighted"}) is None
     assert collect_cma.to_row({**base, "images": {"web": {"url": "https://elsewhere.com/x.jpg"}}}) is None
+
+
+def test_anonymous_save_retries_once_on_520(monkeypatch):
+    monkeypatch.setattr(records.time, "sleep", lambda s: None)
+    calls = []
+
+    class Resp:
+        headers = {}
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def geturl(self): return "https://web.archive.org/web/20261007000000/https://metmuseum.org/art/1"
+
+    def fake_open(req, timeout):
+        calls.append(req.full_url)
+        if len(calls) == 1:
+            raise records.urllib.error.HTTPError(req.full_url, 520, "unknown", {}, None)
+        return Resp()
+    monkeypatch.setattr(records.urllib.request, "urlopen", fake_open)
+    assert records.save_to_wayback("https://metmuseum.org/art/1")[0].startswith("https://web.archive.org/web/")
+    assert len(calls) == 2

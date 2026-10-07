@@ -24,5 +24,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -q -r requirements.txt
-      - name: Save two real pages to the Wayback Machine
+      - name: Save real museum pages to the Wayback Machine
+        shell: bash   # pipefail — 점검이 실패하면 tee가 있어도 작업이 실패로 보이게
         run: python scripts/check_wayback.py | tee -a "$GITHUB_STEP_SUMMARY"

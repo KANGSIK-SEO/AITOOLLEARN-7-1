@@ -155,13 +155,20 @@ def _save_spn2(url: str, keys: tuple[str, str], deadline: float) -> tuple[str | 
     return None, "보관 진행 중 — 잠시 후 다시 시도해 주세요"
 
 
-def _save_anonymous(url: str, deadline: float) -> tuple[str | None, str | None]:
+ARCHIVE_RETRY_STATUS = {502, 503, 504, 520, 523}  # 아카이브가 기관 페이지를 잠깐 못 가져온 경우 — 한 번 더 시도
+ARCHIVE_RETRY_WAIT_SECONDS = 3
+
+
+def _save_anonymous(url: str, deadline: float, retry: bool = True) -> tuple[str | None, str | None]:
     req = urllib.request.Request(ARCHIVE_SAVE + url, headers={"User-Agent": ARCHIVE_UA})
     try:
         with _open(req, min(ARCHIVE_TIMEOUT_SECONDS, deadline - time.monotonic())) as resp:
             final = resp.geturl()
             location = resp.headers.get("Content-Location")
     except urllib.error.HTTPError as e:
+        if retry and e.code in ARCHIVE_RETRY_STATUS and time.monotonic() + ARCHIVE_RETRY_WAIT_SECONDS + 5 < deadline:
+            time.sleep(ARCHIVE_RETRY_WAIT_SECONDS)
+            return _save_anonymous(url, deadline, retry=False)
         return None, f"HTTP {e.code}"
     except (urllib.error.URLError, socket.timeout, TimeoutError) as e:
         return None, f"연결 실패: {getattr(e, 'reason', e)}"
