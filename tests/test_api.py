@@ -399,7 +399,11 @@ def test_db_error_returns_503_db_error(client, monkeypatch):
             raise db.DbError("Turso 연결 실패: timed out")
         return real_execute(sql, params)
 
+    def broken_many(stmts):  # 채팅 전 확인 조회는 execute_many로 한 번에 보낸다
+        raise db.DbError("Turso 연결 실패: timed out")
+
     monkeypatch.setattr(db, "execute", broken)
+    monkeypatch.setattr(db, "execute_many", broken_many)
     r = client.post("/api/chat", json={"message": "봄 풍경"})
     assert r.status_code == 503 and r.json()["error"]["code"] == "DB_ERROR"
     assert "Turso" not in r.json()["error"]["message"]  # 내부 오류 내용은 사용자에게 노출하지 않는다

@@ -300,29 +300,32 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
         guardian.record_incident("security", "MALICIOUS_INPUT_BLOCKED", "의심스러운 입력 패턴 차단",
                                  {"user_id": user_id, "request_id": request_id}, "medium")
         return error(400, "INVALID_INPUT", "허용되지 않는 입력입니다.")
-    if guardian.is_ai_backed_off():
-        return error(503, "AI_BACKED_OFF", "AI 서비스가 일시적으로 쉬고 있어요. 잠시 후 다시 시도해 주세요.")
-
+    # 질문 전 확인 4가지(AI 쉬는 중인지·이번 시간 사용량·누적 사용량·최근 대화)를 DB 왕복 한 번으로 읽는다
     hour_limit = CHAT_LIMIT_PER_HOUR_PREMIUM if is_premium else CHAT_LIMIT_PER_HOUR
     since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
-    used_hour = db.execute("SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND created_at > ?", (user_id, since))[0]["n"]
-    if used_hour >= hour_limit:
+    backoff_rows, hour_rows, lifetime_rows, history_rows = db.execute_many([
+        ("SELECT value FROM runtime_flags WHERE key = 'ai_backoff_until'", ()),
+        ("SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND created_at > ?", (user_id, since)),
+        ("SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND status = 'ok'", (user_id,)),
+        ("SELECT question, answer FROM chats WHERE user_id = ? AND status = 'ok' ORDER BY id DESC LIMIT ?",
+         (user_id, CONTEXT_TURNS)),
+    ])
+    if backoff_rows and datetime.now(timezone.utc) < datetime.fromisoformat(backoff_rows[0]["value"]):
+        return error(503, "AI_BACKED_OFF", "AI 서비스가 일시적으로 쉬고 있어요. 잠시 후 다시 시도해 주세요.")
+    if hour_rows[0]["n"] >= hour_limit:
         log.warning("rate_limited user_id=%s is_premium=%s", user_id, is_premium)
         return error(429, "RATE_LIMITED", "질문이 너무 많아요. 잠시 후 다시 시도해 주세요.")
 
     remaining_free = None
     if not is_premium:
-        used_lifetime = db.execute(
-            "SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND status = 'ok'", (user_id,))[0]["n"]
+        used_lifetime = lifetime_rows[0]["n"]
         if used_lifetime >= CHAT_LIFETIME_LIMIT_FREE:
             log.warning("free_limit_reached user_id=%s", user_id)
             return error(403, "FREE_LIMIT_REACHED",
                         f"무료 이용 {CHAT_LIFETIME_LIMIT_FREE}회를 모두 사용했어요. 초대코드가 있다면 입력해 보세요.")
         remaining_free = CHAT_LIFETIME_LIMIT_FREE - used_lifetime - 1
 
-    history = list(reversed(db.execute(
-        "SELECT question, answer FROM chats WHERE user_id = ? AND status = 'ok' ORDER BY id DESC LIMIT ?",
-        (user_id, CONTEXT_TURNS))))
+    history = list(reversed(history_rows))
 
     started = time.monotonic()
     log.info("ai_call_start user_id=%s", user_id)
