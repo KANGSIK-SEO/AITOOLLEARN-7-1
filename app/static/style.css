@@ -43,6 +43,9 @@ body {
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
 }
 
+.chat-title { line-height: 1.45; }
+.chat-subtitle { font-size: 0.85em; font-weight: 400; opacity: 0.9; }
+
 .status-bar {
     font-size: 0.8rem;
     color: rgba(255, 255, 255, 0.8);
