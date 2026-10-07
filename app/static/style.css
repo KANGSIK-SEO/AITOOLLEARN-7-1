@@ -252,6 +252,36 @@ body.light-theme .install-btn { background: rgba(0, 102, 255, 0.08); }
 body.light-theme .modal-overlay { background: rgba(0, 0, 0, 0.4); }
 body.light-theme .install-steps .step-icon { background: rgba(0, 102, 255, 0.1); }
 
+/* ---- 작은 화면 대응 ---- */
+@media (max-width: 360px) {
+    body { padding: 8px; }
+    .chat-container { height: calc(100vh - 16px); border-radius: 8px; }
+    .chat-header { padding: 12px 8px; }
+    .link-btn { right: 8px; top: 8px; padding: 5px 7px; }
+    .chat-log { padding: 10px; }
+    .input-area { padding: 8px; gap: 6px; }
+    #message-input {
+        min-width: 0;
+        box-sizing: border-box;
+        padding: 10px;
+        font-size: 0.9rem;
+    }
+    #send-btn {
+        flex: 0 0 40px;
+        width: 40px;
+        height: 40px;
+        padding: 8px;
+    }
+    .auth-panel { padding: 16px; }
+    .auth-buttons { flex-direction: column; }
+    .auth-buttons .pill { width: 100%; box-sizing: border-box; }
+    .ondevice-panel { padding: 10px; }
+    .ondevice-row { flex-direction: column; }
+    .ondevice-row select,
+    .ondevice-row input,
+    .ondevice-row .pill { width: 100%; box-sizing: border-box; }
+}
+
 /* ---- 초대코드 회원 화이트 테마 ---- */
 body.light-theme {
     --bg-color: #f4f4f7;
