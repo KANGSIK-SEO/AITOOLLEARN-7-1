@@ -235,8 +235,9 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 서비스워커 캐시 이름에 붙인다. 배포로 파일이 바뀌면 버전이 바뀌어 옛 캐시를 자동으로 버린다 (`app/main.py`).
 
 **자동 배포 (GitHub Actions)**
-- `.github/workflows/deploy.yml`: 브랜치에 코드가 올라올 때마다 수집 없이 Vercel 프로덕션 배포만 한다.
-- `.github/workflows/collect-and-deploy.yml`: 수집기 코드가 바뀌면 미술관 작품을 수집해 `data/art.db`를 커밋한 뒤 배포한다.
+- `.github/workflows/deploy.yml`: **`main`에 PR이 합쳐질 때마다** Vercel 프로덕션 배포를 한다. 배포된 코드 = `main` (feature → `develop` → `main`).
+- `.github/workflows/collect-and-deploy.yml`: Actions 탭에서 **손으로 실행**하면 미술관 작품을 수집해 `data/art.db`를 커밋한다 (MET는 1건당 0.5초라 최대 약 4시간).
+- `.github/workflows/llm-eval.yml`: 프롬프트 코드가 `main`에 합쳐지면 LLM 평가(`scripts/eval_llm.py`)를 돌려 결과를 Actions 요약에 남긴다 (시크릿 `GPT_ASTRA_API_KEY` 필요).
 - 필요한 값 (Settings → Secrets and variables → Actions → **Repository secrets**):
   `VERCEL_TOKEN`(Vercel 토큰, scope는 art-chatbot 프로젝트), `VERCEL_SCOPE`(Vercel 팀 이름 `customer-auto`).
   Environment secrets에 넣으면 워크플로가 읽지 못한다. 저장한 값은 다시 보이지 않는 게 정상이다.
@@ -266,6 +267,13 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:8000/api/guardian/
 | 서강식 | AI/데이터 엔지니어 & 팀 리드 | [#8](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/8), [#9](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/9), [#10](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/10), [#17](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/17) | MVP 설계·구현, 검색·AI 파이프라인 고도화, 배포·통합·PR 머지 총괄 (작업 완료 후 PR 번호로 갱신) |
 | 유영민 | 프론트엔드 개발자 | [#11](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/11), [#12](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/12), [#13](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/13) | 채팅 UI 스크린리더 접근성([#31](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/31)), 시스템 다크/라이트 테마 지원([#32](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/32)), AI 응답 대기 인디케이터([#33](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/33)), 모바일 작은 화면 레이아웃 개선([#34](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/34)), 온디바이스 패널 전환 애니메이션([#35](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/35)), PWA 오프라인 캐싱 전략 개선([#36](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/36)), 설명 페이지 공통 스타일 적용([#37](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/37)), 채팅 메시지 타임스탬프([#38](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/38)), 상태 메시지 공통 컴포넌트화([#39](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/39)), SEO·공유 미리보기 메타데이터([#40](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/40)) |
 | 오철호 | 백엔드 개발자 | [#14](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/14), [#15](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/15), [#16](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/16) | 즐겨찾기 API([#19](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/19)), 환경변수 검증([#21](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/21)), DB 슬로우쿼리 로깅([#22](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/22)), LLM 재시도·타임아웃([#23](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/23)), FTS5 입력 예외처리([#26](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/26)), 단계별 요청 레이턴시 로깅([#27](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/27)), `/healthz` 의존성 상태 점검([#28](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/28)), 설명 에이전트 에러 메시지 개선([#29](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/29)), 가디언·무료한도 단위 테스트 보강([#20](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/20), [#24](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/24), [#25](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/25)), README API 문서 최신화([#30](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/30)) |
+
+**GitHub 계정 ↔ 팀원**: 서강식 = `KANGSIK-SEO`, 오철호 = `chul5`, 유영민 = `maebsy`
+
+**AI 도구 사용**: Claude Code(커밋 작성자 `Claude`)를 함께 사용했다. 서강식의 지시·검토 아래
+develop 병합·충돌 해결(PR #51), 권리 판단 규칙·권리 근거 기록(`app/rights.py`, `app/records.py`, `docs/rights-policy.md`),
+작품 수집 확장(클리블랜드 미술관, GitHub Actions 수집), 용도 기준 추천, 캐시 무효화, LLM 평가(`scripts/eval_llm.py`),
+GitHub Actions 배포를 구현했다. 모든 변경은 PR로 리뷰 후 병합한다.
 
 ## 8. 민감정보 관리
 - 모든 키는 환경 변수로만 사용하고 `.env`는 `.gitignore`로 제외한다. 예시는 `.env.example`.

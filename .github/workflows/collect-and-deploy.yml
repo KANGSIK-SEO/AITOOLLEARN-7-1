@@ -3,10 +3,8 @@
 # 배포는 저장소 Secrets에 VERCEL_TOKEN이 있을 때만 실행된다 (Settings → Secrets and variables → Actions).
 name: collect-and-deploy
 
+# 실행: GitHub Actions 탭 → collect-and-deploy → Run workflow (브랜치 선택). 수집 결과는 그 브랜치에 커밋된다.
 on:
-  push:
-    branches: [claude/trusting-allen-li8f01]
-    paths: [".github/workflows/collect-and-deploy.yml", "scripts/collect_*.py", "scripts/artdb.py"]
   workflow_dispatch:
     inputs:
       skip_collect:
