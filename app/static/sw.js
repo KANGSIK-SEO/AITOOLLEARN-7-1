@@ -1,7 +1,10 @@
-// 앱 쉘(정적 자원)만 캐싱한다. /api/*는 로그인·대화 같은 동적 데이터라 항상 네트워크로 보낸다.
-const CACHE = 'art-chatbot-shell-v2';
+// 앱 쉘은 미리 캐싱하고, 문서는 네트워크 우선으로 최신 상태를 유지한다.
+// /api/*와 외부 요청은 로그인·대화 같은 동적 데이터이므로 서비스워커가 가로채지 않는다.
+const CACHE = 'art-chatbot-shell-v3';
+const OFFLINE_URL = '/static/offline.html';
 const SHELL = [
   '/',
+  OFFLINE_URL,
   '/static/style.css',
   '/static/app.js',
   '/static/ondevice.js',
@@ -13,7 +16,9 @@ const SHELL = [
 // 받는다 — 받고 나면 아래 fetch 핸들러가 평소대로 캐시에 올려둔다.
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
+  event.waitUntil(
+    caches.open(CACHE).then((cache) => cache.addAll(SHELL))
+  );
   self.skipWaiting();
 });
 
@@ -28,18 +33,37 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  if (request.method !== 'GET' || new URL(request.url).pathname.startsWith('/api/')) {
-    return; // API 요청은 서비스워커가 손대지 않고 그대로 네트워크로
+  const url = new URL(request.url);
+  if (
+    request.method !== 'GET' ||
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith('/api/')
+  ) {
+    return;
   }
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      const network = fetch(request)
-        .then((res) => {
-          if (res.ok) caches.open(CACHE).then((cache) => cache.put(request, res.clone()));
-          return res;
+
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE).then((cache) => cache.put(request, copy));
+          return response;
         })
-        .catch(() => cached);
-      return cached || network;
-    })
+        .catch(() => caches.match(request).then((cached) => cached || caches.match(OFFLINE_URL)))
+    );
+    return;
+  }
+
+  event.respondWith(
+    caches.match(request).then((cached) =>
+      cached || fetch(request).then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      })
+    )
   );
 });
