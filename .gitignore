@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+data/*.db-journal
+data/app.db
+.vercel
+.env*
+tv-app/.buildResult/
+dist/

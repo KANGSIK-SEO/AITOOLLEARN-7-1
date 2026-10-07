@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "index.py": { "maxDuration": 60 }
+  },
+  "crons": [
+    { "path": "/api/guardian/daily-digest", "schedule": "0 23 * * *" }
+  ]
+}

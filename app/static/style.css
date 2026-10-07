@@ -1,0 +1,426 @@
+:root {
+    --bg-color: #0d0d12;
+    --chat-bg: #1a1a24;
+    --accent: #00f2ff;
+    --accent-secondary: #bc13fe;
+    --text-color: #e0e0e0;
+    --bot-msg-bg: #2a2a35;
+    --user-msg-bg: #007bff;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: 'Inter', sans-serif;
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+
+.chat-container {
+    width: 100%;
+    max-width: 480px;
+    /* 모바일 대응 */
+    height: 80vh;
+    background-color: var(--chat-bg);
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.chat-header {
+    background: linear-gradient(90deg, var(--accent-secondary), var(--accent));
+    padding: 15px;
+    text-align: center;
+    font-weight: bold;
+    color: white;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+.chat-title { line-height: 1.45; }
+.chat-subtitle { font-size: 0.85em; font-weight: 400; opacity: 0.9; }
+
+.status-bar {
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.8);
+    margin-top: 4px;
+}
+
+.chat-log {
+    flex: 1;
+    padding: 15px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.message {
+    padding: 10px 15px;
+    border-radius: 18px;
+    max-width: 80%;
+    word-wrap: break-word;
+    font-size: 0.9rem;
+    animation: fadeIn 0.3s ease;
+    line-height: 1.4;
+}
+.message-time {
+    display: block;
+    margin-top: 5px;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 0.7rem;
+    line-height: 1;
+    text-align: right;
+}
+body.light-theme .message-time { color: rgba(0, 0, 0, 0.5); }
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.user {
+    background-color: var(--user-msg-bg);
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+}
+
+.bot {
+    background-color: var(--bot-msg-bg);
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+    border-left: 3px solid var(--accent);
+}
+
+.system {
+    font-size: 0.8rem;
+    color: #888;
+    align-self: center;
+    background: transparent;
+    border: none;
+    text-align: center;
+    width: 100%;
+    margin: 5px 0;
+}
+
+.error {
+    color: #ff4d4d;
+    background: rgba(255, 77, 77, 0.1);
+    align-self: center;
+    border: 1px solid #ff4d4d;
+}
+
+.success {
+    color: #00ff88;
+    border: 1px solid #00ff88;
+    background: rgba(0, 255, 136, 0.1);
+    align-self: center;
+}
+
+.warning {
+    color: #ffb84d;
+    border: 1px solid #ffb84d;
+    background: rgba(255, 184, 77, 0.1);
+    align-self: center;
+}
+
+.message-status {
+    align-self: center;
+    border: 1px solid currentColor;
+}
+.message-status.error { color: #ff4d4d; background: rgba(255, 77, 77, 0.1); }
+.message-status.success { color: #00ff88; background: rgba(0, 255, 136, 0.1); }
+.message-status.warning { color: #ffb84d; background: rgba(255, 184, 77, 0.1); }
+
+.input-area {
+    padding: 15px;
+    background-color: #252530;
+    display: flex;
+    gap: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+input[type="text"] {
+    flex: 1;
+    background: #111;
+    border: 1px solid #333;
+    color: white;
+    padding: 12px;
+    border-radius: 20px;
+    outline: none;
+    font-size: 1rem;
+}
+
+button {
+    background: var(--accent);
+    border: none;
+    padding: 10px 15px;
+    border-radius: 50%;
+    width: 45px;
+    height: 45px;
+    color: #000;
+    font-weight: bold;
+    cursor: pointer;
+    transition: transform 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+button:active {
+    transform: scale(0.95);
+}
+
+#file-input {
+    display: none;
+}
+/* ---- 명화 찾기 챗봇 확장 ---- */
+body { min-height: 100vh; height: auto; padding: 16px; box-sizing: border-box; }
+.chat-container { max-width: 720px; height: 90vh; }
+.chat-header { position: relative; }
+.header-actions { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.header-actions:not(:has(> :not([hidden]))) { display: none; }
+.link-btn { width: auto; height: auto; border-radius: 8px;
+    background: rgba(0, 0, 0, 0.25); color: #fff; padding: 6px 10px; font-size: 0.75rem; }
+.text-btn { width: auto; height: auto; border-radius: 8px; background: transparent; color: var(--accent);
+    font-weight: 400; font-size: 0.85rem; padding: 6px; }
+[hidden] { display: none !important; }
+#chat-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+.auth-panel { padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+.auth-panel input { background: #111; border: 1px solid #333; color: #fff; padding: 12px;
+    border-radius: 12px; font-size: 1rem; outline: none; }
+.hint { color: #aaa; font-size: 0.85rem; line-height: 1.5; margin: 0 0 4px; }
+.auth-buttons { display: flex; gap: 10px; }
+.pill { width: auto; height: auto; border-radius: 20px; padding: 10px 18px; flex: 1; }
+.pill.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+.error-text { color: #ff4d4d; font-size: 0.85rem; min-height: 1.2em; }
+
+.message { white-space: pre-wrap; }
+.message.error { align-self: flex-start; }
+.cards { align-self: stretch; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.card { background: #22222c; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex; flex-direction: column; font-size: 0.78rem; }
+.card img { width: 100%; height: 130px; object-fit: cover; background: #111; }
+.card .meta { padding: 8px; display: flex; flex-direction: column; gap: 3px; }
+.card .title { font-weight: 600; font-size: 0.82rem; }
+.card .sub { color: #aaa; }
+.badge { align-self: flex-start; background: rgba(0, 255, 136, 0.12); color: #00ff88; border-radius: 6px; padding: 1px 6px; font-size: 0.7rem; }
+.card a { color: var(--accent); text-decoration: none; }
+.typing { color: #888; font-size: 0.85rem; }
+.typing-dots { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
+.typing-dots span {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: typing-bounce 1.2s infinite ease-in-out;
+}
+.typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typing-bounce {
+    0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-3px); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .typing-dots span { animation: none; opacity: 0.7; }
+}
+
+/* ---- 온디바이스 추천 (Datalog) ---- */
+.ondevice-toggle { width: 100%; background: none; border: none; border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08); color: var(--accent); font-size: 0.78rem;
+    padding: 8px 15px; border-radius: 0; height: auto; cursor: pointer; }
+.ondevice-panel { padding: 12px 15px; display: flex; flex-direction: column; gap: 10px;
+    background: rgba(255, 255, 255, 0.02); border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    opacity: 0; max-height: 0; overflow: hidden; padding-top: 0; padding-bottom: 0;
+    transform: translateY(-8px); transition: opacity 0.2s ease, max-height 0.25s ease,
+    padding 0.25s ease, transform 0.25s ease; }
+.ondevice-panel.is-visible {
+    opacity: 1; max-height: 420px; padding-top: 12px; padding-bottom: 12px; transform: translateY(0); }
+.ondevice-row { display: flex; gap: 8px; }
+.ondevice-row select, .ondevice-row input { flex: 1; background: #111; border: 1px solid #333; color: #fff;
+    padding: 8px; border-radius: 8px; font-size: 0.82rem; outline: none; min-width: 0; }
+.rule-preview { background: #0a0a10; border: 1px solid rgba(0, 242, 255, 0.25); border-radius: 8px;
+    padding: 8px 10px; font-size: 0.72rem; color: var(--accent); white-space: pre-wrap; word-break: break-all;
+    font-family: 'SFMono-Regular', Consolas, monospace; margin: 0; }
+#od-run-btn { width: 100%; border-radius: 10px; }
+body.light-theme .ondevice-toggle { border-color: rgba(0, 0, 0, 0.08); }
+body.light-theme .ondevice-panel { background: rgba(0, 0, 0, 0.02); border-color: rgba(0, 0, 0, 0.08); }
+body.light-theme .ondevice-row select, body.light-theme .ondevice-row input { background: #fff; border-color: #dadade; color: #1a1a1a; }
+body.light-theme .rule-preview { background: #f4f9ff; }
+
+/* ---- 앱 설치 배너/모달 ---- */
+.install-banner { padding: 10px 16px 0; }
+.install-btn { width: 100%; border-radius: 12px; background: rgba(0, 242, 255, 0.12);
+    color: var(--accent); border: 1px solid var(--accent); font-size: 0.85rem; padding: 10px; }
+
+.modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6);
+    display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+.modal-box { background: var(--chat-bg); border-radius: 14px; padding: 22px; max-width: 360px;
+    width: 100%; border: 1px solid rgba(255, 255, 255, 0.1); }
+.modal-box h2 { margin: 0 0 14px; font-size: 1.05rem; }
+.install-steps { list-style: none; margin: 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.install-steps li { display: flex; align-items: center; gap: 12px; font-size: 0.85rem; line-height: 1.4; }
+.install-steps .step-icon { flex: none; width: 36px; height: 36px; border-radius: 10px;
+    background: rgba(0, 242, 255, 0.12); color: var(--accent); display: flex; align-items: center; justify-content: center; }
+.modal-box .pill { width: 100%; }
+body.light-theme .install-btn { background: rgba(0, 102, 255, 0.08); }
+body.light-theme .modal-overlay { background: rgba(0, 0, 0, 0.4); }
+body.light-theme .install-steps .step-icon { background: rgba(0, 102, 255, 0.1); }
+
+/* ---- 작은 화면 대응 ---- */
+@media (max-width: 360px) {
+    body { padding: 8px; }
+    .chat-container { height: calc(100vh - 16px); border-radius: 8px; }
+    .chat-header { padding: 12px 8px; }
+    .link-btn { right: 8px; top: 8px; padding: 5px 7px; }
+    .chat-log { padding: 10px; }
+    .input-area { padding: 8px; gap: 6px; }
+    #message-input {
+        min-width: 0;
+        box-sizing: border-box;
+        padding: 10px;
+        font-size: 0.9rem;
+    }
+    #send-btn {
+        flex: 0 0 40px;
+        width: 40px;
+        height: 40px;
+        padding: 8px;
+    }
+    .auth-panel { padding: 16px; }
+    .auth-buttons { flex-direction: column; }
+    .auth-buttons .pill { width: 100%; box-sizing: border-box; }
+    .ondevice-panel { padding: 10px; }
+    .ondevice-row { flex-direction: column; }
+    .ondevice-row select,
+    .ondevice-row input,
+    .ondevice-row .pill { width: 100%; box-sizing: border-box; }
+}
+
+/* ---- 체험 안내 · 예시 질문 ---- */
+.examples { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { width: auto; height: auto; border-radius: 16px; padding: 7px 12px; font-weight: 400; font-size: 0.82rem;
+    background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+
+/* ---- 결과 묶음 · 카드 동작 ---- */
+.result-group { align-self: stretch; display: flex; flex-direction: column; gap: 8px; }
+.group-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.8rem; }
+.group-heading { font-weight: 600; margin-right: auto; }
+.group-toolbar select { background: #111; color: var(--text-color); border: 1px solid #333; border-radius: 8px;
+    padding: 5px 8px; font-size: 0.8rem; margin-left: auto; }
+/* 비율을 아직 모르는(이미지 로딩 전) 카드는 숨기지 않는다 — 숨기면 lazy 이미지가 영영 로드되지 않는다 */
+.result-group[data-filter="landscape"] .card[data-orient]:not([data-orient="landscape"]),
+.result-group[data-filter="portrait"] .card[data-orient]:not([data-orient="portrait"]),
+.result-group[data-filter="square"] .card[data-orient]:not([data-orient="square"]) { display: none; }
+.badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.orient:not(:empty) { background: rgba(255, 255, 255, 0.08); color: #ccc; border-radius: 6px; padding: 1px 6px; font-size: 0.7rem; }
+.card-actions { display: flex; gap: 4px; margin: 2px 0; flex-wrap: wrap; }
+.card-btn { width: auto; height: 26px; border-radius: 6px; padding: 0 8px; font-size: 0.72rem; font-weight: 600;
+    background: rgba(255, 255, 255, 0.08); color: var(--text-color); }
+.card-btn.star.on { color: #ffc400; }
+.more-btn { width: 100%; height: auto; border-radius: 10px; padding: 10px; font-size: 0.85rem; }
+.more-btn:disabled, .card-btn:disabled { opacity: 0.6; cursor: wait; }
+
+/* ---- 초대코드 회원 화이트 테마 ---- */
+body.light-theme {
+    --bg-color: #f4f4f7;
+    --chat-bg: #ffffff;
+    --accent: #0066ff;
+    --accent-secondary: #6a5cff;
+    --text-color: #1a1a1a;
+    --bot-msg-bg: #eef1f6;
+    --user-msg-bg: #0066ff;
+}
+body.light-theme .chat-container { border-color: rgba(0, 0, 0, 0.08); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08); }
+body.light-theme .input-area { background-color: #f3f3f6; border-top-color: rgba(0, 0, 0, 0.06); }
+body.light-theme input[type="text"],
+body.light-theme .auth-panel input { background: #ffffff; border: 1px solid #dadade; color: #1a1a1a; }
+body.light-theme button { color: #ffffff; }
+body.light-theme .link-btn { background: rgba(0, 0, 0, 0.08); color: #1a1a1a; }
+body.light-theme .hint { color: #555; }
+body.light-theme .card { background: #fafafa; border-color: rgba(0, 0, 0, 0.08); }
+body.light-theme .card img { background: #eee; }
+body.light-theme .card .sub { color: #666; }
+body.light-theme .badge { background: rgba(0, 120, 80, 0.1); color: #067a4c; }
+body.light-theme .typing { color: #777; }
+body.light-theme .group-toolbar select { background: #fff; border-color: #dadade; }
+body.light-theme .orient:not(:empty) { background: rgba(0, 0, 0, 0.06); color: #444; }
+body.light-theme .card-btn { background: rgba(0, 0, 0, 0.06); color: #1a1a1a; }
+body.light-theme .card-btn.star.on { color: #d89a00; }
+body.light-theme .chip, body.light-theme .text-btn { color: var(--accent); }
+body.light-theme .message-status.error { background: rgba(255, 0, 60, 0.06); }
+body.light-theme .message-status.success { background: rgba(0, 150, 90, 0.06); }
+
+/* ---- 시스템 테마 지원 ---- */
+@media (prefers-color-scheme: light) {
+    body:not(.light-theme) {
+        --bg-color: #f4f4f7;
+        --chat-bg: #ffffff;
+        --accent: #0066ff;
+        --accent-secondary: #6a5cff;
+        --text-color: #1a1a1a;
+        --bot-msg-bg: #eef1f6;
+        --user-msg-bg: #0066ff;
+    }
+
+    body:not(.light-theme) .chat-container {
+        border-color: rgba(0, 0, 0, 0.08);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+    }
+
+    body:not(.light-theme) .input-area {
+        background-color: #f3f3f6;
+        border-top-color: rgba(0, 0, 0, 0.06);
+    }
+
+    body:not(.light-theme) input[type="text"],
+    body:not(.light-theme) .auth-panel input,
+    body:not(.light-theme) .ondevice-row select,
+    body:not(.light-theme) .ondevice-row input {
+        background: #ffffff;
+        border-color: #dadade;
+        color: #1a1a1a;
+    }
+
+    body:not(.light-theme) button { color: #ffffff; }
+    body:not(.light-theme) .link-btn { background: rgba(0, 0, 0, 0.08); color: #1a1a1a; }
+    body:not(.light-theme) .hint { color: #555; }
+    body:not(.light-theme) .card { background: #fafafa; border-color: rgba(0, 0, 0, 0.08); }
+    body:not(.light-theme) .card img { background: #eee; }
+    body:not(.light-theme) .card .sub { color: #666; }
+    body:not(.light-theme) .badge { background: rgba(0, 120, 80, 0.1); color: #067a4c; }
+    body:not(.light-theme) .typing { color: #777; }
+    body:not(.light-theme) .message-status.error { background: rgba(255, 0, 60, 0.06); }
+    body:not(.light-theme) .message-status.success { background: rgba(0, 150, 90, 0.06); }
+    body:not(.light-theme) .ondevice-toggle { border-color: rgba(0, 0, 0, 0.08); }
+    body:not(.light-theme) .ondevice-panel { background: rgba(0, 0, 0, 0.02); border-color: rgba(0, 0, 0, 0.08); }
+    body:not(.light-theme) .rule-preview { background: #f4f9ff; }
+    body:not(.light-theme) .install-btn { background: rgba(0, 102, 255, 0.08); }
+    body:not(.light-theme) .modal-overlay { background: rgba(0, 0, 0, 0.4); }
+    body:not(.light-theme) .install-steps .step-icon { background: rgba(0, 102, 255, 0.1); }
+    body:not(.light-theme) .group-toolbar select { background: #fff; border-color: #dadade; color: #1a1a1a; }
+    body:not(.light-theme) .orient:not(:empty) { background: rgba(0, 0, 0, 0.06); color: #444; }
+    body:not(.light-theme) .card-btn { background: rgba(0, 0, 0, 0.06); color: #1a1a1a; }
+    body:not(.light-theme) .card-btn.star.on { color: #d89a00; }
+    body:not(.light-theme) .chip { color: var(--accent); }
+}
+
+@media (prefers-color-scheme: dark) {
+    body:not(.light-theme) {
+        color-scheme: dark;
+    }
+}
