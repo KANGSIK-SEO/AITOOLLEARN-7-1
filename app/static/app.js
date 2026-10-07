@@ -71,7 +71,18 @@ function addMessage(kind, text) {
     const div = document.createElement("div");
     div.className = `message ${kind}`;
     div.setAttribute("role", "article");
-    div.textContent = text;   // 사용자·AI 텍스트는 항상 textContent로 넣어 XSS를 막는다
+    const content = document.createElement("span");
+    content.textContent = text;   // 사용자·AI 텍스트는 항상 textContent로 넣어 XSS를 막는다
+    const timestamp = new Date();
+    const time = document.createElement("time");
+    time.className = "message-time";
+    time.dateTime = timestamp.toISOString();
+    time.textContent = timestamp.toLocaleTimeString("ko-KR", {
+        hour: "2-digit",
+        minute: "2-digit",
+    });
+    time.setAttribute("aria-label", `보낸 시간 ${time.textContent}`);
+    div.append(content, time);
     chatLog.appendChild(div);
     chatLog.scrollTop = chatLog.scrollHeight;
     return div;
