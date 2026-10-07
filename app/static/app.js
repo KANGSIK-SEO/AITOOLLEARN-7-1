@@ -70,10 +70,32 @@ async function submitAuth(kind) {
 function addMessage(kind, text) {
     const div = document.createElement("div");
     div.className = `message ${kind}`;
+    div.setAttribute("role", "article");
     div.textContent = text;   // 사용자·AI 텍스트는 항상 textContent로 넣어 XSS를 막는다
     chatLog.appendChild(div);
     chatLog.scrollTop = chatLog.scrollHeight;
     return div;
+}
+
+function addTypingIndicator() {
+    const indicator = document.createElement("div");
+    indicator.className = "message bot typing";
+    indicator.setAttribute("role", "status");
+    indicator.setAttribute("aria-label", "명화 검색 중 / Searching for masterpieces");
+
+    const label = document.createElement("span");
+    label.textContent = "명화를 찾는 중… / Searching…";
+    const dots = document.createElement("span");
+    dots.className = "typing-dots";
+    dots.setAttribute("aria-hidden", "true");
+    for (let i = 0; i < 3; i += 1) {
+        dots.appendChild(document.createElement("span"));
+    }
+
+    indicator.append(label, dots);
+    chatLog.appendChild(indicator);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    return indicator;
 }
 
 function addCards(works) {
@@ -119,7 +141,7 @@ $("chat-form").addEventListener("submit", async (e) => {
     if (!message) return;               // 빈 입력 차단 (서버에서도 검증)
     $("message-input").value = "";
     addMessage("user", message);
-    const pending = addMessage("bot typing", "명화를 찾는 중… / Searching…");
+    const pending = addTypingIndicator();
     $("send-btn").disabled = true;
     const { ok, status, data } = await api("/api/chat", { method: "POST", body: JSON.stringify({ message }) });
     pending.remove();
