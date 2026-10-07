@@ -9,7 +9,7 @@
 - **문제**: PPT·블로그·굿즈·썸네일 제작자는 "저작권 걱정 없는 명화"를 찾을 때 라이선스를 일일이 확인해야 한다.
   범용 챗봇은 라이선스·원본 이미지 링크를 보증하지 못한다.
 - **타깃 사용자**: 디자이너, 콘텐츠 제작자, 학생, 미술 입문자
-- **핵심 시나리오**: (가입 없이 3회 체험 가능) "PPT 배경용 가로형 풍경화" → 작품 카드(썸네일·작가·연도·CC0·가로/세로형·원본/출처 링크) + 한국어 설명
+- **핵심 시나리오**: 로그인 → "카페 벽에 걸 세로형 포스터" → 작품 카드(썸네일·작가·연도·CC0·가로/세로형·원본/출처 링크) + 한국어 설명
   → **더 보기**로 같은 조건의 작품을 AI 호출 없이 계속 넘겨 보기 → ☆ 즐겨찾기 · ⬇ 다운로드 · 출처 표기 문구 복사
 - **데이터**: [MET Open Access](https://metmuseum.github.io/), [Art Institute of Chicago API](https://api.artic.edu/docs/) (둘 다 CC0, API 키 불필요)
 
@@ -59,45 +59,94 @@
 
 문맥 유지: 같은 사용자의 최근 `CONTEXT_TURNS`(5)개 Q/A를 답변 프롬프트에 포함한다.
 
+### 2.1 온디바이스 추천 (Datalog, 서버/AI 호출 없음)
+채팅창 안 "🧠 온디바이스 추천" 패널은 서버나 gpt-6-astra를 전혀 거치지 않고, **브라우저 안에서만** 작품을 고른다.
+- `scripts/export_artworks_json.py`가 `data/art.db`(CC0만, `is_public_domain = 1`)를 `app/static/artworks.json`으로 내보낸다. `data/art.db`가 바뀔 때만 다시 실행하면 된다.
+- `app/static/ondevice.js`가 이 JSON을 최초 1회만 받아 메모리에 캐시하고, 사용자가 고른 화풍/주제/연도 조건을 **Datalog 스타일 규칙**으로 조합해 그 자리에서 배열 필터링한다 (예: `candidate(W) :- style(W, "Impressionism"), subject(W, "landscape").`). 주제어가 여러 개면 "같은 head를 가진 규칙이 여러 개면 합집합"이라는 실제 Datalog 의미론대로 규칙을 여러 줄로 나눠 OR로 평가한다. 재귀가 필요 없는 질의라 naive bottom-up 평가로 충분하다.
+- **"AI 없이 이해하기"**: 자유 문장(예: "봄 느낌 풍경화")을 입력하면, LLM 없이 **한/영 키워드 사전 매칭**만으로 화풍/주제/연도를 추출해 위 규칙에 자동으로 채운다 — gpt-6-astra가 하는 자연어 이해를 훨씬 단순한 규칙 기반으로 대체한 버전. 사전에 없는 단어는 당연히 못 알아듣는다(의도된 한계이자 AI와의 핵심 차이점).
+- 카드 렌더링은 채팅과 동일한 `addCards()`를 그대로 재사용 — 결과 화면이 100% 같은 스타일.
+- Oxford Semantic Technologies(RDFox)가 갤럭시 기기에 Datalog 추론 엔진을 온디바이스로 넣은 것과 같은 설계 철학: 클라우드로 보내지 않고 기기에서 바로 추론한다.
+
 ## 3. API 명세
 오류는 항상 `{"error": {"code": "...", "message": "..."}}`.
+인증: 웹은 로그인 시 발급되는 `session` 쿠키(HttpOnly)로, TV 앱 등 다른 오리진 클라이언트는 응답의 `token`을
+`Authorization: Bearer <token>` 헤더로 보낸다. 둘 다 있으면 쿠키가 우선한다. 토큰 유효기간은 7일.
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| POST | `/api/auth/signup` | `{email, password(8자+), private_code?}` → 201, 세션 쿠키 발급 (`private_code`가 `PREMIUM_CODE`와 일치하면 프리미엄 가입) |
-| POST | `/api/auth/login` | 로그인 → 200, 세션 쿠키 |
-| POST | `/api/auth/logout` | 쿠키 삭제 |
-| GET | `/api/me` | 현재 사용자 |
-| POST | `/api/chat` | 질문 → 답변 + 작품 카드 + `search`(더 보기용 검색 조건). **비로그인은 IP당 하루 `GUEST_TRIAL_LIMIT`(3)회 체험** (성공한 질문만 차감, 대화 로그 미저장, 응답에 `guest_remaining`) |
-| GET | `/api/guest` | 체험 남은 횟수 `{limit, remaining}` |
-| GET | `/api/artworks?q=a,b&artist=&year_from=&year_to=&offset=0&limit=24` | **더 보기** — AI 없이 DB만 관련도순 페이지 조회 (`{artworks, has_more}`, 비로그인 가능, IP당 시간당 600회) |
-| GET/POST | `/api/me/favorites` | 즐겨찾기 목록 / 추가 `{artwork_id}` (로그인 필요, 최대 500개) |
-| DELETE | `/api/me/favorites/{artwork_id}` | 즐겨찾기 해제 |
+| POST | `/api/auth/signup` | `{email, password(8~128자), private_code?}` → 201, `{user, token}` + 세션 쿠키 (`private_code`가 `PREMIUM_CODE`와 일치하면 프리미엄 가입) |
+| POST | `/api/auth/login` | `{email, password}` → 200, `{user, token}` + 세션 쿠키 |
+| POST | `/api/auth/logout` | 쿠키 삭제 → `{"ok": true}` |
+| GET | `/api/me` | **로그인 필요**. 현재 사용자 |
+| POST | `/api/chat` | **로그인 필요**. 질문 → 답변(한국어+영어) + 작품 카드 + 남은 무료 횟수 |
+| GET | `/api/me/chats?limit=20&offset=0` | **로그인 필요**. 내 대화 로그 (최신순, `limit` 1~100) |
+| POST | `/api/favorites` | **로그인 필요**. `{artwork_id}` 작품 즐겨찾기 저장 (상세: `docs/track-c.md`) |
+| DELETE | `/api/favorites/{artwork_id}` | **로그인 필요**. 즐겨찾기 해제 |
+| GET | `/api/me/favorites?limit=20&offset=0` | 내 즐겨찾기 작품 카드 조회 |
+| GET | `/api/health` | 프로세스 생존 확인 (항상 200) |
+| GET | `/healthz` | 의존성 상태 확인: 사용자 DB·미술 DB에 실제 쿼리 → 모두 정상 200, 하나라도 실패 503 (`{"status": "ok|degraded", "checks": {...}}`) |
+| GET | `/api/artworks?q=a,b&artist=&year_from=&year_to=&offset=0&limit=24` | **더 보기** — AI 없이 DB만 관련도순 페이지 조회 (`{artworks, has_more}`, IP당 시간당 600회) |
 | POST | `/api/records` | 권리 근거 기록 발급 `{artwork_id}` → `{number, url, archived}` (판단 규칙 미통과 409 `RECORD_NOT_ALLOWED`, IP당 시간당 60회) |
 | GET | `/records/{number}` | 저장된 권리 근거 기록 (HTML, 인쇄/PDF 저장용) |
 | POST | `/api/records/{number}/archive` | 인터넷 아카이브 보관 다시 시도 |
 | GET | `/api/img/aic/{image_id}?w=1686&download=1` | AIC 이미지 프록시 (`download=1`이면 파일로 저장) |
-| GET | `/api/me/chats?limit=20&offset=0` | 내 대화 로그 조회 |
-| GET | `/api/health` | 상태 확인 |
 | GET | `/api/guardian/daily-digest` | 가디언 일일 점검 (`CRON_SECRET` 필요, Vercel Cron 전용) |
+| POST | `/api/explain` | 피어 리뷰용 설명 에이전트. `{question, secret}` → `{"answer": "..."}` (`EXPLAIN_AGENT_SECRET` 미설정 시 항상 401) |
+| GET | `/explain/{token}` | 설명 에이전트 화면 (토큰이 틀리거나 비활성이면 404) |
+
+아래 예시는 로컬 서버에 실제로 요청해 받은 응답의 형태 그대로다 (`token`은 줄였고, AI 답변 문장과 `latency_ms`는 예시 값).
+
+`POST /api/auth/signup` · `POST /api/auth/login`
+```json
+// 요청
+{"email": "a@b.com", "password": "password123"}
+// 응답 201(가입) / 200(로그인) — Set-Cookie: session=...
+{"user": {"id": 1, "email": "a@b.com", "is_premium": false}, "token": "eyJ1aWQiOiAx..."}
+```
+
+`GET /api/me`
+```json
+{"user": {"id": 1, "email": "a@b.com", "created_at": "2026-10-06T13:50:08+00:00", "is_premium": false}}
+```
 
 `POST /api/chat`
 ```json
 // 요청
 {"message": "봄 느낌 풍경화 3개 찾아줘"}
-// 응답 200
-{"chat_id": 12, "saved": true, "request_id": "7489f728",
- "reply": "[1] Spring in France — ...",
- "artworks": [{"id": 101, "source": "aic", "title": "Spring in France", "artist": "Robert William Vonnoh",
-               "date_display": "1890", "image_url": "https://...", "source_url": "https://www.artic.edu/artworks/...",
-               "license": "CC0"}]}
+// 응답 200 (artworks는 1개만 표시)
+{"chat_id": 1, "saved": true, "request_id": "d20def8c",
+ "reply": "[1] Spring in Brittany — ...\n\nEnglish: [1] Spring in Brittany — ...",
+ "artworks": [{"id": 4613, "source": "met", "title": "Spring in Brittany", "artist": "Paul Sébillot",
+               "date_display": "1874", "medium": "Oil on wood",
+               "image_url": "https://images.metmuseum.org/CRDImages/ep/original/DP-17429-001.jpg",
+               "thumbnail_url": "https://images.metmuseum.org/CRDImages/ep/web-large/DP-17429-001.jpg",
+               "source_url": "https://metmuseum.org/art/collection/search/437647", "license": "CC0",
+               "credit_line": "Gift of Paul-Yves Sébillot, 1949", "is_highlight": 0}],
+ "remaining_free": 99, "show_limit_warning": false}
+// saved: 대화 로그 저장 성공 여부 (DB 저장에 실패해도 답변은 200으로 준다 → chat_id null, saved false)
+// remaining_free: 이번 질문을 포함해 남은 평생 무료 질문 수. 초대코드(프리미엄) 사용자는 상한이 없어 항상 null.
+// show_limit_warning: 남은 무료 질문이 FREE_LIMIT_WARNING_THRESHOLD(기본 10) 이하일 때만 true.
+// AIC 작품의 image_url·thumbnail_url은 서버 프록시 주소(/api/img/aic/<id>?w=1686|400)로 바뀌어 나온다.
 // 오류 예
 {"error": {"code": "AI_TIMEOUT", "message": "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요."}}
 ```
-오류 코드: `GUEST_LIMIT_REACHED`(403, 비로그인 체험 소진) `FAVORITES_FULL`(409) `ARTWORK_NOT_FOUND`(404) `UNAUTHENTICATED`(401) `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`/`INVALID_INPUT`(400)
-`RATE_LIMITED`(429, 시간당 일반 30회·초대코드 300회) `FREE_LIMIT_REACHED`(403, 초대코드 없는 계정의 평생 무료 질문 100회 소진)
-`AI_TIMEOUT`(504) `AI_ERROR`(502) `AI_RATE_LIMITED`(429) `AI_BACKED_OFF`/`AI_KEY_MISSING`(503) `DB_ERROR`/`ART_DB_ERROR`(503)
-`INTERNAL_ERROR`(500, 예상 못한 예외는 모두 여기로 모이고 가디언이 기록한다)
+
+`GET /api/me/chats?limit=1`
+```json
+{"chats": [{"id": 1, "question": "봄 느낌 풍경화 3개 찾아줘", "answer": "[1] Spring in Brittany — ...",
+            "status": "ok", "error_code": null, "latency_ms": 2310, "created_at": "2026-10-06T13:50:08+00:00"}]}
+// 실패한 질문은 status "error", answer null, error_code "AI_TIMEOUT" 등으로 남는다.
+```
+
+오류 코드:
+- 공통: `UNAUTHENTICATED`(401) `INVALID_INPUT`(422 요청 형식 오류 / 400 의심스러운 입력 차단) `DB_ERROR`(503)
+  `INTERNAL_ERROR`(500, 예상 못한 예외는 모두 여기로 모이고 가디언이 기록한다)
+- 가입·로그인: `INVALID_EMAIL`/`INVALID_PASSWORD`(400) `EMAIL_TAKEN`(409) `INVALID_CREDENTIALS`(401)
+  `RATE_LIMITED`(429, 같은 IP의 가입 시간당 10회·로그인 10분당 20회 초과 또는 같은 이메일 로그인 5회 실패 후 15분 잠금)
+- 챗봇: `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`(400) `RATE_LIMITED`(429, 시간당 일반 30회·초대코드 300회)
+  `FREE_LIMIT_REACHED`(403, 초대코드 없는 계정의 평생 무료 질문 100회 소진)
+  `AI_TIMEOUT`(504) `AI_ERROR`(502) `AI_RATE_LIMITED`(429) `AI_BACKED_OFF`/`AI_KEY_MISSING`(503) `ART_DB_ERROR`(503)
+- 더 보기·근거 기록: `ARTWORK_NOT_FOUND`(404) `RECORD_NOT_ALLOWED`(409, 판단 규칙 미통과) `RECORD_NOT_FOUND`(404)
 
 **초대코드(프리미엄)**: 회원가입 시 `private_code`로 `PREMIUM_CODE`(서버 환경변수)와 일치하는 값을 보내면 해당 계정은
 - 시간당 질문 한도가 `CHAT_LIMIT_PER_HOUR_PREMIUM`(기본 300)으로 상향되고, **평생 무료 질문 100회 제한이 적용되지 않는다**
@@ -115,6 +164,7 @@
 - Turso/SQLite (쓰기): 
   - `users(id, email UNIQUE, password_hash, is_premium, created_at)`
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
+  - `favorites(id, user_id → users.id, artwork_id(art.db artworks.id), created_at, UNIQUE(user_id, artwork_id))`
   - `incidents(id, category[reliability|security], code, message, context(JSON), severity, auto_action, diagnosis, created_at)` — 가디언 사건 로그. `diagnosis`는 일일 배치 분석 전까지 NULL.
   - `favorites(user_id → users.id, artwork_id → art.db artworks.id, created_at)` — 즐겨찾기 (PK: user_id+artwork_id)
   - `rights_records(number PK, artwork_id, user_id, snapshot(JSON), archives(JSON), signature, issued_at)` — 권리 근거 기록 (발급 시점 그대로)
@@ -135,7 +185,7 @@ cd scripts && python3 collect_aic.py && python3 collect_met.py
 **DB 확인 가이드** (택 1 이상)
 1. 로그 조회 API: `curl -b cookies.txt https://<서비스>/api/me/chats`
 2. 확인용 SQL: `scripts/check_logs.sql` (`turso db shell <db-name> < scripts/check_logs.sql`)
-3. 서버 로그: `request_received`, `ai_call_start`, `ai_call_success|ai_call_failure`, `db_save_success|db_save_failure` 이벤트를 stdout(Vercel Logs)에 남긴다.
+3. 서버 로그: `request_received`, `ai_call_start`, `ai_call_success|ai_call_failure`, `db_save_success|db_save_failure` 이벤트를 stdout(Vercel Logs)에 남긴다. 모든 줄 끝에 `request_id`가 붙는다. 한 요청 안의 단계별 소요시간은 `chat_stage stage=intent|search|answer request_id=… latency_ms=… ok=…`로 따로 남는다(`app/chat.py`). 전체 이벤트 목록: [`docs/logging.md`](docs/logging.md)
 
 ## 5. 실행·배포
 ```bash
@@ -178,6 +228,12 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 | `CHAT_LIFETIME_LIMIT_FREE` | 초대코드 없는 사용자의 평생 무료 질문 수(기본 100) |
 | `ART_RESULTS_LIMIT_PREMIUM` | 초대코드 사용자에게 보여줄 추천 작품 수(기본 100) |
 
+**LLM 답변 품질**: 개선한 방법과 측정 방법은 [`docs/llm-eval.md`](docs/llm-eval.md).
+`python3 scripts/eval_llm.py`로 질문 20개 평가 세트를 돌려 의도 추출 정확도·근거성(환각)·규칙 준수율을 잰다.
+
+**캐시 무효화**: 서버가 화면 파일 내용으로 버전을 만들어 `index.html`의 정적 파일 주소(`?v=버전`)와
+서비스워커 캐시 이름에 붙인다. 배포로 파일이 바뀌면 버전이 바뀌어 옛 캐시를 자동으로 버린다 (`app/main.py`).
+
 **자동 배포 (GitHub Actions)**
 - `.github/workflows/deploy.yml`: 브랜치에 코드가 올라올 때마다 수집 없이 Vercel 프로덕션 배포만 한다.
 - `.github/workflows/collect-and-deploy.yml`: 수집기 코드가 바뀌면 미술관 작품을 수집해 `data/art.db`를 커밋한 뒤 배포한다.
@@ -208,8 +264,8 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:8000/api/guardian/
 | 이름 | 역할 | 담당 이슈 | 작업 요약 |
 |---|---|---|---|
 | 서강식 | AI/데이터 엔지니어 & 팀 리드 | [#8](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/8), [#9](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/9), [#10](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/10), [#17](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/17) | MVP 설계·구현, 검색·AI 파이프라인 고도화, 배포·통합·PR 머지 총괄 (작업 완료 후 PR 번호로 갱신) |
-| 유영민 | 프론트엔드 개발자 | [#11](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/11), [#12](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/12), [#13](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/13) | 대화 UI, 모바일 반응형·접근성, 오류/로딩 UX (작성 예정) |
-| 오철호 | 백엔드 개발자 | [#14](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/14), [#15](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/15), [#16](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/16) | 즐겨찾기 API·DB, 테스트·로깅 보강, ERD/API 문서화 (작성 예정) |
+| 유영민 | 프론트엔드 개발자 | [#11](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/11), [#12](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/12), [#13](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/13) | 채팅 UI 스크린리더 접근성([#31](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/31)), 시스템 다크/라이트 테마 지원([#32](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/32)), AI 응답 대기 인디케이터([#33](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/33)), 모바일 작은 화면 레이아웃 개선([#34](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/34)), 온디바이스 패널 전환 애니메이션([#35](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/35)), PWA 오프라인 캐싱 전략 개선([#36](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/36)), 설명 페이지 공통 스타일 적용([#37](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/37)), 채팅 메시지 타임스탬프([#38](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/38)), 상태 메시지 공통 컴포넌트화([#39](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/39)), SEO·공유 미리보기 메타데이터([#40](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/40)) |
+| 오철호 | 백엔드 개발자 | [#14](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/14), [#15](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/15), [#16](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/16) | 즐겨찾기 API([#19](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/19)), 환경변수 검증([#21](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/21)), DB 슬로우쿼리 로깅([#22](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/22)), LLM 재시도·타임아웃([#23](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/23)), FTS5 입력 예외처리([#26](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/26)), 단계별 요청 레이턴시 로깅([#27](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/27)), `/healthz` 의존성 상태 점검([#28](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/28)), 설명 에이전트 에러 메시지 개선([#29](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/29)), 가디언·무료한도 단위 테스트 보강([#20](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/20), [#24](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/24), [#25](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/25)), README API 문서 최신화([#30](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/30)) |
 
 ## 8. 민감정보 관리
 - 모든 키는 환경 변수로만 사용하고 `.env`는 `.gitignore`로 제외한다. 예시는 `.env.example`.

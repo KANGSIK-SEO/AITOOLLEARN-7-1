@@ -6,13 +6,20 @@ TURSO_DATABASE_URL이 있으면 Turso(HTTP API), 없으면 로컬 SQLite 파일(
 import json
 import logging
 import os
+import re
 import sqlite3
+import time
 import urllib.error
 import urllib.request
 
 from .config import ROOT
 
 log = logging.getLogger("app.db")
+
+# 이 시간(ms) 이상 걸린 쿼리는 db_slow_query 경고로 남긴다. Turso는 HTTP 왕복이 있어 로컬보다 느리므로
+# 평소 왕복(수십~200ms)보다 넉넉히 잡았다. 0이면 모든 쿼리를 기록한다(로컬 디버깅용).
+SLOW_QUERY_MS = int(os.environ.get("DB_SLOW_QUERY_MS", "500") or 500)
+_SQL_LOG_MAX = 160
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS users (
@@ -33,6 +40,16 @@ SCHEMA = [
         created_at  TEXT NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_chats_user_time ON chats (user_id, created_at)",
+    # artwork_id는 별도 파일인 미술 DB(data/art.db)의 artworks.id라 FOREIGN KEY를 걸 수 없다.
+    # 존재 여부는 API(POST /api/favorites)에서 art.get_by_ids()로 검증한다.
+    """CREATE TABLE IF NOT EXISTS favorites (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id     INTEGER NOT NULL REFERENCES users(id),
+        artwork_id  INTEGER NOT NULL,
+        created_at  TEXT NOT NULL,
+        UNIQUE (user_id, artwork_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_favorites_user_time ON favorites (user_id, created_at)",
     # 가디언: 장애·보안 사건 로그 + 자동 대응용 상태값
     """CREATE TABLE IF NOT EXISTS incidents (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,12 +67,6 @@ SCHEMA = [
         key         TEXT PRIMARY KEY,
         value       TEXT NOT NULL,
         updated_at  TEXT NOT NULL
-    )""",
-    """CREATE TABLE IF NOT EXISTS favorites (
-        user_id     INTEGER NOT NULL REFERENCES users(id),
-        artwork_id  INTEGER NOT NULL,      -- data/art.db artworks.id
-        created_at  TEXT NOT NULL,
-        PRIMARY KEY (user_id, artwork_id)
     )""",
     # 권리 근거 기록: 발급 시점 스냅숏을 그대로 보관한다 (기관 데이터가 바뀌어도 기록은 안 바뀜)
     """CREATE TABLE IF NOT EXISTS rights_records (
@@ -164,7 +175,42 @@ def execute(sql: str, params=()) -> list[dict]:
 
 def _raw_execute(sql: str, params=()) -> list[dict]:
     base = _turso_url()
-    return _turso_execute(base, sql, params) if base else _local_execute(sql, params)
+    started = time.monotonic()
+    ok = False
+    try:
+        rows = _turso_execute(base, sql, params) if base else _local_execute(sql, params)
+        ok = True
+        return rows
+    finally:
+        _log_if_slow(sql, int((time.monotonic() - started) * 1000), "turso" if base else "local_sqlite", ok)
+
+
+def _log_if_slow(sql: str, latency_ms: int, backend: str, ok: bool) -> None:
+    """실패한 쿼리도 기록한다 (Turso 타임아웃처럼 느려서 실패한 경우가 가장 중요하다).
+    params에는 이메일·비밀번호 해시·질문 본문이 들어가므로 SQL 문장만 남긴다."""
+    if latency_ms < SLOW_QUERY_MS:
+        return
+    compact = re.sub(r"\s+", " ", sql).strip()
+    if len(compact) > _SQL_LOG_MAX:
+        compact = compact[:_SQL_LOG_MAX] + "…"
+    log.warning("db_slow_query latency_ms=%s backend=%s ok=%s sql=%s", latency_ms, backend, ok, compact)
+
+
+def _migrate_favorites_id() -> None:
+    """한때 배포된 다른 버전은 favorites를 id 없이 (user_id, artwork_id) 기본키로 만들었다.
+    현재 코드는 id를 쓰므로(RETURNING id) 그 모양이면 데이터를 보존한 채 다시 만든다."""
+    cols = {r["name"] for r in _raw_execute("PRAGMA table_info(favorites)")}
+    if not cols or "id" in cols:
+        return
+    log.warning("db_migrate favorites: id 컬럼 추가를 위해 테이블을 다시 만듭니다")
+    _raw_execute("ALTER TABLE favorites RENAME TO favorites_old")
+    _raw_execute(next(stmt for stmt in SCHEMA if "TABLE IF NOT EXISTS favorites" in stmt))
+    _raw_execute("INSERT OR IGNORE INTO favorites (user_id, artwork_id, created_at) "
+                 "SELECT user_id, artwork_id, created_at FROM favorites_old")
+    _raw_execute("DROP TABLE favorites_old")
+    for stmt in SCHEMA:  # 예전 테이블과 함께 사라진 인덱스를 다시 만든다
+        if "INDEX" in stmt and " favorites " in stmt:
+            _raw_execute(stmt)
 
 
 def ensure_schema() -> None:
@@ -173,6 +219,7 @@ def ensure_schema() -> None:
         return
     for stmt in SCHEMA:
         _raw_execute(stmt)
+    _migrate_favorites_id()
     for stmt in MIGRATIONS:
         try:
             _raw_execute(stmt)

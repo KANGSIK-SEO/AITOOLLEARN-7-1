@@ -1,4 +1,6 @@
-"""FastAPI 앱: 회원가입/로그인, 챗봇 질문/응답, 내 대화 로그 조회."""
+"""FastAPI 앱: 회원가입/로그인, 챗봇 질문/응답, 내 대화 로그 조회, 작품 즐겨찾기."""
+import hashlib
+import hmac
 import json
 import logging
 import re
@@ -7,30 +9,52 @@ import sqlite3
 import time
 import urllib.error
 import urllib.request
-import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Request
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import art, auth, chat, db, guardian, records
-from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, BROWSE_LIMIT_PER_HOUR, BROWSE_PAGE_SIZE,
-                     CHAT_LIFETIME_LIMIT_FREE, CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM,
-                     CHAT_MAX_LENGTH, CONTEXT_TURNS, CRON_SECRET, FAVORITES_MAX, GUEST_TRIAL_LIMIT,
-                     GUEST_TRIAL_WINDOW_SECONDS, RECORD_LIMIT_PER_HOUR, AIUnavailableError)
+from . import art, auth, chat, db, explain, guardian, records, reqctx
+from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, CHAT_LIFETIME_LIMIT_FREE,
+                     CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
+                     CONTEXT_TURNS, CRON_SECRET, FREE_LIMIT_WARNING_THRESHOLD, BROWSE_LIMIT_PER_HOUR,
+                     BROWSE_PAGE_SIZE, RECORD_LIMIT_PER_HOUR, AIUnavailableError, validate_env)
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+reqctx.install()
+logging.basicConfig(level=logging.INFO, format=reqctx.LOG_FORMAT)
 log = logging.getLogger("app")
+
+# 필수 환경변수가 틀리면 첫 요청이 아니라 서버 시작 시점에 고칠 방법과 함께 실패한다
+for _warning in validate_env():
+    log.warning("config_warning %s", _warning)
 
 STATIC_DIR = Path(__file__).parent / "static"
 COOKIE = "session"
 
 app = FastAPI(title="저작권 걱정 없는 퍼블릭 도메인 명화 찾기 챗봇")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# TV 앱 등 다른 오리진 클라이언트는 쿠키 대신 Authorization: Bearer 헤더로 인증하므로
+# 자격 증명(쿠키) 공유는 필요 없다 — allow_credentials=False라 allow_origins="*"와 함께 써도 안전하다.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
+)
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    """요청마다 request_id를 정해, 그 요청에서 남는 모든 로그 줄에 같은 값이 붙게 한다 (app/reqctx.py)."""
+    reqctx.set_request_id(reqctx.new_request_id())
+    return await call_next(request)
+
 
 STATUS_BY_CODE = {"AI_TIMEOUT": 504, "AI_ERROR": 502, "AI_RATE_LIMITED": 429,
                   "AI_KEY_MISSING": 503, "AI_BACKED_OFF": 503}
@@ -69,16 +93,26 @@ async def unhandled_exc(_: Request, exc: Exception):
     return error(500, "INTERNAL_ERROR", "예상치 못한 오류가 발생했어요. 잠시 후 다시 시도해 주세요.")
 
 
-def current_session(session: str | None = Cookie(default=None)) -> dict:
-    data = auth.read_token(session)
+def current_session(session: str | None = Cookie(default=None),
+                    authorization: str | None = Header(default=None)) -> dict:
+    # 웹 클라이언트는 쿠키로, TV 등 다른 오리진 클라이언트는 Authorization: Bearer 헤더로 인증한다.
+    # 쿠키가 있으면 쿠키를 우선한다(기존 동작 그대로 유지).
+    token = session
+    if token is None and authorization and authorization.startswith("Bearer "):
+        token = authorization[len("Bearer "):]
+    data = auth.read_token(token)
     if data is None:
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "로그인이 필요합니다."})
     return data
 
 
-def optional_session(session: str | None = Cookie(default=None)) -> dict | None:
-    """로그인했으면 세션, 아니면 None (가입 전 체험 사용자)."""
-    return auth.read_token(session)
+def optional_session(session: str | None = Cookie(default=None),
+                     authorization: str | None = Header(default=None)) -> dict | None:
+    """로그인했으면 세션, 아니면 None. 챗봇 질문에는 쓰지 않는다(질문은 로그인 필수)."""
+    try:
+        return current_session(session, authorization)
+    except HTTPException:
+        return None
 
 
 def current_user(session_data: dict = Depends(current_session)) -> int:
@@ -99,19 +133,71 @@ class FavoriteRequest(BaseModel):
     artwork_id: int
 
 
-def _set_cookie(resp: JSONResponse, user_id: int, is_premium: bool, request: Request) -> None:
-    resp.set_cookie(COOKIE, auth.make_token(user_id, is_premium), max_age=auth.TOKEN_TTL_SECONDS,
+def _set_cookie(resp: JSONResponse, token: str, request: Request) -> None:
+    resp.set_cookie(COOKIE, token, max_age=auth.TOKEN_TTL_SECONDS,
                     httponly=True, samesite="lax", secure=request.url.scheme == "https")
+
+
+# ---- 배포 시 캐시 무효화 ----
+# 화면 파일 내용으로 버전을 만든다. 파일이 바뀌어 배포되면 버전이 바뀌므로
+# ① index.html의 정적 파일 주소(?v=버전)가 달라져 브라우저·CDN 캐시를 우회하고
+# ② 서비스워커 캐시 이름이 달라져 새 서비스워커가 옛 캐시를 지운다 (sw.js의 activate).
+VERSIONED_ASSETS = ("style.css", "app.js", "ondevice.js")
+ASSET_VERSION = hashlib.sha256(b"".join(
+    (STATIC_DIR / name).read_bytes() for name in (*VERSIONED_ASSETS, "index.html", "sw.js")
+)).hexdigest()[:10]
+NO_CACHE = {"Cache-Control": "no-cache"}  # 매번 서버에 새 버전이 있는지 확인 (내용이 같으면 304로 가볍게)
+
+
+def _versioned(text: str) -> str:
+    for name in VERSIONED_ASSETS:
+        text = text.replace(f"/static/{name}'", f"/static/{name}?v={ASSET_VERSION}'")
+        text = text.replace(f'/static/{name}"', f'/static/{name}?v={ASSET_VERSION}"')
+    return text
+
+
+INDEX_HTML = _versioned((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
+SW_JS = _versioned((STATIC_DIR / "sw.js").read_text(encoding="utf-8")).replace("__ASSET_VERSION__", ASSET_VERSION)
 
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    return HTMLResponse(INDEX_HTML, headers=NO_CACHE)
+
+
+@app.get("/sw.js")
+def service_worker():
+    # 정적 마운트(/static)가 아니라 루트에서 서빙해야 서비스워커 적용 범위가 사이트 전체(/)가 된다.
+    return Response(SW_JS, media_type="application/javascript", headers=NO_CACHE)
 
 
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/healthz")
+def healthz():
+    """의존성까지 확인하는 상태 점검 (업타임 모니터·배포 후 확인용).
+
+    /api/health는 프로세스가 떠 있는지만 본다(항상 200). /healthz는 사용자 DB(Turso/로컬)와
+    미술 DB(data/art.db)에 실제로 쿼리를 보내, 하나라도 실패하면 503을 돌려준다.
+    AI는 호출마다 비용이 들고 외부 장애가 곧 우리 장애는 아니므로 확인하지 않는다.
+    오류 상세(접속 주소·경로)는 응답에 넣지 않고 로그에만 남긴다.
+    """
+    checks = {}
+    for name, probe, errors in (("db", lambda: db.execute("SELECT 1 AS ok"), db.DbError),
+                                ("art_db", art.ping, sqlite3.Error)):
+        started = time.monotonic()
+        try:
+            probe()
+            checks[name] = {"status": "ok", "latency_ms": int((time.monotonic() - started) * 1000)}
+        except errors as e:
+            log.error("healthz_check_failed check=%s detail=%s", name, e)
+            checks[name] = {"status": "error"}
+    healthy = all(c["status"] == "ok" for c in checks.values())
+    return JSONResponse({"status": "ok" if healthy else "degraded", "checks": checks},
+                        status_code=200 if healthy else 503, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/guardian/daily-digest")
@@ -143,8 +229,10 @@ def signup(body: Credentials, request: Request):
     except db.DbError:  # 동시 가입으로 UNIQUE 충돌
         return error(409, "EMAIL_TAKEN", "이미 가입된 이메일입니다.")
     log.info("signup_success user_id=%s is_premium=%s", row["id"], is_premium)
-    resp = JSONResponse({"user": {"id": row["id"], "email": email, "is_premium": is_premium}}, status_code=201)
-    _set_cookie(resp, row["id"], is_premium, request)
+    token = auth.make_token(row["id"], is_premium)
+    resp = JSONResponse({"user": {"id": row["id"], "email": email, "is_premium": is_premium}, "token": token},
+                        status_code=201)
+    _set_cookie(resp, token, request)
     return resp
 
 
@@ -161,8 +249,9 @@ def login(body: Credentials, request: Request):
         return error(401, "INVALID_CREDENTIALS", "이메일 또는 비밀번호가 올바르지 않습니다.")
     is_premium = bool(rows[0]["is_premium"])
     log.info("login_success user_id=%s is_premium=%s", rows[0]["id"], is_premium)
-    resp = JSONResponse({"user": {"id": rows[0]["id"], "email": email, "is_premium": is_premium}})
-    _set_cookie(resp, rows[0]["id"], is_premium, request)
+    token = auth.make_token(rows[0]["id"], is_premium)
+    resp = JSONResponse({"user": {"id": rows[0]["id"], "email": email, "is_premium": is_premium}, "token": token})
+    _set_cookie(resp, token, request)
     return resp
 
 
@@ -183,13 +272,6 @@ def me(user_id: int = Depends(current_user)):
     return {"user": user}
 
 
-@app.get("/api/guest")
-def guest_status(request: Request):
-    """가입 전 체험 사용자가 남은 무료 질문 수를 화면에 보여주기 위한 조회 (카운터는 올리지 않음)."""
-    used = guardian.rate_used(f"guest:{guardian.client_ip(request)}", GUEST_TRIAL_WINDOW_SECONDS)
-    return {"limit": GUEST_TRIAL_LIMIT, "remaining": max(0, GUEST_TRIAL_LIMIT - used)}
-
-
 def _save_chat(user_id, question, answer, status, error_code, latency_ms, artwork_ids) -> int | None:
     try:
         row = db.execute(
@@ -204,13 +286,10 @@ def _save_chat(user_id, question, answer, status, error_code, latency_ms, artwor
 
 
 @app.post("/api/chat")
-def chat_endpoint(body: ChatRequest, request: Request, session_data: dict | None = Depends(optional_session)):
-    is_guest = session_data is None
-    user_id = None if is_guest else session_data["uid"]
-    is_premium = False if is_guest else session_data["premium"]
-    guest_bucket = f"guest:{guardian.client_ip(request)}"
-    request_id = uuid.uuid4().hex[:8]
-    log.info("request_received user_id=%s path=/api/chat request_id=%s", user_id, request_id)
+def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_session)):
+    user_id, is_premium = session_data["uid"], session_data["premium"]
+    request_id = reqctx.get_request_id()
+    log.info("request_received user_id=%s path=/api/chat", user_id)
 
     question = body.message.strip()
     if not question:
@@ -224,78 +303,60 @@ def chat_endpoint(body: ChatRequest, request: Request, session_data: dict | None
     if guardian.is_ai_backed_off():
         return error(503, "AI_BACKED_OFF", "AI 서비스가 일시적으로 쉬고 있어요. 잠시 후 다시 시도해 주세요.")
 
-    if is_guest:
-        # 체험은 성공한 질문만 센다 — AI 장애로 실패한 질문 때문에 체험 기회를 잃지 않게.
-        if guardian.rate_used(guest_bucket, GUEST_TRIAL_WINDOW_SECONDS) >= GUEST_TRIAL_LIMIT:
-            log.warning("guest_limit_reached request_id=%s", request_id)
-            return error(403, "GUEST_LIMIT_REACHED",
-                         f"무료 체험 {GUEST_TRIAL_LIMIT}회를 모두 사용했어요. 가입하면 계속 이용할 수 있어요.")
-        # 성공만 세면 동시에 여러 요청을 보내 체험 한도를 넘길 수 있어, 시도 횟수 자체에도 상한을 둔다
-        if not guardian.check_rate(f"guest_try:{guardian.client_ip(request)}", limit=GUEST_TRIAL_LIMIT * 3,
-                                   window_seconds=GUEST_TRIAL_WINDOW_SECONDS):
-            return error(429, "RATE_LIMITED", "요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
-        return _run_chat(None, False, question, [], request_id, guest_bucket)
-
     hour_limit = CHAT_LIMIT_PER_HOUR_PREMIUM if is_premium else CHAT_LIMIT_PER_HOUR
     since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
     used_hour = db.execute("SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND created_at > ?", (user_id, since))[0]["n"]
     if used_hour >= hour_limit:
-        log.warning("rate_limited user_id=%s request_id=%s is_premium=%s", user_id, request_id, is_premium)
+        log.warning("rate_limited user_id=%s is_premium=%s", user_id, is_premium)
         return error(429, "RATE_LIMITED", "질문이 너무 많아요. 잠시 후 다시 시도해 주세요.")
 
+    remaining_free = None
     if not is_premium:
         used_lifetime = db.execute(
             "SELECT COUNT(*) AS n FROM chats WHERE user_id = ? AND status = 'ok'", (user_id,))[0]["n"]
         if used_lifetime >= CHAT_LIFETIME_LIMIT_FREE:
-            log.warning("free_limit_reached user_id=%s request_id=%s", user_id, request_id)
+            log.warning("free_limit_reached user_id=%s", user_id)
             return error(403, "FREE_LIMIT_REACHED",
                         f"무료 이용 {CHAT_LIFETIME_LIMIT_FREE}회를 모두 사용했어요. 초대코드가 있다면 입력해 보세요.")
+        remaining_free = CHAT_LIFETIME_LIMIT_FREE - used_lifetime - 1
 
     history = list(reversed(db.execute(
         "SELECT question, answer FROM chats WHERE user_id = ? AND status = 'ok' ORDER BY id DESC LIMIT ?",
         (user_id, CONTEXT_TURNS))))
-    return _run_chat(user_id, is_premium, question, history, request_id, None)
 
-
-def _run_chat(user_id: int | None, is_premium: bool, question: str, history: list[dict],
-              request_id: str, guest_bucket: str | None):
-    """user_id가 None이면 가입 전 체험: 대화 로그를 남기지 않고(users FK 없음) 체험 카운터만 올린다."""
-    save = _save_chat if user_id is not None else (lambda *a, **k: None)
     started = time.monotonic()
-    log.info("ai_call_start user_id=%s request_id=%s", user_id, request_id)
+    log.info("ai_call_start user_id=%s", user_id)
     art_limit = ART_RESULTS_LIMIT_PREMIUM if is_premium else ART_RESULTS_LIMIT
     try:
-        intent = chat.extract_intent(question)
-        works, relaxed = chat.find_artworks(intent, limit=art_limit)
-        answer = chat.compose_answer(question, works, history, relaxed=relaxed, purpose=intent.get("purpose"))
+        intent = chat.extract_intent(question, request_id=request_id)
+        works, relaxed = chat.find_artworks(intent, limit=art_limit, request_id=request_id)
+        answer = chat.compose_answer(question, works, history, relaxed=relaxed,
+                                     purpose=intent.get("purpose"), request_id=request_id)
     except AIUnavailableError as e:
         latency = int((time.monotonic() - started) * 1000)
-        log.error("ai_call_failure request_id=%s code=%s latency_ms=%s", request_id, e.code, latency)
-        save(user_id, question, None, "error", e.code, latency, [])
+        log.error("ai_call_failure code=%s latency_ms=%s", e.code, latency)
+        _save_chat(user_id, question, None, "error", e.code, latency, [])
         guardian.record_incident("reliability", e.code, str(e), {"request_id": request_id, "latency_ms": latency},
                                  "medium" if e.code == "AI_RATE_LIMITED" else "low")
         guardian.note_ai_failure(e.code)
         return error(STATUS_BY_CODE.get(e.code, 502), e.code, str(e))
     except sqlite3.Error as e:
         latency = int((time.monotonic() - started) * 1000)
-        log.error("art_db_failure request_id=%s detail=%s", request_id, e)
-        save(user_id, question, None, "error", "ART_DB_ERROR", latency, [])
+        log.error("art_db_failure detail=%s", e)
+        _save_chat(user_id, question, None, "error", "ART_DB_ERROR", latency, [])
         return error(503, "ART_DB_ERROR", "작품 데이터베이스를 읽지 못했어요.")
 
     latency = int((time.monotonic() - started) * 1000)
-    log.info("ai_call_success request_id=%s latency_ms=%s artworks=%s", request_id, latency, len(works))
-    chat_id = save(user_id, question, answer, "ok", None, latency, [w["id"] for w in works])
+    log.info("ai_call_success latency_ms=%s artworks=%s", latency, len(works))
+    chat_id = _save_chat(user_id, question, answer, "ok", None, latency, [w["id"] for w in works])
+    show_limit_warning = remaining_free is not None and remaining_free <= FREE_LIMIT_WARNING_THRESHOLD
     # '더 보기'가 AI를 다시 부르지 않고 같은 조건으로 DB만 넘겨 볼 수 있게 검색 조건을 함께 돌려준다
     search = {k: intent.get(k) for k in ("keywords", "artist", "year_from", "year_to", "orientation", "purpose")}
     if relaxed:  # 작가/연도 조건을 빼고 찾은 결과면 '더 보기'도 같은 완화 조건을 쓴다
         search.update(artist=None, year_from=None, year_to=None)
-    result = {"chat_id": chat_id, "saved": chat_id is not None, "request_id": request_id,
-              "reply": answer, "artworks": works, "search": None if intent["chitchat"] else search}
-    if guest_bucket:
-        guardian.check_rate(guest_bucket, GUEST_TRIAL_LIMIT, GUEST_TRIAL_WINDOW_SECONDS)
-        used = guardian.rate_used(guest_bucket, GUEST_TRIAL_WINDOW_SECONDS)
-        result["guest_remaining"] = max(0, GUEST_TRIAL_LIMIT - used)
-    return result
+    return {"chat_id": chat_id, "saved": chat_id is not None, "request_id": request_id,
+            "reply": answer, "artworks": works, "search": None if intent["chitchat"] else search,
+            "remaining_free": remaining_free, "show_limit_warning": show_limit_warning}
 
 
 @app.get("/api/me/chats")
@@ -307,6 +368,7 @@ def my_chats(limit: int = 20, offset: int = 0, user_id: int = Depends(current_us
     return {"chats": rows}
 
 
+# ---- 작품 즐겨찾기 ----
 @app.get("/api/artworks")
 def browse_artworks(request: Request, q: str = "", artist: str | None = None, year_from: int | None = None,
                     year_to: int | None = None, offset: int = 0, limit: int = BROWSE_PAGE_SIZE):
@@ -364,28 +426,91 @@ def show_record(number: str):
     return HTMLResponse(records.render(row))
 
 
-@app.get("/api/me/favorites")
-def list_favorites(user_id: int = Depends(current_user)):
-    rows = db.execute("SELECT artwork_id FROM favorites WHERE user_id = ? ORDER BY created_at DESC, artwork_id DESC",
-                      (user_id,))
-    return {"artworks": art.get_by_ids([r["artwork_id"] for r in rows])}
+def _artwork_or_404(artwork_id: int) -> None:
+    try:
+        exists = artwork_id in art.get_by_ids([artwork_id])
+    except sqlite3.Error as e:
+        log.error("art_db_failure path=/api/favorites detail=%s", e)
+        raise HTTPException(503, {"code": "ART_DB_ERROR", "message": "작품 데이터베이스를 읽지 못했어요."})
+    if not exists:
+        raise HTTPException(404, {"code": "ARTWORK_NOT_FOUND", "message": "존재하지 않는 작품입니다."})
 
 
-@app.post("/api/me/favorites")
+@app.post("/api/favorites")
 def add_favorite(body: FavoriteRequest, user_id: int = Depends(current_user)):
-    if not art.get_by_ids([body.artwork_id]):
-        return error(404, "ARTWORK_NOT_FOUND", "작품을 찾을 수 없습니다.")
-    if db.execute("SELECT COUNT(*) AS n FROM favorites WHERE user_id = ?", (user_id,))[0]["n"] >= FAVORITES_MAX:
-        return error(409, "FAVORITES_FULL", f"즐겨찾기는 최대 {FAVORITES_MAX}개까지 저장할 수 있어요.")
-    db.execute("INSERT INTO favorites (user_id, artwork_id, created_at) VALUES (?, ?, ?) "
-               "ON CONFLICT(user_id, artwork_id) DO NOTHING", (user_id, body.artwork_id, _now()))
-    return {"ok": True}
+    """이미 저장한 작품이면 200(created=false), 새로 저장하면 201. 같은 요청을 반복해도 안전하다."""
+    _artwork_or_404(body.artwork_id)
+    created = db.execute(
+        "INSERT INTO favorites (user_id, artwork_id, created_at) VALUES (?, ?, ?) "
+        "ON CONFLICT (user_id, artwork_id) DO NOTHING RETURNING id",
+        (user_id, body.artwork_id, _now()))
+    log.info("favorite_add user_id=%s artwork_id=%s created=%s", user_id, body.artwork_id, bool(created))
+    return JSONResponse({"artwork_id": body.artwork_id, "created": bool(created)},
+                        status_code=201 if created else 200)
 
 
-@app.delete("/api/me/favorites/{artwork_id}")
+@app.delete("/api/favorites/{artwork_id}")
 def remove_favorite(artwork_id: int, user_id: int = Depends(current_user)):
-    db.execute("DELETE FROM favorites WHERE user_id = ? AND artwork_id = ?", (user_id, artwork_id))
-    return {"ok": True}
+    """저장하지 않은 작품을 지워도 오류가 아니다(removed=false)."""
+    removed = db.execute("DELETE FROM favorites WHERE user_id = ? AND artwork_id = ? RETURNING id",
+                         (user_id, artwork_id))
+    log.info("favorite_remove user_id=%s artwork_id=%s removed=%s", user_id, artwork_id, bool(removed))
+    return {"artwork_id": artwork_id, "removed": bool(removed)}
+
+
+@app.get("/api/me/favorites")
+def my_favorites(limit: int = 20, offset: int = 0, user_id: int = Depends(current_user)):
+    """최근 저장 순. 미술 DB에서 사라진 작품은 목록에서 빠진다."""
+    limit = max(1, min(limit, 100))
+    rows = db.execute(
+        "SELECT artwork_id, created_at FROM favorites WHERE user_id = ? "
+        "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", (user_id, limit, max(0, offset)))
+    try:
+        cards = art.get_by_ids([r["artwork_id"] for r in rows])
+    except sqlite3.Error as e:
+        log.error("art_db_failure path=/api/me/favorites detail=%s", e)
+        return error(503, "ART_DB_ERROR", "작품 데이터베이스를 읽지 못했어요.")
+    return {"favorites": [{**cards[r["artwork_id"]], "favorited_at": r["created_at"]}
+                          for r in rows if r["artwork_id"] in cards]}
+
+
+# ---- 설명 에이전트 (피어 리뷰용) ----
+# 비밀번호 입력 없이 '/explain/{token}' 링크 자체가 암호 역할을 한다(EXPLAIN_AGENT_SECRET과 일치해야 함).
+# 토큰이 틀리거나 비활성(EXPLAIN_AGENT_SECRET 미설정)이면 404 — 평범한 404와 구별되지 않게 해 존재 자체를 숨긴다.
+class ExplainRequest(BaseModel):
+    question: str
+    secret: str
+
+
+@app.get("/explain/{token}")
+def explain_page(token: str):
+    secret = explain.get_secret()
+    if not secret or not hmac.compare_digest(token, secret):
+        raise HTTPException(404)
+    return FileResponse(STATIC_DIR / "explain.html")
+
+
+@app.post("/api/explain")
+def explain_endpoint(body: ExplainRequest, request: Request):
+    secret = explain.get_secret()
+    if not secret or not hmac.compare_digest(body.secret, secret):
+        return error(401, "UNAUTHENTICATED", "링크가 올바르지 않거나 만료됐어요. 받은 링크를 다시 확인해 주세요.")
+    ip = guardian.client_ip(request)
+    if not guardian.check_rate(f"explain:{ip}", limit=30, window_seconds=3600):
+        return error(429, "RATE_LIMITED", "질문은 1시간에 30개까지 할 수 있어요. 잠시 후 다시 물어봐 주세요.")
+    question = body.question.strip()
+    if not question:
+        return error(400, "EMPTY_MESSAGE", "질문을 입력해 주세요.")
+    if len(question) > CHAT_MAX_LENGTH:
+        return error(400, "MESSAGE_TOO_LONG",
+                     f"질문이 너무 길어요 ({len(question)}자). {CHAT_MAX_LENGTH}자 이하로 줄여서 물어봐 주세요.")
+    try:
+        return {"answer": explain.ask(question)}
+    except AIUnavailableError as e:
+        log.warning("explain_ai_failure code=%s detail=%s", e.code, e)  # 원래 메시지는 로그에만
+        return error(STATUS_BY_CODE.get(e.code, 502), e.code, explain.friendly_ai_message(e.code))
+    except explain.ExplainUnavailable as e:
+        return error(503, "EXPLAIN_UNAVAILABLE", str(e))
 
 
 # ---- AIC 이미지 프록시 ----

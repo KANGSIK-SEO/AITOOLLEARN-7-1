@@ -4,51 +4,113 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>저작권 걱정 없는 퍼블릭 도메인 명화 찾기 / Public Domain Masterpiece Finder</title>
+    <meta name="description" content="상업적으로 사용할 수 있는 CC0 퍼블릭 도메인 명화를 한국어와 영어로 찾아주는 AI 챗봇입니다.">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://art-chatbot-eight.vercel.app/">
+    <meta property="og:type" content="website">
+    <meta property="og:locale" content="ko_KR">
+    <meta property="og:site_name" content="명화 챗봇">
+    <meta property="og:title" content="저작권 걱정 없는 퍼블릭 도메인 명화 찾기">
+    <meta property="og:description" content="상업적으로 사용할 수 있는 CC0 퍼블릭 도메인 명화를 한국어와 영어로 찾아보세요.">
+    <meta property="og:url" content="https://art-chatbot-eight.vercel.app/">
+    <meta property="og:image" content="https://art-chatbot-eight.vercel.app/static/icons/icon-512.png">
+    <meta property="og:image:alt" content="퍼블릭 도메인 명화 찾기 챗봇 아이콘">
+    <meta property="og:image:width" content="512">
+    <meta property="og:image:height" content="512">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="저작권 걱정 없는 퍼블릭 도메인 명화 찾기">
+    <meta name="twitter:description" content="상업적으로 사용할 수 있는 CC0 퍼블릭 도메인 명화를 한국어와 영어로 찾아보세요.">
+    <meta name="twitter:image" content="https://art-chatbot-eight.vercel.app/static/icons/icon-512.png">
+    <meta name="twitter:image:alt" content="퍼블릭 도메인 명화 찾기 챗봇 아이콘">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#0b0c10">
+    <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="/static/icons/icon-512.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="명화 챗봇">
 </head>
 <body>
-    <main class="chat-container">
-        <header class="chat-header">
-            <div>🖼️ 저작권 걱정 없는 퍼블릭 도메인 명화 찾기<br>Public Domain Masterpiece Finder</div>
-            <div class="status-bar" id="status-bar">가입 없이 체험해 보세요 / Try it without signing up</div>
+    <main class="chat-container" aria-label="명화 찾기 채팅 / Masterpiece finder chat">
+        <header class="chat-header" role="banner">
+            <div class="chat-title" role="heading" aria-level="1">🖼️ 저작권 걱정 없는 퍼블릭 도메인 명화 찾기<br><span class="chat-subtitle">Public Domain Masterpiece Finder</span></div>
+            <div class="status-bar" id="status-bar" role="status" aria-live="polite">로그인이 필요합니다 / Login required</div>
             <div class="header-actions">
-                <button id="favorites-btn" class="link-btn" hidden>★ 즐겨찾기 / Favorites</button>
-                <button id="open-auth-btn" class="link-btn" hidden>로그인 · 가입 / Log in · Sign up</button>
-                <button id="logout-btn" class="link-btn" hidden>로그아웃 / Log out</button>
+                <button id="favorites-btn" class="link-btn" type="button" aria-label="즐겨찾기 보기 / Show favorites" hidden>★ 즐겨찾기 / Favorites</button>
+                <button id="logout-btn" class="link-btn" type="button" aria-label="로그아웃 / Log out" hidden>로그아웃 / Log out</button>
             </div>
         </header>
 
-        <section id="auth-panel" class="auth-panel" hidden>
-            <p class="hint">가입하면 질문을 계속할 수 있고, 마음에 드는 작품을 즐겨찾기에 모아둘 수 있어요. / Sign up to keep asking and save artworks to your favorites.<br>(MET · Art Institute of Chicago 공개 데이터 / Open data from the MET and the Art Institute of Chicago)</p>
-            <input type="email" id="email" placeholder="이메일 / Email" autocomplete="username">
-            <input type="password" id="password" placeholder="비밀번호 (8자 이상) / Password (8+ characters)" autocomplete="current-password">
-            <input type="text" id="private-code" placeholder="초대코드 (선택) / Invite code (optional)" autocomplete="off">
+        <div id="install-banner" class="install-banner" role="region" aria-label="앱 설치 / App installation" hidden>
+            <button id="install-btn" class="pill install-btn">📲 앱으로 설치하기 / Install app</button>
+        </div>
+
+        <section id="auth-panel" class="auth-panel" aria-label="로그인 및 회원가입 / Log in and sign up">
+            <p class="hint">어디에 쓸지 말하면 용도에 맞는 CC0 명화를 찾고, 써도 되는지 확인한 근거를 날짜와 함께 기록해 드려요. / Tell us what it's for — we find CC0 masterpieces that fit and keep a dated record of the rights evidence.<br>(MET · Art Institute of Chicago · Cleveland Museum of Art 공개 데이터 / Open data)</p>
+            <input type="email" id="email" aria-label="이메일 / Email" placeholder="이메일 / Email" autocomplete="username">
+            <input type="password" id="password" aria-label="비밀번호 (8자 이상) / Password (8+ characters)" placeholder="비밀번호 (8자 이상) / Password (8+ characters)" autocomplete="current-password">
+            <input type="text" id="private-code" aria-label="초대코드 (선택) / Invite code (optional)" placeholder="초대코드 (선택) / Invite code (optional)" autocomplete="off">
             <div class="auth-buttons">
                 <button id="login-btn" class="pill">로그인 / Login</button>
                 <button id="signup-btn" class="pill secondary">회원가입 / Sign up</button>
             </div>
             <div id="auth-error" class="error-text" role="alert"></div>
-            <button id="close-auth-btn" class="text-btn">← 가입 없이 계속 체험하기 / Keep trying without signing up</button>
         </section>
 
-        <section id="chat-panel">
-            <div id="guest-banner" class="guest-banner" hidden></div>
-            <div id="chat-log" class="chat-log">
-                <div class="message bot">안녕하세요! 어디에 쓸지 말해 주세요. 용도에 맞는 비율·분위기의 CC0 명화를 찾고, 써도 되는지 확인하는 수고를 대신해 드려요. 근거는 날짜와 함께 기록으로 보관해 드려요. / Tell me what it's for — I'll find CC0 masterpieces that fit, check the rights for you, and keep a dated record of the evidence.</div>
-                <div class="examples" id="examples">
+        <section id="chat-panel" aria-label="명화 찾기 대화 / Masterpiece finder conversation" hidden>
+            <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions" aria-label="대화 내용 / Conversation">
+                <div class="message bot" role="article">안녕하세요! 어디에 쓸지 말해 주세요. 용도에 맞는 비율·분위기의 CC0 명화를 찾고, 써도 되는지 확인하는 수고를 대신해 드려요. 근거는 날짜와 함께 기록으로 보관해 드려요. / Tell me what it's for — I'll find CC0 masterpieces that fit, check the rights for you, and keep a dated record of the evidence.</div>
+                <div class="examples" id="examples" role="group" aria-label="예시 질문 / Example questions">
                     <button class="chip" type="button">카페 벽에 걸 세로형 포스터</button>
                     <button class="chip" type="button">교재 삽화용 정물화</button>
                     <button class="chip" type="button">PPT 배경용 가로형 풍경화</button>
                     <button class="chip" type="button">인스타그램 정사각 게시물용 꽃 그림</button>
                 </div>
             </div>
-            <form id="chat-form" class="input-area">
-                <input type="text" id="message-input" maxlength="500" placeholder="질문을 입력하세요 (최대 500자) / Type your question (max 500 chars)" autocomplete="off">
-                <button id="send-btn" type="submit" title="보내기 / Send">➤</button>
+
+            <button id="ondevice-toggle" type="button" class="ondevice-toggle" aria-controls="ondevice-panel" aria-expanded="false">🧠 온디바이스 추천 (서버 호출 없음) / On-device recommend (no server call)</button>
+            <div id="ondevice-panel" class="ondevice-panel" role="region" aria-label="온디바이스 추천 설정 / On-device recommendation settings" hidden>
+                <p class="hint">자유롭게 써보세요, AI 없이 키워드 사전으로 해석해요 / Type freely — parsed on-device, no AI<br>(예: "봄 느낌 풍경화", "19세기 인상주의 바다")</p>
+                <div class="ondevice-row">
+                    <input type="text" id="od-freetext" aria-label="온디바이스 검색어 / On-device search query" placeholder="예: 봄 느낌 풍경화 / e.g. spring landscape">
+                    <button id="od-parse-btn" type="button" class="pill secondary">AI 없이 이해하기 / Parse (no AI)</button>
+                </div>
+                <div class="ondevice-row">
+                    <select id="od-style" aria-label="화풍 / Art style"><option value="">화풍 전체 / Any style</option></select>
+                    <input type="text" id="od-subject" aria-label="주제 키워드 / Subject keywords" placeholder="주제 키워드, 여러 개는 콤마로 / subject keywords, comma-separated">
+                </div>
+                <div class="ondevice-row">
+                    <input type="number" id="od-year-from" aria-label="시작 연도 / Start year" placeholder="연도부터 / year from">
+                    <input type="number" id="od-year-to" aria-label="종료 연도 / End year" placeholder="연도까지 / year to">
+                </div>
+                <pre id="od-rule-preview" class="rule-preview" role="status" aria-label="검색 규칙 미리보기 / Search rule preview"></pre>
+                <button id="od-run-btn" type="button" class="pill">추천받기 (내 기기에서 바로) / Recommend on this device</button>
+            </div>
+
+            <form id="chat-form" class="input-area" aria-label="메시지 보내기 / Send a message">
+                <input type="text" id="message-input" aria-label="질문 입력 / Enter your question" maxlength="500" placeholder="질문을 입력하세요 (최대 500자) / Type your question (max 500 chars)" autocomplete="off">
+                <button id="send-btn" type="submit" aria-label="보내기 / Send" title="보내기 / Send">➤</button>
             </form>
         </section>
     </main>
+
+    <div id="install-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="install-modal-title" hidden>
+        <div class="modal-box" role="document">
+            <h2 id="install-modal-title">앱으로 설치하기 / Install app</h2>
+            <ol id="install-steps" class="install-steps"></ol>
+            <button id="install-modal-close" class="pill">닫기 / Close</button>
+        </div>
+    </div>
+
+    <script src="/static/ondevice.js"></script>
     <script src="/static/app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
+        }
+    </script>
 </body>
 </html>

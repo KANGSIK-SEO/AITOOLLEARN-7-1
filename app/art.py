@@ -1,4 +1,5 @@
 """읽기 전용 미술 DB(data/art.db) 검색."""
+import logging
 import random
 import re
 import sqlite3
@@ -21,6 +22,11 @@ DIVERSITY_POOL_MULTIPLIER = 5
 GUARANTEED_TOP = 2
 
 
+log = logging.getLogger("app.art")
+
+FTS_MAX_TOKENS = 20  # OR로 잇는 검색어 상한 (LLM이 키워드를 수백 개 뱉어도 질의가 커지지 않게)
+
+
 AIC_IMAGE_RE = re.compile(r"/iiif/2/([0-9a-f-]{36})/")
 
 
@@ -41,12 +47,30 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-def _fts_query(keywords: list[str]) -> str:
-    """키워드를 안전한 FTS5 OR 질의로 바꾼다 (영문/숫자 토큰만, 각각 따옴표로 감쌈)."""
+def _fts_query(keywords) -> str:
+    """키워드를 안전한 FTS5 OR 질의로 바꾼다 (영문/숫자 토큰만, 각각 따옴표로 감쌈).
+    문자열 하나만 와도 받아주고, None·숫자 등 문자열이 아닌 값은 건너뛴다. 남는 토큰이 없으면 ""."""
+    if isinstance(keywords, str):
+        keywords = [keywords]
     tokens = []
-    for kw in keywords:
-        tokens += re.findall(r"[A-Za-z0-9]+", kw)
-    return " OR ".join(f'"{t}"' for t in dict.fromkeys(tokens))
+    for kw in keywords or []:
+        if isinstance(kw, str):
+            tokens += re.findall(r"[A-Za-z0-9]+", kw)
+    return " OR ".join(f'"{t}"' for t in list(dict.fromkeys(tokens))[:FTS_MAX_TOKENS])
+
+
+def get_by_ids(ids: list[int]) -> dict[int, dict]:
+    """작품 id 목록 → {id: 카드}. 없는 id는 결과에 빠진다 (즐겨찾기 검증·조회용)."""
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return {}
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            f"SELECT {CARD_FIELDS} FROM artworks a WHERE a.id IN ({','.join('?' * len(ids))})", ids).fetchall()
+        return {r["id"]: with_proxy_urls(dict(r)) for r in rows}
+    finally:
+        conn.close()
 
 
 def _diversify(pool: list[dict], limit: int) -> list[dict]:
@@ -85,17 +109,23 @@ def _filters(artist: str | None, year_from: int | None, year_to: int | None) -> 
     return where, params
 
 
-def _ranked(conn: sqlite3.Connection, keywords: list[str], artist: str | None, year_from: int | None,
+def _ranked(conn: sqlite3.Connection, keywords, artist: str | None, year_from: int | None,
             year_to: int | None, limit: int, offset: int = 0) -> list[dict]:
-    """관련도순(하이라이트 우선) 결정적 정렬. search()의 후보 풀과 browse()의 페이지가 같은 순서를 쓴다."""
+    """관련도순(하이라이트 우선) 결정적 정렬. search()의 후보 풀과 browse()의 페이지가 같은 순서를 쓴다.
+    빈 검색어·특수문자만 있는 검색어는 FTS 없이 필터만으로 찾고, FTS 질의가 실패하면(색인 손상 등)
+    사용자 입력 때문에 503을 내지 않도록 필터 검색으로 대신한다."""
     where, params = _filters(artist, year_from, year_to)
     fts = _fts_query(keywords)
+    rows = None
     if fts:
         sql = (f"SELECT {CARD_FIELDS} FROM artworks_fts f JOIN artworks a ON a.id = f.rowid "
                f"WHERE artworks_fts MATCH ? AND {' AND '.join(where)} "
                "ORDER BY a.is_highlight DESC, bm25(artworks_fts), a.id LIMIT ? OFFSET ?")
-        rows = conn.execute(sql, [fts, *params, limit, offset]).fetchall()
-    else:
+        try:
+            rows = conn.execute(sql, [fts, *params, limit, offset]).fetchall()
+        except sqlite3.OperationalError as e:
+            log.warning("fts_query_failed query=%r detail=%s", fts[:200], e)
+    if rows is None:
         sql = (f"SELECT {CARD_FIELDS} FROM artworks a WHERE {' AND '.join(where)} "
                "ORDER BY a.is_highlight DESC, a.id LIMIT ? OFFSET ?")
         rows = conn.execute(sql, [*params, limit, offset]).fetchall()
@@ -104,6 +134,8 @@ def _ranked(conn: sqlite3.Connection, keywords: list[str], artist: str | None, y
 
 def search(keywords: list[str], artist: str | None = None,
            year_from: int | None = None, year_to: int | None = None, limit: int = 6) -> list[dict]:
+    if limit <= 0:
+        return []
     conn = _connect()
     try:
         pool = _ranked(conn, keywords, artist, year_from, year_to, limit * DIVERSITY_POOL_MULTIPLIER)
@@ -123,22 +155,6 @@ def browse(keywords: list[str], artist: str | None = None, year_from: int | None
         conn.close()
 
 
-def get_by_ids(ids: list[int]) -> list[dict]:
-    """주어진 순서대로 작품 카드를 돌려준다 (없는 id는 건너뜀). 즐겨찾기 목록에 쓴다."""
-    if not ids:
-        return []
-    conn = _connect()
-    try:
-        marks = ", ".join("?" for _ in ids)
-        src_sql, src_params = _source_filter()
-        rows = conn.execute(f"SELECT {CARD_FIELDS} FROM artworks a WHERE a.id IN ({marks}) AND {src_sql}",
-                            [*ids, *src_params]).fetchall()
-        by_id = {r["id"]: with_proxy_urls(dict(r)) for r in rows}
-        return [by_id[i] for i in ids if i in by_id]
-    finally:
-        conn.close()
-
-
 def get_rights_record(artwork_id: int) -> dict | None:
     """권리 근거 기록용 데이터. 판단(R1~R6)은 rights.evaluate가 하므로 여기서는 기관 필터를 걸지 않는다.
     image_url은 프록시 주소가 아니라 기관 원본 주소 그대로 둔다 (R4 판단 근거)."""
@@ -149,5 +165,14 @@ def get_rights_record(artwork_id: int) -> dict | None:
             "a.thumbnail_url, a.source_url, a.credit_line, a.license, a.is_public_domain, a.collected_at "
             "FROM artworks a WHERE a.id = ?", (artwork_id,)).fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def ping() -> None:
+    """미술 DB 파일을 열고 읽을 수 있는지 확인한다 (/healthz). 실패하면 sqlite3.Error."""
+    conn = _connect()
+    try:
+        conn.execute("SELECT 1 FROM artworks LIMIT 1").fetchall()
     finally:
         conn.close()

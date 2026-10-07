@@ -41,53 +41,22 @@ def test_my_chats_requires_login(client):
     assert r.status_code == 401 and r.json()["error"]["code"] == "UNAUTHENTICATED"
 
 
-def test_guest_trial_allows_limited_questions_without_login(client, monkeypatch):
-    monkeypatch.setattr(main_module, "GUEST_TRIAL_LIMIT", 2)
+def test_chat_requires_login(client, monkeypatch):
+    """미션 요구사항: 챗봇 질문/응답은 로그인한 사용자만."""
     monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
-    assert client.get("/api/guest").json()["remaining"] == 2
     r = client.post("/api/chat", json={"message": "봄 풍경화"})
-    assert r.status_code == 200 and r.json()["artworks"] and r.json()["guest_remaining"] == 1
-    assert r.json()["chat_id"] is None  # 체험 질문은 대화 로그에 남기지 않는다
-    assert client.post("/api/chat", json={"message": "겨울 바다"}).json()["guest_remaining"] == 0
-    r = client.post("/api/chat", json={"message": "세 번째"})
-    assert r.status_code == 403 and r.json()["error"]["code"] == "GUEST_LIMIT_REACHED"
-    # 가입하면 체험 한도와 무관하게 계속 쓸 수 있다
-    signup(client)
-    assert client.post("/api/chat", json={"message": "가입 후 질문"}).status_code == 200
-
-
-def test_guest_trial_does_not_count_failed_ai_calls(client, monkeypatch):
-    monkeypatch.setattr(main_module, "GUEST_TRIAL_LIMIT", 1)
-
-    def boom(*a, **k):
-        raise AIUnavailableError("AI_TIMEOUT", "응답이 지연되고 있어요.")
-    monkeypatch.setattr(llm, "chat_completion", boom)
-    assert client.post("/api/chat", json={"message": "실패"}).status_code == 504
-    assert client.get("/api/guest").json()["remaining"] == 1
+    assert r.status_code == 401 and r.json()["error"]["code"] == "UNAUTHENTICATED"
 
 
 def test_chat_returns_search_conditions_for_browse(client, monkeypatch):
     monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
     body = client.post("/api/chat", json={"message": "봄 풍경화"}).json()
     assert body["search"]["keywords"] == ["landscape", "spring"]
     page = client.get("/api/artworks", params={"q": ",".join(body["search"]["keywords"]), "limit": 30}).json()
     assert len(page["artworks"]) == 30 and page["has_more"] is True
     nxt = client.get("/api/artworks", params={"q": "landscape,spring", "limit": 30, "offset": 30}).json()
     assert not {w["id"] for w in page["artworks"]} & {w["id"] for w in nxt["artworks"]}
-
-
-def test_favorites_add_list_remove(client):
-    assert client.get("/api/me/favorites").status_code == 401
-    signup(client)
-    ids = [w["id"] for w in client.get("/api/artworks", params={"q": "landscape", "limit": 2}).json()["artworks"]]
-    for i in ids:
-        assert client.post("/api/me/favorites", json={"artwork_id": i}).status_code == 200
-    assert client.post("/api/me/favorites", json={"artwork_id": ids[0]}).status_code == 200  # 중복은 무시
-    assert client.post("/api/me/favorites", json={"artwork_id": 999999999}).status_code == 404
-    favs = client.get("/api/me/favorites").json()["artworks"]
-    assert sorted(w["id"] for w in favs) == sorted(ids)
-    client.delete(f"/api/me/favorites/{ids[0]}")
-    assert [w["id"] for w in client.get("/api/me/favorites").json()["artworks"]] == [ids[1]]
 
 
 def test_signup_login_validation(client):
@@ -255,3 +224,249 @@ def test_image_proxy_validates_and_sends_aic_header(client, monkeypatch):
     assert not seen["hdr"]["User-agent"].startswith("Python-urllib")
     assert client.get("/api/img/aic/not-a-uuid?w=400").status_code == 400
     assert client.get("/api/img/aic/bda9058b-5be6-37d0-e5a6-926584540757?w=999").status_code == 400
+
+
+# ---- 작품 즐겨찾기 ----
+def _artwork_ids(n=2):
+    import sqlite3
+    from app import art
+    conn = sqlite3.connect(f"file:{art.ART_DB}?mode=ro", uri=True)
+    try:
+        return [r[0] for r in conn.execute("SELECT id FROM artworks ORDER BY id LIMIT ?", (n,))]
+    finally:
+        conn.close()
+
+
+def test_favorites_require_login(client):
+    assert client.post("/api/favorites", json={"artwork_id": 1}).status_code == 401
+    assert client.delete("/api/favorites/1").status_code == 401
+    assert client.get("/api/me/favorites").json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_favorite_add_list_remove(client):
+    a, b = _artwork_ids(2)
+    signup(client)
+    assert client.post("/api/favorites", json={"artwork_id": a}).status_code == 201
+    assert client.post("/api/favorites", json={"artwork_id": b}).status_code == 201
+    favs = client.get("/api/me/favorites").json()["favorites"]
+    assert [f["id"] for f in favs] == [b, a]  # 최근 저장 순
+    assert favs[0]["title"] and favs[0]["license"] and favs[0]["favorited_at"]
+
+    r = client.delete(f"/api/favorites/{b}")
+    assert r.status_code == 200 and r.json()["removed"] is True
+    assert client.delete(f"/api/favorites/{b}").json()["removed"] is False
+    assert [f["id"] for f in client.get("/api/me/favorites").json()["favorites"]] == [a]
+
+
+def test_favorite_duplicate_is_idempotent(client):
+    (a,) = _artwork_ids(1)
+    signup(client)
+    assert client.post("/api/favorites", json={"artwork_id": a}).json()["created"] is True
+    r = client.post("/api/favorites", json={"artwork_id": a})
+    assert r.status_code == 200 and r.json()["created"] is False
+    assert len(client.get("/api/me/favorites").json()["favorites"]) == 1
+
+
+def test_favorite_rejects_unknown_or_invalid_artwork(client):
+    signup(client)
+    r = client.post("/api/favorites", json={"artwork_id": 999_999_999})
+    assert r.status_code == 404 and r.json()["error"]["code"] == "ARTWORK_NOT_FOUND"
+    assert client.post("/api/favorites", json={"artwork_id": "abc"}).status_code == 422
+    assert client.post("/api/favorites", json={}).status_code == 422
+    assert client.get("/api/me/favorites").json()["favorites"] == []
+
+
+def test_favorites_are_isolated_between_users(client):
+    a, b = _artwork_ids(2)
+    signup(client, "one@x.com")
+    client.post("/api/favorites", json={"artwork_id": a})
+
+    other = TestClient(app)
+    signup(other, "two@x.com")
+    assert other.get("/api/me/favorites").json()["favorites"] == []
+    # 다른 사용자가 같은 작품을 저장하거나 지워도 내 즐겨찾기에는 영향이 없다
+    assert other.post("/api/favorites", json={"artwork_id": a}).status_code == 201
+    assert other.delete(f"/api/favorites/{a}").json()["removed"] is True
+    assert [f["id"] for f in client.get("/api/me/favorites").json()["favorites"]] == [a]
+
+
+# ---- TV 앱 등 다른 오리진 클라이언트를 위한 Bearer 토큰 인증 ----
+
+def test_login_returns_bearer_token_in_body(client):
+    signup(client)
+    r = client.post("/api/auth/login", json={"email": "a@b.com", "password": "password123"})
+    assert r.status_code == 200
+    token = r.json()["token"]
+    assert isinstance(token, str) and "." in token
+
+
+def test_bearer_token_authenticates_chat_without_cookie(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(llm, "chat_completion", fake_llm(calls))
+    token = signup(client).json()["token"]
+    # 쿠키를 전혀 받지 않은 새 클라이언트로, 헤더만으로 인증되는지 확인한다.
+    headerless = TestClient(app)
+    r = headerless.post("/api/chat", json={"message": "봄 느낌 풍경화 보여줘"},
+                        headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.json()["artworks"]
+
+
+def test_bearer_token_works_for_get_me_and_my_chats(client):
+    token = signup(client).json()["token"]
+    other = TestClient(app)
+    headers = {"Authorization": f"Bearer {token}"}
+    assert other.get("/api/me", headers=headers).status_code == 200
+    assert other.get("/api/me/chats", headers=headers).status_code == 200
+
+
+def test_invalid_bearer_token_is_rejected(client):
+    other = TestClient(app)
+    r = other.get("/api/me", headers={"Authorization": "Bearer garbage.notavalidtoken"})
+    assert r.status_code == 401 and r.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_cookie_flow_still_works_unaffected(client, monkeypatch):
+    """Bearer 경로 추가가 기존 쿠키 기반 웹 클라이언트 동작을 바꾸지 않는지 확인하는 회귀 테스트."""
+    calls = []
+    monkeypatch.setattr(llm, "chat_completion", fake_llm(calls))
+    signup(client)  # client는 쿠키 저장소를 가진 TestClient라 이후 요청에 쿠키만 자동으로 붙는다.
+    r = client.post("/api/chat", json={"message": "봄 느낌 풍경화 보여줘"})
+    assert r.status_code == 200
+    assert r.json()["artworks"]
+
+
+def test_cors_preflight_allows_authorization_header(client):
+    r = client.options("/api/chat", headers={
+        "Origin": "http://example.com",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type",
+    })
+    assert r.status_code == 200
+    assert r.headers.get("access-control-allow-origin") == "*"
+
+
+# ---- 429(시간당 한도) · DB 오류 경로 ----
+def _insert_chats(user_id, n, minutes_ago, status="ok"):
+    from datetime import datetime, timedelta, timezone
+    at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat(timespec="seconds")
+    for _ in range(n):
+        db.execute("INSERT INTO chats (user_id, question, answer, status, created_at) VALUES (?, 'q', 'a', ?, ?)",
+                   (user_id, status, at))
+
+
+def test_rate_limit_429_at_default_30_per_hour(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(llm, "chat_completion", fake_llm(calls))
+    uid = signup(client).json()["user"]["id"]
+    assert main_module.CHAT_LIMIT_PER_HOUR == 30
+    _insert_chats(uid, 29, minutes_ago=10)
+    assert client.post("/api/chat", json={"message": "30번째"}).status_code == 200  # 30번째까지는 허용
+
+    calls.clear()
+    r = client.post("/api/chat", json={"message": "31번째"})
+    assert r.status_code == 429 and r.json()["error"]["code"] == "RATE_LIMITED"
+    assert calls == []  # 한도 초과 시 AI를 호출하지 않는다
+    assert len(client.get("/api/me/chats?limit=100").json()["chats"]) == 30  # 거절된 요청은 기록하지 않는다
+
+
+def test_rate_limit_counts_only_last_hour_and_includes_errors(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    uid = signup(client).json()["user"]["id"]
+    _insert_chats(uid, 50, minutes_ago=61)                 # 1시간 지난 기록은 세지 않는다
+    assert client.post("/api/chat", json={"message": "ok"}).status_code == 200
+    _insert_chats(uid, 29, minutes_ago=5, status="error")  # 실패한 요청도 한도에 포함 (재시도 폭주 방지)
+    assert client.post("/api/chat", json={"message": "x"}).json()["error"]["code"] == "RATE_LIMITED"
+
+
+def test_rate_limit_is_per_user(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    uid = signup(client, "busy@x.com").json()["user"]["id"]
+    _insert_chats(uid, 30, minutes_ago=1)
+    assert client.post("/api/chat", json={"message": "x"}).status_code == 429
+    other = TestClient(app)
+    signup(other, "calm@x.com")
+    assert other.post("/api/chat", json={"message": "x"}).status_code == 200
+
+
+def test_db_error_returns_503_db_error(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    real_execute = db.execute
+
+    def broken(sql, params=()):
+        if sql.startswith("SELECT COUNT(*)"):
+            raise db.DbError("Turso 연결 실패: timed out")
+        return real_execute(sql, params)
+
+    monkeypatch.setattr(db, "execute", broken)
+    r = client.post("/api/chat", json={"message": "봄 풍경"})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "DB_ERROR"
+    assert "Turso" not in r.json()["error"]["message"]  # 내부 오류 내용은 사용자에게 노출하지 않는다
+
+
+def test_chat_log_save_failure_still_returns_answer(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    real_execute = db.execute
+
+    def broken_insert(sql, params=()):
+        if sql.startswith("INSERT INTO chats"):
+            raise db.DbError("disk I/O error")
+        return real_execute(sql, params)
+
+    monkeypatch.setattr(db, "execute", broken_insert)
+    r = client.post("/api/chat", json={"message": "봄 풍경"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["saved"] is False and body["chat_id"] is None and body["reply"]
+
+
+def test_art_db_error_returns_503_and_logs_error_chat(client, monkeypatch):
+    import sqlite3
+    from app import chat as chat_module
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+
+    def broken_find(*a, **k):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(chat_module, "find_artworks", broken_find)
+    r = client.post("/api/chat", json={"message": "봄 풍경"})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "ART_DB_ERROR"
+    saved = client.get("/api/me/chats").json()["chats"][0]
+    assert saved["status"] == "error" and saved["error_code"] == "ART_DB_ERROR"
+
+
+# ---- request_id 로그 일관성 ----
+def _app_records(caplog):
+    return [r for r in caplog.records if r.name == "app" or r.name.startswith("app.")]
+
+
+def test_every_log_line_in_a_request_shares_request_id(client, monkeypatch, caplog):
+    import logging
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        r = client.post("/api/chat", json={"message": "봄 풍경"})
+    rid = r.json()["request_id"]
+    records = _app_records(caplog)
+    events = {r.getMessage().split()[0] for r in records}
+    assert {"request_received", "ai_call_start", "ai_call_success", "db_save_success"} <= events
+    assert {rec.request_id for rec in records} == {rid}  # 스레드풀·하위 로거(app.db 등)까지 같은 값
+
+
+def test_request_ids_differ_between_requests(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    a = client.post("/api/chat", json={"message": "1"}).json()["request_id"]
+    b = client.post("/api/chat", json={"message": "2"}).json()["request_id"]
+    assert a != b
+
+
+def test_logs_outside_requests_use_placeholder(caplog):
+    import logging
+    with caplog.at_level(logging.INFO):
+        logging.getLogger("app.test").info("startup_event")
+    assert caplog.records[-1].request_id == "-"

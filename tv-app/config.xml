@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns="http://www.w3.org/ns/widgets"
+        xmlns:tizen="http://tizen.org/ns/widgets"
+        id="http://kangsikseo.dev/art-chatbot-tv"
+        version="1.0.0"
+        viewmodes="maximized">
+
+    <tizen:application id="XXXXXXXXXX.ArtChatbotTV" package="XXXXXXXXXX" required_version="6.0"/>
+    <tizen:profile name="tv"/>
+
+    <content src="index.html"/>
+    <name>명화 챗봇 TV</name>
+    <icon src="icon.png"/>
+
+    <feature name="http://tizen.org/feature/screen.size.all"/>
+
+    <!-- fetch()로 외부 백엔드를 호출하기 위한 권한. 아래 <access>와 둘 다 있어야 한다 -->
+    <tizen:privilege name="http://tizen.org/privilege/internet"/>
+
+    <!-- Tizen 위젯 런타임 자체의 네트워크 허용 목록. CORS와 별개로 반드시 필요하다 -->
+    <access origin="https://art-chatbot-eight.vercel.app" subdomains="false"/>
+
+    <tizen:setting screen-orientation="landscape"
+                   context-menu="disable"
+                   background-support="disable"
+                   encryption="disable"
+                   install-location="auto"
+                   hwkey-event="enable"/>
+</widget>
