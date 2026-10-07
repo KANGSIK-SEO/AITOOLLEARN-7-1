@@ -70,7 +70,19 @@ async function submitAuth(kind) {
 function addMessage(kind, text) {
     const div = document.createElement("div");
     div.className = `message ${kind}`;
-    div.textContent = text;   // 사용자·AI 텍스트는 항상 textContent로 넣어 XSS를 막는다
+    div.setAttribute("role", "article");
+    const content = document.createElement("span");
+    content.textContent = text;   // 사용자·AI 텍스트는 항상 textContent로 넣어 XSS를 막는다
+    const timestamp = new Date();
+    const time = document.createElement("time");
+    time.className = "message-time";
+    time.dateTime = timestamp.toISOString();
+    time.textContent = timestamp.toLocaleTimeString("ko-KR", {
+        hour: "2-digit",
+        minute: "2-digit",
+    });
+    time.setAttribute("aria-label", `보낸 시간 ${time.textContent}`);
+    div.append(content, time);
     chatLog.appendChild(div);
     chatLog.scrollTop = chatLog.scrollHeight;
     return div;
@@ -83,6 +95,27 @@ function addStatusMessage(type, text) {
         throw new TypeError(`지원하지 않는 상태 메시지 유형입니다: ${type}`);
     }
     return addMessage(`message-status ${type}`, text);
+}
+
+function addTypingIndicator() {
+    const indicator = document.createElement("div");
+    indicator.className = "message bot typing";
+    indicator.setAttribute("role", "status");
+    indicator.setAttribute("aria-label", "명화 검색 중 / Searching for masterpieces");
+
+    const label = document.createElement("span");
+    label.textContent = "명화를 찾는 중… / Searching…";
+    const dots = document.createElement("span");
+    dots.className = "typing-dots";
+    dots.setAttribute("aria-hidden", "true");
+    for (let i = 0; i < 3; i += 1) {
+        dots.appendChild(document.createElement("span"));
+    }
+
+    indicator.append(label, dots);
+    chatLog.appendChild(indicator);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    return indicator;
 }
 
 function addCards(works) {
@@ -128,7 +161,7 @@ $("chat-form").addEventListener("submit", async (e) => {
     if (!message) return;               // 빈 입력 차단 (서버에서도 검증)
     $("message-input").value = "";
     addMessage("user", message);
-    const pending = addMessage("bot typing", "명화를 찾는 중… / Searching…");
+    const pending = addTypingIndicator();
     $("send-btn").disabled = true;
     const { ok, status, data } = await api("/api/chat", { method: "POST", body: JSON.stringify({ message }) });
     pending.remove();
@@ -258,8 +291,22 @@ function refreshRulePreview() {
 let onDeviceReady = false;
 $("ondevice-toggle").addEventListener("click", async () => {
     const panel = $("ondevice-panel");
-    panel.hidden = !panel.hidden;
-    if (panel.hidden || onDeviceReady) return;
+    const isOpen = panel.classList.toggle("is-open");
+    $("ondevice-toggle").setAttribute("aria-expanded", String(isOpen));
+    if (!isOpen) {
+        panel.classList.remove("is-visible");
+        const finishClose = (event) => {
+            if (event.propertyName === "max-height" && !panel.classList.contains("is-open")) {
+                panel.hidden = true;
+                panel.removeEventListener("transitionend", finishClose);
+            }
+        };
+        panel.addEventListener("transitionend", finishClose);
+        return;
+    }
+    panel.hidden = false;
+    requestAnimationFrame(() => panel.classList.add("is-visible"));
+    if (onDeviceReady) return;
     const facts = await OnDevice.loadFacts();
     const styleSelect = $("od-style");
     OnDevice.styleOptions(facts).forEach((style) => {
