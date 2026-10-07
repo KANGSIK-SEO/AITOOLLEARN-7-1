@@ -127,9 +127,12 @@ def _from_value(v: dict):
     return v.get("value")
 
 
-def _turso_execute(base: str, sql: str, params) -> list[dict]:
+def _turso_pipeline(base: str, stmts: list[tuple[str, tuple]]) -> list[list[dict] | DbError]:
+    """여러 문장을 HTTP 요청 한 번(pipeline)으로 보낸다. Turso는 문장마다 왕복 시간이 들므로
+    묶어 보내면 그만큼 빨라진다. 문장별 결과는 행 목록, 실패한 문장은 DbError로 돌려준다
+    (한 문장이 실패해도 나머지는 실행된다)."""
     body = {"requests": [
-        {"type": "execute", "stmt": {"sql": sql, "args": [_to_arg(p) for p in params]}},
+        *({"type": "execute", "stmt": {"sql": sql, "args": [_to_arg(p) for p in params]}} for sql, params in stmts),
         {"type": "close"},
     ]}
     req = urllib.request.Request(
@@ -145,12 +148,22 @@ def _turso_execute(base: str, sql: str, params) -> list[dict]:
             data = json.load(resp)
     except (urllib.error.URLError, TimeoutError) as e:
         raise DbError(f"Turso 연결 실패: {e}") from e
-    first = data["results"][0]
-    if first["type"] == "error":
-        raise DbError(first["error"].get("message", "Turso 오류"))
-    result = first["response"]["result"]
-    cols = [c["name"] for c in result["cols"]]
-    return [dict(zip(cols, (_from_value(v) for v in row))) for row in result["rows"]]
+    out = []
+    for item in data["results"][:len(stmts)]:
+        if item["type"] == "error":
+            out.append(DbError(item["error"].get("message", "Turso 오류")))
+            continue
+        result = item["response"]["result"]
+        cols = [c["name"] for c in result["cols"]]
+        out.append([dict(zip(cols, (_from_value(v) for v in row))) for row in result["rows"]])
+    return out
+
+
+def _turso_execute(base: str, sql: str, params) -> list[dict]:
+    result = _turso_pipeline(base, [(sql, params)])[0]
+    if isinstance(result, DbError):
+        raise result
+    return result
 
 
 def _local_execute(sql: str, params) -> list[dict]:
@@ -166,6 +179,39 @@ def _local_execute(sql: str, params) -> list[dict]:
         raise DbError(str(e)) from e
     finally:
         conn.close()
+
+
+def _local_many(stmts: list[tuple[str, tuple]]) -> list[list[dict] | DbError]:
+    out = []
+    for sql, params in stmts:
+        try:
+            out.append(_local_execute(sql, params))
+        except DbError as e:
+            out.append(e)
+    return out
+
+
+def _raw_many(stmts: list[tuple[str, tuple]]) -> list[list[dict] | DbError]:
+    base = _turso_url()
+    started = time.monotonic()
+    ok = False
+    try:
+        results = _turso_pipeline(base, stmts) if base else _local_many(stmts)
+        ok = True
+        return results
+    finally:
+        _log_if_slow(" ; ".join(sql for sql, _ in stmts), int((time.monotonic() - started) * 1000),
+                     "turso" if base else "local_sqlite", ok)
+
+
+def execute_many(stmts: list[tuple[str, tuple]]) -> list[list[dict]]:
+    """서로 의존하지 않는 조회 여러 개를 한 번의 왕복으로 실행한다. 하나라도 실패하면 DbError."""
+    ensure_schema()
+    results = _raw_many(stmts)
+    for r in results:
+        if isinstance(r, DbError):
+            raise r
+    return results
 
 
 def execute(sql: str, params=()) -> list[dict]:
@@ -214,18 +260,19 @@ def _migrate_favorites_id() -> None:
 
 
 def ensure_schema() -> None:
+    """서버가 새로 뜰 때 한 번 실행된다. 예전에는 문장마다 Turso 왕복(12번)을 해서 첫 요청(보통 로그인)이
+    느렸다 — 이제 테이블 생성·컬럼 추가·favorites 모양 확인을 요청 한 번으로 묶는다."""
     global _initialized
     if _initialized:
         return
-    for stmt in SCHEMA:
-        _raw_execute(stmt)
-    _migrate_favorites_id()
-    for stmt in MIGRATIONS:
-        try:
-            _raw_execute(stmt)
-        except DbError as e:
-            if "duplicate column" not in str(e).lower():
-                raise
+    stmts = [(stmt, ()) for stmt in SCHEMA] + [("PRAGMA table_info(favorites)", ())] + [(m, ()) for m in MIGRATIONS]
+    results = _raw_many(stmts)
+    for (sql, _), r in zip(stmts, results):
+        if isinstance(r, DbError) and not (sql in MIGRATIONS and "duplicate column" in str(r).lower()):
+            raise r
+    favorites_cols = {row["name"] for row in results[len(SCHEMA)]}
+    if favorites_cols and "id" not in favorites_cols:
+        _migrate_favorites_id()
     _initialized = True
     log.info("db_schema_ready backend=%s", "turso" if _turso_url() else "local_sqlite")
 
