@@ -79,3 +79,27 @@ def test_turso_backend_latency_is_measured(monkeypatch, caplog):
         assert db._raw_execute("SELECT 1 AS x") == [{"x": 1}]
     (msg,) = _slow_logs(caplog)
     assert "backend=turso ok=True" in msg and int(msg.split("latency_ms=")[1].split()[0]) >= 50
+
+
+def test_schema_setup_is_one_round_trip(monkeypatch):
+    """서버 첫 요청(보통 로그인)이 느리지 않게 테이블 준비를 Turso 요청 한 번으로 묶는다."""
+    calls = []
+
+    def fake_pipeline(base, stmts):
+        calls.append(len(stmts))
+        return [[{"name": "id"}] if s.startswith("PRAGMA") else [] for s, _ in stmts]
+
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://example.turso.io")
+    monkeypatch.setattr(db, "_turso_pipeline", fake_pipeline)
+    db.reset_for_tests()
+    db.ensure_schema()
+    assert calls == [len(db.SCHEMA) + 1 + len(db.MIGRATIONS)]
+    db.reset_for_tests()
+
+
+def test_execute_many_raises_when_a_statement_fails(monkeypatch):
+    monkeypatch.setattr(db, "_raw_many", lambda stmts: [[{"x": 1}], db.DbError("boom")])
+    monkeypatch.setattr(db, "_initialized", True)
+    import pytest
+    with pytest.raises(db.DbError):
+        db.execute_many([("SELECT 1 AS x", ()), ("SELECT nope", ())])
