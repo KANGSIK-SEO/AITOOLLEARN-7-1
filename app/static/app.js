@@ -271,9 +271,22 @@ function refreshRulePreview() {
 let onDeviceReady = false;
 $("ondevice-toggle").addEventListener("click", async () => {
     const panel = $("ondevice-panel");
-    panel.hidden = !panel.hidden;
-    $("ondevice-toggle").setAttribute("aria-expanded", String(!panel.hidden));
-    if (panel.hidden || onDeviceReady) return;
+    const isOpen = panel.classList.toggle("is-open");
+    $("ondevice-toggle").setAttribute("aria-expanded", String(isOpen));
+    if (!isOpen) {
+        panel.classList.remove("is-visible");
+        const finishClose = (event) => {
+            if (event.propertyName === "max-height" && !panel.classList.contains("is-open")) {
+                panel.hidden = true;
+                panel.removeEventListener("transitionend", finishClose);
+            }
+        };
+        panel.addEventListener("transitionend", finishClose);
+        return;
+    }
+    panel.hidden = false;
+    requestAnimationFrame(() => panel.classList.add("is-visible"));
+    if (onDeviceReady) return;
     const facts = await OnDevice.loadFacts();
     const styleSelect = $("od-style");
     OnDevice.styleOptions(facts).forEach((style) => {
