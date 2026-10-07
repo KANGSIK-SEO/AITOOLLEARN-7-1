@@ -137,6 +137,14 @@ body.light-theme .message-time { color: rgba(0, 0, 0, 0.5); }
     align-self: center;
 }
 
+.message-status {
+    align-self: center;
+    border: 1px solid currentColor;
+}
+.message-status.error { color: #ff4d4d; background: rgba(255, 77, 77, 0.1); }
+.message-status.success { color: #00ff88; background: rgba(0, 255, 136, 0.1); }
+.message-status.warning { color: #ffb84d; background: rgba(255, 184, 77, 0.1); }
+
 .input-area {
     padding: 15px;
     background-color: #252530;
@@ -321,8 +329,8 @@ body.light-theme .card img { background: #eee; }
 body.light-theme .card .sub { color: #666; }
 body.light-theme .badge { background: rgba(0, 120, 80, 0.1); color: #067a4c; }
 body.light-theme .typing { color: #777; }
-body.light-theme .error { background: rgba(255, 0, 60, 0.06); }
-body.light-theme .success { background: rgba(0, 150, 90, 0.06); }
+body.light-theme .message-status.error { background: rgba(255, 0, 60, 0.06); }
+body.light-theme .message-status.success { background: rgba(0, 150, 90, 0.06); }
 
 /* ---- 시스템 테마 지원 ---- */
 @media (prefers-color-scheme: light) {
@@ -363,8 +371,8 @@ body.light-theme .success { background: rgba(0, 150, 90, 0.06); }
     body:not(.light-theme) .card .sub { color: #666; }
     body:not(.light-theme) .badge { background: rgba(0, 120, 80, 0.1); color: #067a4c; }
     body:not(.light-theme) .typing { color: #777; }
-    body:not(.light-theme) .error { background: rgba(255, 0, 60, 0.06); }
-    body:not(.light-theme) .success { background: rgba(0, 150, 90, 0.06); }
+    body:not(.light-theme) .message-status.error { background: rgba(255, 0, 60, 0.06); }
+    body:not(.light-theme) .message-status.success { background: rgba(0, 150, 90, 0.06); }
     body:not(.light-theme) .ondevice-toggle { border-color: rgba(0, 0, 0, 0.08); }
     body:not(.light-theme) .ondevice-panel { background: rgba(0, 0, 0, 0.02); border-color: rgba(0, 0, 0, 0.08); }
     body:not(.light-theme) .rule-preview { background: #f4f9ff; }
