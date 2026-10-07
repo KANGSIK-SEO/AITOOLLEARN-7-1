@@ -4,6 +4,7 @@ import random
 import re
 import sqlite3
 
+from . import rights
 from .config import ROOT
 
 ART_DB = ROOT / "data" / "art.db"
@@ -78,20 +79,24 @@ def _diversify(pool: list[dict], limit: int) -> list[dict]:
     원래 관련도 순서를 유지한 채 채운다. pool이 limit보다 작거나 같으면 그대로 반환한다."""
     if len(pool) <= limit:
         return pool
-    guaranteed = pool[:GUARANTEED_TOP]
-    rest_pool = pool[GUARANTEED_TOP:]
+    guaranteed = pool[:min(GUARANTEED_TOP, limit)]
+    rest_pool = pool[len(guaranteed):]
     need = limit - len(guaranteed)
     sampled_idx = sorted(random.sample(range(len(rest_pool)), min(need, len(rest_pool))))
     return guaranteed + [rest_pool[i] for i in sampled_idx]
 
 
-def search(keywords: list[str], artist: str | None = None,
-           year_from: int | None = None, year_to: int | None = None, limit: int = 6) -> list[dict]:
-    """빈 검색어·특수문자만 있는 검색어는 FTS 없이 필터(작가·연도)만으로 찾는다.
-    FTS 질의가 그래도 실패하면(색인 손상 등) 사용자 입력 때문에 503을 내지 않도록 필터 검색으로 대신한다."""
-    if limit <= 0:
-        return []
-    where, params = ["a.is_public_domain = 1"], []
+def _source_filter() -> tuple[str, list]:
+    """판단 규칙 R1·R3: 허용된 CC0 기관의 CC0 작품만 (docs/rights-policy.md)."""
+    codes = rights.allowed_sources()
+    if not codes:
+        return "0", []
+    return f"a.source IN ({', '.join('?' for _ in codes)}) AND a.license = 'CC0'", codes
+
+
+def _filters(artist: str | None, year_from: int | None, year_to: int | None) -> tuple[list[str], list]:
+    src_sql, src_params = _source_filter()
+    where, params = ["a.is_public_domain = 1", src_sql], list(src_params)
     if artist:
         where.append("a.artist LIKE ?")
         params.append(f"%{artist}%")
@@ -101,26 +106,65 @@ def search(keywords: list[str], artist: str | None = None,
     if year_to is not None:
         where.append("a.year_start <= ?")
         params.append(year_to)
+    return where, params
 
-    pool_size = limit * DIVERSITY_POOL_MULTIPLIER
+
+def _ranked(conn: sqlite3.Connection, keywords, artist: str | None, year_from: int | None,
+            year_to: int | None, limit: int, offset: int = 0) -> list[dict]:
+    """관련도순(하이라이트 우선) 결정적 정렬. search()의 후보 풀과 browse()의 페이지가 같은 순서를 쓴다.
+    빈 검색어·특수문자만 있는 검색어는 FTS 없이 필터만으로 찾고, FTS 질의가 실패하면(색인 손상 등)
+    사용자 입력 때문에 503을 내지 않도록 필터 검색으로 대신한다."""
+    where, params = _filters(artist, year_from, year_to)
     fts = _fts_query(keywords)
+    rows = None
+    if fts:
+        sql = (f"SELECT {CARD_FIELDS} FROM artworks_fts f JOIN artworks a ON a.id = f.rowid "
+               f"WHERE artworks_fts MATCH ? AND {' AND '.join(where)} "
+               "ORDER BY a.is_highlight DESC, bm25(artworks_fts), a.id LIMIT ? OFFSET ?")
+        try:
+            rows = conn.execute(sql, [fts, *params, limit, offset]).fetchall()
+        except sqlite3.OperationalError as e:
+            log.warning("fts_query_failed query=%r detail=%s", fts[:200], e)
+    if rows is None:
+        sql = (f"SELECT {CARD_FIELDS} FROM artworks a WHERE {' AND '.join(where)} "
+               "ORDER BY a.is_highlight DESC, a.id LIMIT ? OFFSET ?")
+        rows = conn.execute(sql, [*params, limit, offset]).fetchall()
+    return [with_proxy_urls(dict(r)) for r in rows]
+
+
+def search(keywords: list[str], artist: str | None = None,
+           year_from: int | None = None, year_to: int | None = None, limit: int = 6) -> list[dict]:
+    if limit <= 0:
+        return []
     conn = _connect()
     try:
-        rows = None
-        if fts:
-            sql = (f"SELECT {CARD_FIELDS} FROM artworks_fts f JOIN artworks a ON a.id = f.rowid "
-                   f"WHERE artworks_fts MATCH ? AND {' AND '.join(where)} "
-                   "ORDER BY a.is_highlight DESC, bm25(artworks_fts) LIMIT ?")
-            try:
-                rows = conn.execute(sql, [fts, *params, pool_size]).fetchall()
-            except sqlite3.OperationalError as e:
-                log.warning("fts_query_failed query=%r detail=%s", fts[:200], e)
-        if rows is None:
-            sql = (f"SELECT {CARD_FIELDS} FROM artworks a WHERE {' AND '.join(where)} "
-                   "ORDER BY a.is_highlight DESC, a.id LIMIT ?")
-            rows = conn.execute(sql, [*params, pool_size]).fetchall()
-        pool = [with_proxy_urls(dict(r)) for r in rows]
+        pool = _ranked(conn, keywords, artist, year_from, year_to, limit * DIVERSITY_POOL_MULTIPLIER)
         return _diversify(pool, limit)
+    finally:
+        conn.close()
+
+
+def browse(keywords: list[str], artist: str | None = None, year_from: int | None = None,
+           year_to: int | None = None, offset: int = 0, limit: int = 24) -> tuple[list[dict], bool]:
+    """'더 보기'용. AI 없이 같은 조건으로 관련도순 페이지를 넘긴다. 두 번째 값은 다음 페이지가 있는지."""
+    conn = _connect()
+    try:
+        rows = _ranked(conn, keywords, artist, year_from, year_to, limit + 1, offset)
+        return rows[:limit], len(rows) > limit
+    finally:
+        conn.close()
+
+
+def get_rights_record(artwork_id: int) -> dict | None:
+    """권리 근거 기록용 데이터. 판단(R1~R6)은 rights.evaluate가 하므로 여기서는 기관 필터를 걸지 않는다.
+    image_url은 프록시 주소가 아니라 기관 원본 주소 그대로 둔다 (R4 판단 근거)."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT a.id, a.source, a.source_id, a.title, a.artist, a.date_display, a.medium, a.image_url, "
+            "a.thumbnail_url, a.source_url, a.credit_line, a.license, a.is_public_domain, a.collected_at "
+            "FROM artworks a WHERE a.id = ?", (artwork_id,)).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 

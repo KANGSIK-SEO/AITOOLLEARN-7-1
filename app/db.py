@@ -68,6 +68,16 @@ SCHEMA = [
         value       TEXT NOT NULL,
         updated_at  TEXT NOT NULL
     )""",
+    # 권리 근거 기록: 발급 시점 스냅숏을 그대로 보관한다 (기관 데이터가 바뀌어도 기록은 안 바뀜)
+    """CREATE TABLE IF NOT EXISTS rights_records (
+        number      TEXT PRIMARY KEY,      -- PD-XXXX-XXXX-XXXX
+        artwork_id  INTEGER NOT NULL,
+        user_id     INTEGER,               -- 비로그인 발급이면 NULL
+        snapshot    TEXT NOT NULL,         -- JSON: 작품·기관·판정·출처 표기·주의사항
+        archives    TEXT NOT NULL,         -- JSON: 인터넷 아카이브 보관본 (나중에 채워질 수 있음)
+        signature   TEXT NOT NULL,         -- HMAC(number|issued_at|snapshot) — 변조 확인용
+        issued_at   TEXT NOT NULL
+    )""",
     """CREATE TABLE IF NOT EXISTS rate_counters (
         bucket       TEXT PRIMARY KEY,
         count        INTEGER NOT NULL,
@@ -186,12 +196,30 @@ def _log_if_slow(sql: str, latency_ms: int, backend: str, ok: bool) -> None:
     log.warning("db_slow_query latency_ms=%s backend=%s ok=%s sql=%s", latency_ms, backend, ok, compact)
 
 
+def _migrate_favorites_id() -> None:
+    """한때 배포된 다른 버전은 favorites를 id 없이 (user_id, artwork_id) 기본키로 만들었다.
+    현재 코드는 id를 쓰므로(RETURNING id) 그 모양이면 데이터를 보존한 채 다시 만든다."""
+    cols = {r["name"] for r in _raw_execute("PRAGMA table_info(favorites)")}
+    if not cols or "id" in cols:
+        return
+    log.warning("db_migrate favorites: id 컬럼 추가를 위해 테이블을 다시 만듭니다")
+    _raw_execute("ALTER TABLE favorites RENAME TO favorites_old")
+    _raw_execute(next(stmt for stmt in SCHEMA if "TABLE IF NOT EXISTS favorites" in stmt))
+    _raw_execute("INSERT OR IGNORE INTO favorites (user_id, artwork_id, created_at) "
+                 "SELECT user_id, artwork_id, created_at FROM favorites_old")
+    _raw_execute("DROP TABLE favorites_old")
+    for stmt in SCHEMA:  # 예전 테이블과 함께 사라진 인덱스를 다시 만든다
+        if "INDEX" in stmt and " favorites " in stmt:
+            _raw_execute(stmt)
+
+
 def ensure_schema() -> None:
     global _initialized
     if _initialized:
         return
     for stmt in SCHEMA:
         _raw_execute(stmt)
+    _migrate_favorites_id()
     for stmt in MIGRATIONS:
         try:
             _raw_execute(stmt)

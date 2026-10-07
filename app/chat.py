@@ -28,9 +28,13 @@ INTENT_SYSTEM = (
     "너는 퍼블릭 도메인 명화 검색 도우미의 '검색 의도 추출기'다. 사용자의 한국어/영어 요청을 "
     "영어 검색 조건 JSON 하나로만 출력하라. 설명·코드블록 금지.\n"
     '형식: {"chitchat": bool, "keywords": [영어 단어 최대 6개], "artist": 영어 작가명 또는 null, '
-    '"year_from": 정수 또는 null, "year_to": 정수 또는 null}\n'
+    '"year_from": 정수 또는 null, "year_to": 정수 또는 null, "orientation": "landscape" 또는 "portrait" 또는 "square" 또는 null, "purpose": 한국어 용도 요약 또는 null}\n'
     "- 작품 검색이 아니라 직전 대화를 묻는 질문(예: 내가 방금 뭘 물어봤지?)이나 인사면 chitchat=true.\n"
-    "- keywords는 주제·분위기·색·소재 등 (예: spring, landscape, flowers, portrait, winter, sea)."
+    "- keywords는 주제·분위기·색·소재 등 (예: spring, landscape, flowers, portrait, winter, sea).\n"
+    "- orientation: PPT·슬라이드·배너·가로형이면 landscape, 세로형·벽 포스터·액자·폰 배경이면 portrait, "
+    "인스타그램 게시물·정사각이면 square, 언급 없으면 null.\n"
+    "- purpose: 사용자가 말한 쓰임새를 짧게 (예: '카페 벽 세로형 포스터', '교재 삽화', 'PPT 배경'). 없으면 null.\n"
+    "- 용도에서 분위기를 읽어 keywords에 넣는다 (예: 카페 → cozy, still life / 교재 삽화 → still life, clear)."
 )
 
 ANSWER_SYSTEM = (
@@ -45,7 +49,11 @@ ANSWER_SYSTEM = (
     "4. 검색 결과가 비어 있으면 없다고 말하고 더 구체적인 조건(작가, 시대, 주제)을 제안한다.\n"
     "5. 직전 대화를 묻는 질문이면 [이전 대화]를 근거로 답한다.\n"
     "6. [완화 안내]가 있으면, 작가/연도 조건에는 맞는 작품을 못 찾아 조건을 일부 빼고 찾았다는 걸 "
-    "한 줄로 먼저 알려준다 — 사용자가 결과를 보기 전에 '왜 이게 나왔는지' 판단할 수 있어야 한다."
+    "한 줄로 먼저 알려준다 — 사용자가 결과를 보기 전에 '왜 이게 나왔는지' 판단할 수 있어야 한다.\n"
+    "7. [용도]가 있으면 작품마다 그 용도에 왜 맞는지(분위기·구도·색감)를 설명한다. 이미지 비율은 카드의 "
+    "가로형/세로형 표시와 비율 필터로 확인하라고 안내하고, 해상도 수치는 지어내지 말고 '원본'에서 확인하라고 한다.\n"
+    "8. 상업적으로 쓰기 전에 카드의 '근거 기록'을 발급해 보관해 두라고 마지막에 한 줄 안내한다 "
+    "('보증'이나 '인증'이라는 말은 쓰지 않는다 — 기관이 공개한 근거를 기록해 주는 것이다)."
 )
 
 
@@ -83,6 +91,8 @@ def _parse_intent(text: str) -> dict:
         "artist": (artist.strip() or None) if isinstance(artist, str) else None,
         "year_from": _as_year(data.get("year_from")),
         "year_to": _as_year(data.get("year_to")),
+        "orientation": data.get("orientation") if data.get("orientation") in ("landscape", "portrait", "square") else None,
+        "purpose": data.get("purpose")[:60] if isinstance(data.get("purpose"), str) and data.get("purpose") else None,
     }
 
 
@@ -119,7 +129,7 @@ def _format_results(works: list[dict]) -> str:
 
 
 def compose_answer(question: str, works: list[dict], history: list[dict], relaxed: bool = False,
-                   request_id: str | None = None) -> str:
+                   purpose: str | None = None, request_id: str | None = None) -> str:
     """works가 ANSWER_NARRATION_LIMIT보다 많아도(예: 프리미엄 100개) 모델에는 그 안에서만 넘긴다.
     본문에서 100개를 전부 한 줄씩 설명시키면 토큰 비용이 폭증하고 잘릴 수 있어서, 나머지는
     카드로만 보여주고 몇 개 더 있는지 한 줄 안내를 덧붙인다.
@@ -131,7 +141,7 @@ def compose_answer(question: str, works: list[dict], history: list[dict], relaxe
     narrated = works[:ANSWER_NARRATION_LIMIT]
     past = "\n".join(f"Q: {h['question']}\nA: {(h['answer'] or '')[:300]}" for h in history) or "(없음)"
     relax_note = "작가/연도 조건에는 맞는 작품이 없어 그 조건을 빼고 키워드만으로 찾은 결과입니다." if relaxed else "(없음)"
-    user = (f"[이전 대화]\n{past}\n\n[완화 안내]\n{relax_note}\n\n"
+    user = (f"[이전 대화]\n{past}\n\n[완화 안내]\n{relax_note}\n\n[용도]\n{purpose or '(없음)'}\n\n"
            f"[검색 결과]\n{_format_results(narrated)}\n\n[질문]\n{question}")
     with _stage("answer", request_id):
         answer = llm.chat_completion(

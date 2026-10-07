@@ -191,8 +191,12 @@ button:active {
 body { min-height: 100vh; height: auto; padding: 16px; box-sizing: border-box; }
 .chat-container { max-width: 720px; height: 90vh; }
 .chat-header { position: relative; }
-.link-btn { position: absolute; right: 12px; top: 12px; width: auto; height: auto; border-radius: 8px;
+.header-actions { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.header-actions:not(:has(> :not([hidden]))) { display: none; }
+.link-btn { width: auto; height: auto; border-radius: 8px;
     background: rgba(0, 0, 0, 0.25); color: #fff; padding: 6px 10px; font-size: 0.75rem; }
+.text-btn { width: auto; height: auto; border-radius: 8px; background: transparent; color: var(--accent);
+    font-weight: 400; font-size: 0.85rem; padding: 6px; }
 [hidden] { display: none !important; }
 #chat-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
@@ -307,6 +311,30 @@ body.light-theme .install-steps .step-icon { background: rgba(0, 102, 255, 0.1);
     .ondevice-row .pill { width: 100%; box-sizing: border-box; }
 }
 
+/* ---- 체험 안내 · 예시 질문 ---- */
+.examples { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { width: auto; height: auto; border-radius: 16px; padding: 7px 12px; font-weight: 400; font-size: 0.82rem;
+    background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+
+/* ---- 결과 묶음 · 카드 동작 ---- */
+.result-group { align-self: stretch; display: flex; flex-direction: column; gap: 8px; }
+.group-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.8rem; }
+.group-heading { font-weight: 600; margin-right: auto; }
+.group-toolbar select { background: #111; color: var(--text-color); border: 1px solid #333; border-radius: 8px;
+    padding: 5px 8px; font-size: 0.8rem; margin-left: auto; }
+/* 비율을 아직 모르는(이미지 로딩 전) 카드는 숨기지 않는다 — 숨기면 lazy 이미지가 영영 로드되지 않는다 */
+.result-group[data-filter="landscape"] .card[data-orient]:not([data-orient="landscape"]),
+.result-group[data-filter="portrait"] .card[data-orient]:not([data-orient="portrait"]),
+.result-group[data-filter="square"] .card[data-orient]:not([data-orient="square"]) { display: none; }
+.badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.orient:not(:empty) { background: rgba(255, 255, 255, 0.08); color: #ccc; border-radius: 6px; padding: 1px 6px; font-size: 0.7rem; }
+.card-actions { display: flex; gap: 4px; margin: 2px 0; flex-wrap: wrap; }
+.card-btn { width: auto; height: 26px; border-radius: 6px; padding: 0 8px; font-size: 0.72rem; font-weight: 600;
+    background: rgba(255, 255, 255, 0.08); color: var(--text-color); }
+.card-btn.star.on { color: #ffc400; }
+.more-btn { width: 100%; height: auto; border-radius: 10px; padding: 10px; font-size: 0.85rem; }
+.more-btn:disabled, .card-btn:disabled { opacity: 0.6; cursor: wait; }
+
 /* ---- 초대코드 회원 화이트 테마 ---- */
 body.light-theme {
     --bg-color: #f4f4f7;
@@ -329,6 +357,11 @@ body.light-theme .card img { background: #eee; }
 body.light-theme .card .sub { color: #666; }
 body.light-theme .badge { background: rgba(0, 120, 80, 0.1); color: #067a4c; }
 body.light-theme .typing { color: #777; }
+body.light-theme .group-toolbar select { background: #fff; border-color: #dadade; }
+body.light-theme .orient:not(:empty) { background: rgba(0, 0, 0, 0.06); color: #444; }
+body.light-theme .card-btn { background: rgba(0, 0, 0, 0.06); color: #1a1a1a; }
+body.light-theme .card-btn.star.on { color: #d89a00; }
+body.light-theme .chip, body.light-theme .text-btn { color: var(--accent); }
 body.light-theme .message-status.error { background: rgba(255, 0, 60, 0.06); }
 body.light-theme .message-status.success { background: rgba(0, 150, 90, 0.06); }
 
@@ -379,6 +412,11 @@ body.light-theme .message-status.success { background: rgba(0, 150, 90, 0.06); }
     body:not(.light-theme) .install-btn { background: rgba(0, 102, 255, 0.08); }
     body:not(.light-theme) .modal-overlay { background: rgba(0, 0, 0, 0.4); }
     body:not(.light-theme) .install-steps .step-icon { background: rgba(0, 102, 255, 0.1); }
+    body:not(.light-theme) .group-toolbar select { background: #fff; border-color: #dadade; color: #1a1a1a; }
+    body:not(.light-theme) .orient:not(:empty) { background: rgba(0, 0, 0, 0.06); color: #444; }
+    body:not(.light-theme) .card-btn { background: rgba(0, 0, 0, 0.06); color: #1a1a1a; }
+    body:not(.light-theme) .card-btn.star.on { color: #d89a00; }
+    body:not(.light-theme) .chip { color: var(--accent); }
 }
 
 @media (prefers-color-scheme: dark) {

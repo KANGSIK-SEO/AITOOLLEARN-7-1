@@ -1,6 +1,8 @@
-"""MET Open Access에서 유럽 회화(부서 11) 중 퍼블릭 도메인 + 이미지 있는 작품을 수집한다.
+"""MET Open Access에서 퍼블릭 도메인 + 이미지 있는 작품을 부서별로 수집한다.
 
-사용: python3 scripts/collect_met.py [--limit N]
+사용: python3 scripts/collect_met.py [--limit N] [--departments 11,1,6]
+기본 부서: 유럽 회화(11), 미국관(1), 아시아 미술(6), 드로잉·판화(9), 로버트 리먼 컬렉션(16), 사진(19).
+작품 1건당 0.5초씩 쉬어 가므로 전체 수집은 몇 시간 걸린다 — 중간에 멈춰도 다시 실행하면 이어서 받는다.
 API 키 불필요. 공식 제한(초당 80회)보다 훨씬 낮게 동시 요청 수를 제한한다.
 """
 import argparse
@@ -11,7 +13,7 @@ from artdb import connect, get_json, upsert
 
 BASE = "https://collectionapi.metmuseum.org/public/collection/v1"
 SEARCH_BASE = "https://collectionapi.metmuseum.org/public/collection/v1.1"
-DEPARTMENT_ID = 11  # European Paintings
+DEFAULT_DEPARTMENTS = "11,1,6,9,16,19"
 SEARCH_PAGE_SIZE = 500  # v1.1/search 최대 limit
 
 
@@ -49,21 +51,39 @@ def to_row(o: dict) -> dict | None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=0, help="0이면 전체")
+    parser.add_argument("--departments", default=DEFAULT_DEPARTMENTS, help="쉼표로 구분한 MET 부서 ID")
+    parser.add_argument("--max-minutes", type=float, default=0,
+                        help="이 시간이 지나면 저장하고 멈춘다 (0이면 무제한). 다시 실행하면 이어서 받는다")
     args = parser.parse_args()
+    deadline = time.monotonic() + args.max_minutes * 60 if args.max_minutes else None
 
     ids: list[int] = []
-    offset = 0
-    while True:
-        page = get_json(f"{SEARCH_BASE}/search", {
-            "departmentId": DEPARTMENT_ID, "isPublicDomain": "true", "hasImages": "true",
-            "q": "*", "limit": SEARCH_PAGE_SIZE, "offset": offset,
-        })
-        page_ids = (page or {}).get("objectIDs") or []
-        ids.extend(page_ids)
-        total = (page or {}).get("total") or 0
-        offset += SEARCH_PAGE_SIZE
-        if not page_ids or offset >= total:
-            break
+    for department_id in [int(d) for d in args.departments.split(",") if d.strip()]:
+        offset = 0
+        while True:
+            time.sleep(1)  # 목록 조회도 연속으로 보내면 WAF가 403으로 막는다
+            page = None
+            for attempt in range(3):
+                try:
+                    page = get_json(f"{SEARCH_BASE}/search", {
+                        "departmentId": department_id, "isPublicDomain": "true", "hasImages": "true",
+                        "q": "*", "limit": SEARCH_PAGE_SIZE, "offset": offset,
+                    }, retries=1)
+                    break
+                except urllib.error.HTTPError as e:
+                    print(f"  부서 {department_id} 목록 조회 실패({e.code}), {30 * (attempt + 1)}초 후 재시도")
+                    time.sleep(30 * (attempt + 1))
+            if page is None:
+                print(f"  부서 {department_id}: 목록을 끝까지 받지 못해 여기까지만 수집")
+                break
+            page_ids = page.get("objectIDs") or []
+            ids.extend(page_ids)
+            total = page.get("total") or 0
+            offset += SEARCH_PAGE_SIZE
+            if not page_ids or offset >= total:
+                break
+        print(f"  부서 {department_id}: 누적 대상 {len(ids)}건")
+    ids = list(dict.fromkeys(ids))
     if args.limit:
         ids = ids[: args.limit]
     print(f"MET 대상(전체) {len(ids)}건")
@@ -76,6 +96,9 @@ def main() -> None:
     saved = skipped = failed = 0
     consecutive_403 = 0
     for n, obj_id in enumerate(ids, 1):
+        if deadline and time.monotonic() > deadline:
+            print(f"  시간 제한 도달 — {n - 1}/{len(ids)}건 처리 후 멈춤 (다시 실행하면 이어서 수집)")
+            break
         time.sleep(0.5)  # WAF(레이트리밋) 회피용 완만한 스로틀, 단일 요청씩만 진행
         try:
             obj = get_json(f"{BASE}/objects/{obj_id}", retries=1)

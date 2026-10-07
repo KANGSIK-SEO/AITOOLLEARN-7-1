@@ -107,6 +107,20 @@ def check_rate(bucket: str, limit: int, window_seconds: int) -> bool:
         return True  # DB 장애로 사용자를 막지 않는다
 
 
+def rate_used(bucket: str, window_seconds: int) -> int:
+    """check_rate와 같은 카운터를 올리지 않고 읽기만 한다 (남은 체험 횟수 표시용)."""
+    try:
+        rows = db.execute("SELECT count, window_start FROM rate_counters WHERE bucket = ?", (bucket,))
+    except db.DbError as e:
+        log.error("rate_read_failure bucket=%s detail=%s", bucket, e)
+        return 0
+    if not rows:
+        return 0
+    if datetime.now(timezone.utc) - datetime.fromisoformat(rows[0]["window_start"]) > timedelta(seconds=window_seconds):
+        return 0
+    return rows[0]["count"]
+
+
 def _set_flag(key: str, value: str) -> None:
     db.execute(
         "INSERT INTO runtime_flags (key, value, updated_at) VALUES (?, ?, ?) "

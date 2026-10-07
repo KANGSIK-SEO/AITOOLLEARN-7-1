@@ -38,7 +38,10 @@
         <header class="chat-header" role="banner">
             <div class="chat-title" role="heading" aria-level="1">🖼️ 저작권 걱정 없는 퍼블릭 도메인 명화 찾기<br><span class="chat-subtitle">Public Domain Masterpiece Finder</span></div>
             <div class="status-bar" id="status-bar" role="status" aria-live="polite">로그인이 필요합니다 / Login required</div>
-            <button id="logout-btn" class="link-btn" type="button" aria-label="로그아웃 / Log out" hidden>로그아웃 / Log out</button>
+            <div class="header-actions">
+                <button id="favorites-btn" class="link-btn" type="button" aria-label="즐겨찾기 보기 / Show favorites" hidden>★ 즐겨찾기 / Favorites</button>
+                <button id="logout-btn" class="link-btn" type="button" aria-label="로그아웃 / Log out" hidden>로그아웃 / Log out</button>
+            </div>
         </header>
 
         <div id="install-banner" class="install-banner" role="region" aria-label="앱 설치 / App installation" hidden>
@@ -46,7 +49,7 @@
         </div>
 
         <section id="auth-panel" class="auth-panel" aria-label="로그인 및 회원가입 / Log in and sign up">
-            <p class="hint">상업적으로 써도 되는 CC0 명화를 한국어나 영어로 물어보세요. / Ask for CC0 masterpieces you can use commercially, in Korean or English.<br>(MET · Art Institute of Chicago 공개 데이터 / Open data from the MET and the Art Institute of Chicago)</p>
+            <p class="hint">어디에 쓸지 말하면 용도에 맞는 CC0 명화를 찾고, 써도 되는지 확인한 근거를 날짜와 함께 기록해 드려요. / Tell us what it's for — we find CC0 masterpieces that fit and keep a dated record of the rights evidence.<br>(MET · Art Institute of Chicago · Cleveland Museum of Art 공개 데이터 / Open data)</p>
             <input type="email" id="email" aria-label="이메일 / Email" placeholder="이메일 / Email" autocomplete="username">
             <input type="password" id="password" aria-label="비밀번호 (8자 이상) / Password (8+ characters)" placeholder="비밀번호 (8자 이상) / Password (8+ characters)" autocomplete="current-password">
             <input type="text" id="private-code" aria-label="초대코드 (선택) / Invite code (optional)" placeholder="초대코드 (선택) / Invite code (optional)" autocomplete="off">
@@ -59,7 +62,13 @@
 
         <section id="chat-panel" aria-label="명화 찾기 대화 / Masterpiece finder conversation" hidden>
             <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions" aria-label="대화 내용 / Conversation">
-                <div class="message bot" role="article">안녕하세요! 어떤 명화를 찾으세요? / Hi! What masterpiece are you looking for?<br>예) "봄 느낌 풍경화 보여줘" / e.g. "Show me a spring landscape"</div>
+                <div class="message bot" role="article">안녕하세요! 어디에 쓸지 말해 주세요. 용도에 맞는 비율·분위기의 CC0 명화를 찾고, 써도 되는지 확인하는 수고를 대신해 드려요. 근거는 날짜와 함께 기록으로 보관해 드려요. / Tell me what it's for — I'll find CC0 masterpieces that fit, check the rights for you, and keep a dated record of the evidence.</div>
+                <div class="examples" id="examples" role="group" aria-label="예시 질문 / Example questions">
+                    <button class="chip" type="button">카페 벽에 걸 세로형 포스터</button>
+                    <button class="chip" type="button">교재 삽화용 정물화</button>
+                    <button class="chip" type="button">PPT 배경용 가로형 풍경화</button>
+                    <button class="chip" type="button">인스타그램 정사각 게시물용 꽃 그림</button>
+                </div>
             </div>
 
             <button id="ondevice-toggle" type="button" class="ondevice-toggle" aria-controls="ondevice-panel" aria-expanded="false">🧠 온디바이스 추천 (서버 호출 없음) / On-device recommend (no server call)</button>

@@ -20,23 +20,33 @@ const ERROR_MESSAGES = {
     AI_RATE_LIMITED: "AI 서비스 요청이 많아 잠시 제한되었어요. 잠시 후 다시 시도해 주세요. / The AI service is rate-limited right now. Please try again shortly.",
     AI_KEY_MISSING: "AI 서비스 인증에 실패했어요. / AI service authentication failed.",
     AI_ERROR: "AI 서버와 통신하지 못했어요. 잠시 후 다시 시도해 주세요. / Couldn't reach the AI server. Please try again shortly.",
+    ARTWORK_NOT_FOUND: "작품을 찾을 수 없습니다. / Artwork not found.",
+    RECORD_NOT_ALLOWED: "이 작품은 판단 규칙을 통과하지 못해 권리 근거 기록을 발급할 수 없어요. / This artwork didn't pass our rights rules.",
 };
 const GENERIC_AUTH_ERROR = "요청에 실패했습니다. / Request failed.";
 const GENERIC_CHAT_ERROR = "오류가 발생했습니다. / Something went wrong.";
+const MUSEUMS = { met: "The Metropolitan Museum of Art", aic: "Art Institute of Chicago", cma: "Cleveland Museum of Art" };
+const PAGE_SIZE = 24;
+
+let loggedIn = false;
+const favorites = new Set();   // 로그인 사용자의 즐겨찾기 작품 id
 
 function errorMessage(err, generic) {
     const code = err?.code;
     return (code && ERROR_MESSAGES[code]) || err?.message || generic;
 }
 
-function show(loggedIn, email, isPremium) {
-    $("auth-panel").hidden = loggedIn;
-    $("chat-panel").hidden = !loggedIn;
-    $("logout-btn").hidden = !loggedIn;
-    $("status-bar").textContent = loggedIn
+function show(isLoggedIn, email, isPremium) {
+    loggedIn = isLoggedIn;
+    $("auth-panel").hidden = isLoggedIn;
+    $("chat-panel").hidden = !isLoggedIn;
+    $("logout-btn").hidden = !isLoggedIn;
+    $("favorites-btn").hidden = !isLoggedIn;
+    if (isLoggedIn) loadFavorites(); else favorites.clear();
+    $("status-bar").textContent = isLoggedIn
         ? `${email}${isPremium ? " · 초대코드 회원 / invite member" : ""}`
         : "로그인이 필요합니다 / Login required";
-    document.body.classList.toggle("light-theme", loggedIn && !!isPremium);
+    document.body.classList.toggle("light-theme", isLoggedIn && !!isPremium);
 }
 
 async function api(path, options = {}) {
@@ -118,48 +128,268 @@ function addTypingIndicator() {
     return indicator;
 }
 
-function addCards(works) {
-    if (!works.length) return;
-    const wrap = document.createElement("div");
-    wrap.className = "cards";
-    works.forEach((w, i) => {
-        const card = document.createElement("div");
-        card.className = "card";
-        const img = document.createElement("img");
-        img.loading = "lazy";
-        img.alt = w.title;
-        img.src = w.thumbnail_url || w.image_url;
-        const meta = document.createElement("div");
-        meta.className = "meta";
-        const title = document.createElement("div");
-        title.className = "title";
-        title.textContent = `[${i + 1}] ${w.title}`;
-        const sub = document.createElement("div");
-        sub.className = "sub";
-        sub.textContent = [w.artist, w.date_display].filter(Boolean).join(" · ");
-        const badge = document.createElement("span");
-        badge.className = "badge";
-        badge.textContent = `${w.license} · ${w.source.toUpperCase()}`;
-        const links = document.createElement("div");
-        [["원본 이미지 / Original image", w.image_url], ["출처 페이지 / Source page", w.source_url]].forEach(([label, href], n) => {
-            if (n) links.append(" · ");
-            const a = document.createElement("a");
-            a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = label;
-            links.append(a);
-        });
-        meta.append(title, sub, badge, links);
-        card.append(img, meta);
-        wrap.appendChild(card);
+// ---- 작품 카드 ----
+
+function creditLine(w) {
+    const parts = [`"${w.title}"`, w.artist || "Unknown artist"];
+    if (w.date_display) parts.push(w.date_display);
+    return `${parts.join(", ")}. ${MUSEUMS[w.source] || w.source.toUpperCase()}, CC0 (Public Domain). ${w.source_url}`;
+}
+
+async function copyText(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch (_) {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        const done = document.execCommand("copy");
+        ta.remove();
+        return done;
+    }
+}
+
+function flash(btn, text) {
+    const original = btn.textContent;
+    btn.textContent = text;
+    setTimeout(() => { btn.textContent = original; }, 1500);
+}
+
+async function download(w, btn) {
+    // AIC는 우리 서버 프록시가 첨부파일로 내려준다. MET는 원본 서버에서 받아 저장을 시도하고, 막히면 새 탭으로 연다.
+    if (w.source === "aic") {
+        const a = document.createElement("a");
+        a.href = `${w.image_url}&download=1`;
+        a.click();
+        return;
+    }
+    btn.disabled = true;
+    try {
+        const res = await fetch(w.image_url);
+        if (!res.ok) throw new Error(String(res.status));
+        const url = URL.createObjectURL(await res.blob());
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `met-${w.id}.jpg`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (_) {
+        window.open(w.image_url, "_blank", "noopener");
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function issueRecord(w, btn) {
+    // 서버 응답을 기다린 뒤 새 탭을 열면 팝업 차단에 걸려서, 탭을 먼저 열어두고 주소만 나중에 넣는다
+    const tab = window.open("", "_blank");
+    if (tab) tab.document.write("<p style='font-family:sans-serif;padding:24px'>권리 근거 기록을 만들고 인터넷 아카이브에 보관하는 중… (최대 30초)</p>");
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "발급 중…";
+    const { ok, data } = await api("/api/records", { method: "POST", body: JSON.stringify({ artwork_id: w.id }) });
+    btn.disabled = false;
+    btn.textContent = original;
+    if (!ok) {
+        if (tab) tab.close();
+        addStatusMessage("error", errorMessage(data.error, GENERIC_CHAT_ERROR));
+        return;
+    }
+    if (tab) tab.location.href = data.url; else window.location.href = data.url;
+}
+
+function renderStar(btn, id) {
+    const on = favorites.has(id);
+    btn.textContent = on ? "★" : "☆";
+    btn.classList.toggle("on", on);
+    btn.title = on ? "즐겨찾기 해제 / Remove from favorites" : "즐겨찾기 / Add to favorites";
+}
+
+async function toggleFavorite(w, btn) {
+    if (!loggedIn) {
+        show(false);
+        return;
+    }
+    const on = favorites.has(w.id);
+    const { ok, data } = on
+        ? await api(`/api/favorites/${w.id}`, { method: "DELETE" })
+        : await api("/api/favorites", { method: "POST", body: JSON.stringify({ artwork_id: w.id }) });
+    if (!ok) { flash(btn, "!"); addStatusMessage("error", errorMessage(data.error, GENERIC_CHAT_ERROR)); return; }
+    if (on) favorites.delete(w.id); else favorites.add(w.id);
+    document.querySelectorAll(`.star[data-id="${w.id}"]`).forEach((b) => renderStar(b, w.id));
+}
+
+function actionButton(label, title, onClick) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "card-btn";
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener("click", () => onClick(b));
+    return b;
+}
+
+function makeCard(w, index) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = w.title;
+    img.src = w.thumbnail_url || w.image_url;
+    const orient = document.createElement("span");
+    orient.className = "orient";
+    // 이미지 비율로 가로형/세로형을 판별한다 (PPT 배경은 가로형이 필요)
+    img.addEventListener("load", () => {
+        const r = img.naturalWidth / img.naturalHeight;
+        const kind = r >= 1.15 ? "landscape" : r <= 0.87 ? "portrait" : "square";
+        card.dataset.orient = kind;
+        orient.textContent = { landscape: "가로형", portrait: "세로형", square: "정사각" }[kind];
     });
-    chatLog.appendChild(wrap);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const title = document.createElement("div");
+    title.className = "title";
+    title.textContent = `[${index}] ${w.title}`;
+    const sub = document.createElement("div");
+    sub.className = "sub";
+    sub.textContent = [w.artist, w.date_display].filter(Boolean).join(" · ");
+    const badges = document.createElement("div");
+    badges.className = "badges";
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = `${w.license} · ${w.source.toUpperCase()}`;
+    badges.append(badge, orient);
+
+    const actions = document.createElement("div");
+    actions.className = "card-actions";
+    const star = actionButton("☆", "", (b) => toggleFavorite(w, b));
+    star.classList.add("star");
+    star.dataset.id = w.id;
+    renderStar(star, w.id);
+    actions.append(
+        star,
+        actionButton("⬇", "고화질 다운로드 / Download", (b) => download(w, b)),
+        actionButton("출처 복사", "출처 표기 문구 복사 / Copy credit line", async (b) => {
+            flash(b, (await copyText(creditLine(w))) ? "복사됨 ✓" : "실패");
+        }),
+        actionButton("근거 기록", "권리 근거 기록 발급·저장 / Rights evidence record", (b) => issueRecord(w, b)),
+    );
+
+    const links = document.createElement("div");
+    [["원본 / Original", w.image_url], ["출처 / Source", w.source_url]].forEach(([label, href], n) => {
+        if (n) links.append(" · ");
+        const a = document.createElement("a");
+        a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = label;
+        links.append(a);
+    });
+    meta.append(title, sub, badges, actions, links);
+    card.append(img, meta);
+    return card;
+}
+
+// 결과 묶음: 비율 필터 + 카드 격자 + (검색 조건이 있으면) '더 보기'
+function addResultGroup(works, search, heading) {
+    const group = document.createElement("div");
+    group.className = "result-group";
+    const seen = new Set();
+    let count = 0;
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "group-toolbar";
+    const label = heading || (search?.purpose ? `용도: ${search.purpose}` : "");
+    if (label) {
+        const h = document.createElement("span");
+        h.className = "group-heading";
+        h.textContent = label;
+        toolbar.append(h);
+    }
+    const select = document.createElement("select");
+    select.title = "이미지 비율 / Image shape";
+    [["all", "전체 비율 / All shapes"], ["landscape", "가로형만 (PPT·배너) / Landscape"],
+     ["portrait", "세로형만 (포스터·액자) / Portrait"], ["square", "정사각만 (SNS) / Square"]]
+        .forEach(([v, label]) => select.append(new Option(label, v)));
+    select.value = search?.orientation || "all";
+    group.dataset.filter = select.value;
+    select.addEventListener("change", () => { group.dataset.filter = select.value; });
+    toolbar.append(select);
+
+    const grid = document.createElement("div");
+    grid.className = "cards";
+    const append = (list) => {
+        let added = 0;
+        list.forEach((w) => {
+            if (seen.has(w.id)) return;
+            seen.add(w.id);
+            grid.appendChild(makeCard(w, ++count));
+            added++;
+        });
+        return added;
+    };
+    append(works);
+    group.append(toolbar, grid);
+
+    if (search) {
+        const more = document.createElement("button");
+        more.type = "button";
+        more.className = "more-btn";
+        more.textContent = "작품 더 보기 / More artworks";
+        let offset = 0;
+        more.addEventListener("click", async () => {
+            more.disabled = true;
+            more.textContent = "불러오는 중… / Loading…";
+            const params = new URLSearchParams({ q: (search.keywords || []).join(","), limit: PAGE_SIZE });
+            if (search.artist) params.set("artist", search.artist);
+            if (search.year_from != null) params.set("year_from", search.year_from);
+            if (search.year_to != null) params.set("year_to", search.year_to);
+            let hasMore = true;
+            let added = 0;
+            // 첫 페이지는 이미 보여준 작품과 겹칠 수 있어, 새 작품이 나올 때까지 몇 페이지 더 넘긴다
+            for (let tries = 0; tries < 3 && hasMore && added === 0; tries++) {
+                params.set("offset", offset);
+                const { ok, data } = await api(`/api/artworks?${params}`);
+                if (!ok) { addStatusMessage("error", errorMessage(data.error, GENERIC_CHAT_ERROR)); hasMore = false; break; }
+                offset += PAGE_SIZE;
+                hasMore = data.has_more;
+                added += append(data.artworks);
+            }
+            more.disabled = false;
+            more.textContent = "작품 더 보기 / More artworks";
+            if (!hasMore) more.remove();
+        });
+        group.append(more);
+    }
+    chatLog.appendChild(group);
     chatLog.scrollTop = chatLog.scrollHeight;
 }
 
-$("chat-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const message = $("message-input").value.trim();
-    if (!message) return;               // 빈 입력 차단 (서버에서도 검증)
-    $("message-input").value = "";
+// ---- 즐겨찾기 ----
+
+async function loadFavorites() {
+    const { ok, data } = await api("/api/me/favorites?limit=100");
+    if (!ok) return [];
+    favorites.clear();
+    data.favorites.forEach((w) => favorites.add(w.id));
+    document.querySelectorAll(".star").forEach((b) => renderStar(b, Number(b.dataset.id)));
+    return data.favorites;
+}
+
+$("favorites-btn").addEventListener("click", async () => {
+    const works = await loadFavorites();
+    if (!works.length) {
+        addMessage("bot", "아직 즐겨찾기한 작품이 없어요. 카드의 ☆를 눌러 모아보세요. / No favorites yet — tap ☆ on a card to save it.");
+        return;
+    }
+    addResultGroup(works, null, `★ 내 즐겨찾기 ${works.length}개 / My favorites`);
+});
+
+function addCards(works) {   // 온디바이스 추천처럼 검색 조건 없이 카드만 보여줄 때
+    addResultGroup(works, null);
+}
+
+async function sendMessage(message) {
+    $("examples")?.remove();
     addMessage("user", message);
     const pending = addTypingIndicator();
     $("send-btn").disabled = true;
@@ -173,13 +403,24 @@ $("chat-form").addEventListener("submit", async (e) => {
         return;
     }
     addMessage("bot", data.reply);
-    addCards(data.artworks);
+    if (data.artworks.length) addResultGroup(data.artworks, data.search);
     if (data.show_limit_warning) {
         addStatusMessage("warning",
             `무료 질문이 ${data.remaining_free}개 남았어요. 초대코드가 있다면 입력해 보세요. / ` +
             `${data.remaining_free} free questions left. Enter an invite code if you have one.`);
     }
+}
+
+$("chat-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const message = $("message-input").value.trim();
+    if (!message) return;               // 빈 입력 차단 (서버에서도 검증)
+    $("message-input").value = "";
+    sendMessage(message);
 });
+
+document.querySelectorAll("#examples .chip").forEach((chip) =>
+    chip.addEventListener("click", () => sendMessage(chip.textContent)));
 
 $("login-btn").addEventListener("click", () => submitAuth("login"));
 $("signup-btn").addEventListener("click", () => submitAuth("signup"));

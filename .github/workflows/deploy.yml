@@ -1,0 +1,46 @@
+# main에 PR이 합쳐질 때마다 Vercel 프로덕션 배포를 한다 — 배포된 코드 = main (브랜치 전략: feature → develop → main).
+# 필요한 값: Settings → Secrets and variables → Actions → Repository secrets 의 VERCEL_TOKEN,
+#           VERCEL_SCOPE (Vercel 팀 이름, 예: customer-auto — Variables 또는 Secrets 어느 쪽이든 됨)
+name: deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT: ${{ vars.VERCEL_PROJECT || 'art-chatbot' }}
+      VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE || secrets.VERCEL_SCOPE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check settings (값은 출력하지 않는다)
+        run: |
+          echo "VERCEL_TOKEN 시크릿: $([ -n "$VERCEL_TOKEN" ] && echo '있음' || echo '없음 — Repository secrets에 VERCEL_TOKEN 이름으로 넣어야 함')"
+          echo "VERCEL_SCOPE: $([ -n "$VERCEL_SCOPE" ] && echo "있음 (${#VERCEL_SCOPE}자)" || echo "없음")"
+          echo "VERCEL_PROJECT: $VERCEL_PROJECT"
+          [ -n "$VERCEL_TOKEN" ] || { echo "::error::VERCEL_TOKEN이 이 워크플로에 전달되지 않았습니다 (Environment secrets가 아니라 Repository secrets에 넣었는지 확인)."; exit 1; }
+      - name: Deploy to Vercel (production)
+        # 'vercel link'는 토큰 주인(/v2/user)부터 조회하는데, 범위가 제한된 토큰은 여기서 404가 난다.
+        # 그래서 프로젝트 정보를 API로 직접 조회해 VERCEL_ORG_ID/VERCEL_PROJECT_ID로 넘기고 link 없이 배포한다.
+        run: |
+          api() { curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com$1"; }
+          echo "토큰 주인 조회(/v2/user): HTTP $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $VERCEL_TOKEN" https://api.vercel.com/v2/user)"
+          Q=""; [ -n "$VERCEL_SCOPE" ] && Q="?slug=$VERCEL_SCOPE"
+          api "/v9/projects/$VERCEL_PROJECT$Q" > "$RUNNER_TEMP/project.json"
+          PROJECT_ID=$(jq -r '.id // empty' "$RUNNER_TEMP/project.json")
+          ORG_ID=$(jq -r '.accountId // empty' "$RUNNER_TEMP/project.json")
+          if [ -z "$PROJECT_ID" ] || [ -z "$ORG_ID" ]; then
+            echo "::error::프로젝트 '$VERCEL_PROJECT' 정보를 읽지 못했습니다: $(jq -c '.error // .' "$RUNNER_TEMP/project.json")"
+            exit 1
+          fi
+          echo "프로젝트 확인됨: $VERCEL_PROJECT"
+          npm i -g vercel@latest
+          export VERCEL_ORG_ID="$ORG_ID" VERCEL_PROJECT_ID="$PROJECT_ID"
+          vercel deploy --prod --yes --token "$VERCEL_TOKEN"

@@ -1,0 +1,104 @@
+# 작품 DB 확장 + Vercel 배포.
+# 미술관 API는 GitHub 러너에서 접근할 수 있으므로 여기서 수집하고, 결과(data/art.db)를 같은 브랜치에 커밋한다.
+# 배포는 저장소 Secrets에 VERCEL_TOKEN이 있을 때만 실행된다 (Settings → Secrets and variables → Actions).
+name: collect-and-deploy
+
+# 실행: GitHub Actions 탭 → collect-and-deploy → Run workflow (브랜치 선택). 수집 결과는 그 브랜치에 커밋된다.
+on:
+  workflow_dispatch:
+    inputs:
+      skip_collect:
+        description: "수집을 건너뛰고 배포만 실행"
+        type: boolean
+        default: false
+
+concurrency:
+  group: collect-and-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    if: ${{ !inputs.skip_collect }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}   # 대기 중 다른 run이 올린 수집 결과까지 포함한 최신 브랜치에서 시작
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Before
+        run: sqlite3 data/art.db "SELECT source, COUNT(*) FROM artworks GROUP BY source"
+
+      - name: Collect AIC (painting, print, drawing, photograph)
+        working-directory: scripts
+        run: python collect_aic.py
+
+      - name: Collect CMA (Cleveland, CC0 only)
+        working-directory: scripts
+        continue-on-error: true   # 실패해도 위에서 받은 AIC 결과는 저장한다
+        run: python collect_cma.py
+
+      - name: Commit AIC + CMA result
+        run: |
+          python scripts/finalize_artdb.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/art.db
+          git diff --cached --quiet || git commit -m "data: AIC·CMA 퍼블릭 도메인 작품 수집"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push
+
+      - name: Collect MET (6 departments, time-boxed)
+        working-directory: scripts
+        continue-on-error: true
+        run: python collect_met.py --max-minutes 230
+
+      - name: Test against new DB
+        run: |
+          pip install -q -r requirements-dev.txt
+          python -m pytest -q tests
+
+      - name: Commit MET result
+        run: |
+          python scripts/finalize_artdb.py
+          git add data/art.db
+          git diff --cached --quiet || git commit -m "data: MET 퍼블릭 도메인 작품 수집 확장"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push
+
+  deploy:
+    needs: collect
+    if: ${{ always() && (needs.collect.result == 'success' || needs.collect.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT: ${{ vars.VERCEL_PROJECT || 'art-chatbot' }}
+      VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE || secrets.VERCEL_SCOPE }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}   # 수집 job이 방금 올린 커밋까지 포함
+      - name: Deploy to Vercel (production)
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::warning::VERCEL_TOKEN 시크릿이 없어 배포를 건너뜁니다."
+            exit 0
+          fi
+          # deploy.yml과 같은 방식: 'vercel link'(토큰 주인 조회)를 건너뛰고 프로젝트 ID로 바로 배포한다
+          Q=""; [ -n "$VERCEL_SCOPE" ] && Q="?slug=$VERCEL_SCOPE"
+          curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com/v9/projects/$VERCEL_PROJECT$Q" > "$RUNNER_TEMP/project.json"
+          PROJECT_ID=$(jq -r '.id // empty' "$RUNNER_TEMP/project.json")
+          ORG_ID=$(jq -r '.accountId // empty' "$RUNNER_TEMP/project.json")
+          if [ -z "$PROJECT_ID" ] || [ -z "$ORG_ID" ]; then
+            echo "::error::프로젝트 '$VERCEL_PROJECT' 정보를 읽지 못했습니다: $(jq -c '.error // .' "$RUNNER_TEMP/project.json")"
+            exit 1
+          fi
+          npm i -g vercel@latest
+          export VERCEL_ORG_ID="$ORG_ID" VERCEL_PROJECT_ID="$PROJECT_ID"
+          vercel deploy --prod --yes --token "$VERCEL_TOKEN"

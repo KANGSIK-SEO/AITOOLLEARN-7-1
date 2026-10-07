@@ -1,6 +1,8 @@
 // 앱 쉘은 미리 캐싱하고, 문서는 네트워크 우선으로 최신 상태를 유지한다.
 // /api/*와 외부 요청은 로그인·대화 같은 동적 데이터이므로 서비스워커가 가로채지 않는다.
-const CACHE = 'art-chatbot-shell-v3';
+// __ASSET_VERSION__과 정적 파일 주소의 ?v=는 서버(app/main.py)가 화면 파일 내용으로 채운다 —
+// 배포로 파일이 바뀌면 캐시 이름이 바뀌어 activate 단계에서 옛 캐시가 지워진다 (수동으로 v3→v4 올릴 필요 없음).
+const CACHE = 'art-chatbot-shell-__ASSET_VERSION__';
 const OFFLINE_URL = '/static/offline.html';
 const SHELL = [
   '/',

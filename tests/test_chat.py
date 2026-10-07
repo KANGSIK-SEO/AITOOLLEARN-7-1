@@ -81,7 +81,8 @@ def test_find_artworks_chitchat_returns_empty_not_relaxed():
 
 
 # ---- _parse_intent: 모델 출력이 깨지거나 타입이 틀려도 안전한 기본값으로 ----
-EMPTY_INTENT = {"chitchat": False, "keywords": [], "artist": None, "year_from": None, "year_to": None}
+EMPTY_INTENT = {"chitchat": False, "keywords": [], "artist": None, "year_from": None, "year_to": None,
+                "orientation": None, "purpose": None}
 
 
 @pytest.mark.parametrize("raw", [
@@ -99,7 +100,7 @@ def test_parse_intent_extracts_json_wrapped_in_text_and_code_fence():
     raw = '물론이죠!\n```json\n{"chitchat": false, "keywords": ["sea", "storm"], "artist": "Turner", ' \
           '"year_from": 1800, "year_to": 1850}\n```\n참고: {추가 설명}'
     assert chat._parse_intent(raw) == {"chitchat": False, "keywords": ["sea", "storm"], "artist": "Turner",
-                                       "year_from": 1800, "year_to": 1850}
+                                       "year_from": 1800, "year_to": 1850, "orientation": None, "purpose": None}
 
 
 @pytest.mark.parametrize("value, expected", [
@@ -134,3 +135,17 @@ def test_parse_intent_type_mismatch_years(value, expected):
 ])
 def test_parse_intent_type_mismatch_artist(value, expected):
     assert chat._parse_intent(json.dumps({"artist": value}))["artist"] == expected
+
+
+def test_parse_intent_orientation():
+    from app.chat import _parse_intent
+    assert _parse_intent('{"keywords": ["sea"], "orientation": "landscape"}')["orientation"] == "landscape"
+    assert _parse_intent('{"keywords": ["sea"], "orientation": "diagonal"}')["orientation"] is None
+    assert _parse_intent('{"keywords": ["sea"]}')["orientation"] is None
+
+
+def test_parse_intent_purpose_and_square():
+    from app.chat import _parse_intent
+    i = _parse_intent('{"keywords": ["flowers"], "orientation": "square", "purpose": "인스타그램 게시물"}')
+    assert i["orientation"] == "square" and i["purpose"] == "인스타그램 게시물"
+    assert _parse_intent('{"keywords": [], "purpose": 3}')["purpose"] is None

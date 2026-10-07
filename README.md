@@ -9,8 +9,20 @@
 - **문제**: PPT·블로그·굿즈·썸네일 제작자는 "저작권 걱정 없는 명화"를 찾을 때 라이선스를 일일이 확인해야 한다.
   범용 챗봇은 라이선스·원본 이미지 링크를 보증하지 못한다.
 - **타깃 사용자**: 디자이너, 콘텐츠 제작자, 학생, 미술 입문자
-- **핵심 시나리오**: 로그인 → "봄 느낌 풍경화 3개, 상업적으로 써도 되는 걸로" → 작품 카드(썸네일·작가·연도·CC0·원본/출처 링크) + 한국어 설명
+- **핵심 시나리오**: 로그인 → "카페 벽에 걸 세로형 포스터" → 작품 카드(썸네일·작가·연도·CC0·가로/세로형·원본/출처 링크) + 한국어 설명
+  → **더 보기**로 같은 조건의 작품을 AI 호출 없이 계속 넘겨 보기 → ☆ 즐겨찾기 · ⬇ 다운로드 · 출처 표기 문구 복사
 - **데이터**: [MET Open Access](https://metmuseum.github.io/), [Art Institute of Chicago API](https://api.artic.edu/docs/) (둘 다 CC0, API 키 불필요)
+
+### 권리 데이터 + 판단 규칙 + 권리 근거 기록
+이 서비스가 파는 것은 "써도 된다는 보증"이 아니라 **써도 되는지 확인하는 수고를 대신하고, 그 근거를 날짜와 함께 보관해 주는 것**이다. **설계도는 [`docs/rights-policy.md`](docs/rights-policy.md)** — 규칙을 바꾸려면 이 문서부터 고친다.
+- **권리 데이터**: 작품마다 기관·기관 작품 ID·작품 단위 근거 필드·라이선스·권리 확인일(`collected_at`, 재수집 시 갱신)
+- **판단 규칙** (`app/rights.py`): 허용 기관(MET·AIC·CMA) + R1~R6. 하나라도 실패하면 검색에서 제외, 확인일 365일 초과는 "재확인 필요"
+  보류 기관(NGA·Smithsonian·Rijksmuseum·e뮤지엄)은 등록만 돼 있고 환경 변수로도 켤 수 없다.
+- **권리 근거 기록** (`POST /api/records` → `/records/{기록 번호}`): 발급 시점 스냅숏을 저장하고, 기관 작품 페이지와
+  API 응답을 인터넷 아카이브에 보관해 그 링크를 넣는다. 서명값으로 기록 변조 여부를 표시한다. 인쇄/PDF용 한 장.
+- **파일럿**: `ALLOWED_SOURCES=met`이면 MET CC0 작품만 나온다 — 5명에게 "이 기록이 있으면 안심하고 쓰겠냐"를 먼저 묻는다.
+- **용도 기준 추천**: "카페 벽에 걸 세로형 포스터"처럼 물으면 AI가 용도·비율(가로/세로/정사각)·분위기를 뽑아 필터와 설명에 반영한다.
+  해상도는 아직 작품별 수치가 없어 걸러내지 않고, 원본 링크에서 확인하도록 안내한다.
 
 ## 2. 시스템 구조
 
@@ -73,6 +85,11 @@
 | GET | `/api/me/favorites?limit=20&offset=0` | 내 즐겨찾기 작품 카드 조회 |
 | GET | `/api/health` | 프로세스 생존 확인 (항상 200) |
 | GET | `/healthz` | 의존성 상태 확인: 사용자 DB·미술 DB에 실제 쿼리 → 모두 정상 200, 하나라도 실패 503 (`{"status": "ok|degraded", "checks": {...}}`) |
+| GET | `/api/artworks?q=a,b&artist=&year_from=&year_to=&offset=0&limit=24` | **더 보기** — AI 없이 DB만 관련도순 페이지 조회 (`{artworks, has_more}`, IP당 시간당 600회) |
+| POST | `/api/records` | 권리 근거 기록 발급 `{artwork_id}` → `{number, url, archived}` (판단 규칙 미통과 409 `RECORD_NOT_ALLOWED`, IP당 시간당 60회) |
+| GET | `/records/{number}` | 저장된 권리 근거 기록 (HTML, 인쇄/PDF 저장용) |
+| POST | `/api/records/{number}/archive` | 인터넷 아카이브 보관 다시 시도 |
+| GET | `/api/img/aic/{image_id}?w=1686&download=1` | AIC 이미지 프록시 (`download=1`이면 파일로 저장) |
 | GET | `/api/guardian/daily-digest` | 가디언 일일 점검 (`CRON_SECRET` 필요, Vercel Cron 전용) |
 | POST | `/api/explain` | 피어 리뷰용 설명 에이전트. `{question, secret}` → `{"answer": "..."}` (`EXPLAIN_AGENT_SECRET` 미설정 시 항상 401) |
 | GET | `/explain/{token}` | 설명 에이전트 화면 (토큰이 틀리거나 비활성이면 404) |
@@ -129,6 +146,7 @@
 - 챗봇: `EMPTY_MESSAGE`/`MESSAGE_TOO_LONG`(400) `RATE_LIMITED`(429, 시간당 일반 30회·초대코드 300회)
   `FREE_LIMIT_REACHED`(403, 초대코드 없는 계정의 평생 무료 질문 100회 소진)
   `AI_TIMEOUT`(504) `AI_ERROR`(502) `AI_RATE_LIMITED`(429) `AI_BACKED_OFF`/`AI_KEY_MISSING`(503) `ART_DB_ERROR`(503)
+- 더 보기·근거 기록: `ARTWORK_NOT_FOUND`(404) `RECORD_NOT_ALLOWED`(409, 판단 규칙 미통과) `RECORD_NOT_FOUND`(404)
 
 **초대코드(프리미엄)**: 회원가입 시 `private_code`로 `PREMIUM_CODE`(서버 환경변수)와 일치하는 값을 보내면 해당 계정은
 - 시간당 질문 한도가 `CHAT_LIMIT_PER_HOUR_PREMIUM`(기본 300)으로 상향되고, **평생 무료 질문 100회 제한이 적용되지 않는다**
@@ -148,8 +166,21 @@
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
   - `favorites(id, user_id → users.id, artwork_id(art.db artworks.id), created_at, UNIQUE(user_id, artwork_id))`
   - `incidents(id, category[reliability|security], code, message, context(JSON), severity, auto_action, diagnosis, created_at)` — 가디언 사건 로그. `diagnosis`는 일일 배치 분석 전까지 NULL.
+  - `favorites(user_id → users.id, artwork_id → art.db artworks.id, created_at)` — 즐겨찾기 (PK: user_id+artwork_id)
+  - `rights_records(number PK, artwork_id, user_id, snapshot(JSON), archives(JSON), signature, issued_at)` — 권리 근거 기록 (발급 시점 그대로)
   - `runtime_flags(key, value, updated_at)` — AI 백오프·로그인 잠금 등 자동 대응 상태값 (예: `ai_backoff_until`, `lockout:<email>`)
   - `rate_counters(bucket, count, window_start)` — IP/이메일 단위 레이트리밋 카운터
+
+**작품 DB 확장**: `scripts/collect_met.py`는 기본으로 6개 부서(유럽 회화·미국관·아시아·드로잉/판화·리먼·사진),
+`scripts/collect_aic.py`·`scripts/collect_cma.py`(클리블랜드, `share_license_status=CC0`만)는 회화·판화·드로잉·사진을 수집한다(AIC 1000건 제한은 연도 구간을 자동으로 반씩 쪼개 회피).
+기존 DB에 이어서 저장되므로 그냥 다시 실행하면 된다 (MET는 1건당 0.5초 쉬어 가서 전체 수집에 몇 시간 걸림).
+```bash
+cd scripts && python3 collect_aic.py && python3 collect_met.py
+```
+
+**가로형/세로형 판별**: 카드 이미지가 로드되면 브라우저가 실제 비율로 가로형(≥1.15)/세로형(≤0.87)을 판별하고,
+결과 묶음의 비율 필터(전체/가로형/세로형)로 거른다. "PPT·배너·배경화면"이 들어간 질문은 AI가
+`orientation: landscape`를 뽑아 가로형 필터가 자동으로 켜진다.
 
 **DB 확인 가이드** (택 1 이상)
 1. 로그 조회 API: `curl -b cookies.txt https://<서비스>/api/me/chats`
@@ -197,7 +228,21 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 | `CHAT_LIFETIME_LIMIT_FREE` | 초대코드 없는 사용자의 평생 무료 질문 수(기본 100) |
 | `ART_RESULTS_LIMIT_PREMIUM` | 초대코드 사용자에게 보여줄 추천 작품 수(기본 100) |
 
-**Vercel + Turso 배포**
+**LLM 답변 품질**: 개선한 방법과 측정 방법은 [`docs/llm-eval.md`](docs/llm-eval.md).
+`python3 scripts/eval_llm.py`로 질문 20개 평가 세트를 돌려 의도 추출 정확도·근거성(환각)·규칙 준수율을 잰다.
+
+**캐시 무효화**: 서버가 화면 파일 내용으로 버전을 만들어 `index.html`의 정적 파일 주소(`?v=버전`)와
+서비스워커 캐시 이름에 붙인다. 배포로 파일이 바뀌면 버전이 바뀌어 옛 캐시를 자동으로 버린다 (`app/main.py`).
+
+**자동 배포 (GitHub Actions)**
+- `.github/workflows/deploy.yml`: **`main`에 PR이 합쳐질 때마다** Vercel 프로덕션 배포를 한다. 배포된 코드 = `main` (feature → `develop` → `main`).
+- `.github/workflows/collect-and-deploy.yml`: Actions 탭에서 **손으로 실행**하면 미술관 작품을 수집해 `data/art.db`를 커밋한다 (MET는 1건당 0.5초라 최대 약 4시간).
+- `.github/workflows/llm-eval.yml`: 프롬프트 코드가 `main`에 합쳐지면 LLM 평가(`scripts/eval_llm.py`)를 돌려 결과를 Actions 요약에 남긴다 (시크릿 `GPT_ASTRA_API_KEY` 필요).
+- 필요한 값 (Settings → Secrets and variables → Actions → **Repository secrets**):
+  `VERCEL_TOKEN`(Vercel 토큰, scope는 art-chatbot 프로젝트), `VERCEL_SCOPE`(Vercel 팀 이름 `customer-auto`).
+  Environment secrets에 넣으면 워크플로가 읽지 못한다. 저장한 값은 다시 보이지 않는 게 정상이다.
+
+**Vercel + Turso 배포 (수동)**
 ```bash
 turso db create art-chatbot && turso db show art-chatbot --url && turso db tokens create art-chatbot
 vercel link && vercel env add GPT_ASTRA_API_KEY && vercel env add SECRET_KEY \
@@ -222,6 +267,13 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:8000/api/guardian/
 | 서강식 | AI/데이터 엔지니어 & 팀 리드 | [#8](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/8), [#9](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/9), [#10](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/10), [#17](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/17) | MVP 설계·구현, 검색·AI 파이프라인 고도화, 배포·통합·PR 머지 총괄 (작업 완료 후 PR 번호로 갱신) |
 | 유영민 | 프론트엔드 개발자 | [#11](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/11), [#12](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/12), [#13](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/13) | 채팅 UI 스크린리더 접근성([#31](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/31)), 시스템 다크/라이트 테마 지원([#32](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/32)), AI 응답 대기 인디케이터([#33](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/33)), 모바일 작은 화면 레이아웃 개선([#34](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/34)), 온디바이스 패널 전환 애니메이션([#35](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/35)), PWA 오프라인 캐싱 전략 개선([#36](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/36)), 설명 페이지 공통 스타일 적용([#37](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/37)), 채팅 메시지 타임스탬프([#38](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/38)), 상태 메시지 공통 컴포넌트화([#39](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/39)), SEO·공유 미리보기 메타데이터([#40](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/40)) |
 | 오철호 | 백엔드 개발자 | [#14](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/14), [#15](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/15), [#16](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/issues/16) | 즐겨찾기 API([#19](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/19)), 환경변수 검증([#21](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/21)), DB 슬로우쿼리 로깅([#22](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/22)), LLM 재시도·타임아웃([#23](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/23)), FTS5 입력 예외처리([#26](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/26)), 단계별 요청 레이턴시 로깅([#27](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/27)), `/healthz` 의존성 상태 점검([#28](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/28)), 설명 에이전트 에러 메시지 개선([#29](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/29)), 가디언·무료한도 단위 테스트 보강([#20](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/20), [#24](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/24), [#25](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/25)), README API 문서 최신화([#30](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/pull/30)) |
+
+**GitHub 계정 ↔ 팀원**: 서강식 = `KANGSIK-SEO`, 오철호 = `chul5`, 유영민 = `maebsy`
+
+**AI 도구 사용**: Claude Code(커밋 작성자 `Claude`)를 함께 사용했다. 서강식의 지시·검토 아래
+develop 병합·충돌 해결(PR #51), 권리 판단 규칙·권리 근거 기록(`app/rights.py`, `app/records.py`, `docs/rights-policy.md`),
+작품 수집 확장(클리블랜드 미술관, GitHub Actions 수집), 용도 기준 추천, 캐시 무효화, LLM 평가(`scripts/eval_llm.py`),
+GitHub Actions 배포를 구현했다. 모든 변경은 PR로 리뷰 후 병합한다.
 
 ## 8. 민감정보 관리
 - 모든 키는 환경 변수로만 사용하고 `.env`는 `.gitignore`로 제외한다. 예시는 `.env.example`.

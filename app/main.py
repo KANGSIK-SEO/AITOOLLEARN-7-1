@@ -1,4 +1,5 @@
 """FastAPI 앱: 회원가입/로그인, 챗봇 질문/응답, 내 대화 로그 조회, 작품 즐겨찾기."""
+import hashlib
 import hmac
 import json
 import logging
@@ -14,15 +15,15 @@ from pathlib import Path
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import art, auth, chat, db, explain, guardian, reqctx
+from . import art, auth, chat, db, explain, guardian, records, reqctx
 from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, CHAT_LIFETIME_LIMIT_FREE,
                      CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
-                     CONTEXT_TURNS, CRON_SECRET, FREE_LIMIT_WARNING_THRESHOLD, AIUnavailableError,
-                     validate_env)
+                     CONTEXT_TURNS, CRON_SECRET, FREE_LIMIT_WARNING_THRESHOLD, BROWSE_LIMIT_PER_HOUR,
+                     BROWSE_PAGE_SIZE, RECORD_LIMIT_PER_HOUR, AIUnavailableError, validate_env)
 
 reqctx.install()
 logging.basicConfig(level=logging.INFO, format=reqctx.LOG_FORMAT)
@@ -105,6 +106,15 @@ def current_session(session: str | None = Cookie(default=None),
     return data
 
 
+def optional_session(session: str | None = Cookie(default=None),
+                     authorization: str | None = Header(default=None)) -> dict | None:
+    """로그인했으면 세션, 아니면 None. 챗봇 질문에는 쓰지 않는다(질문은 로그인 필수)."""
+    try:
+        return current_session(session, authorization)
+    except HTTPException:
+        return None
+
+
 def current_user(session_data: dict = Depends(current_session)) -> int:
     return session_data["uid"]
 
@@ -128,15 +138,37 @@ def _set_cookie(resp: JSONResponse, token: str, request: Request) -> None:
                     httponly=True, samesite="lax", secure=request.url.scheme == "https")
 
 
+# ---- 배포 시 캐시 무효화 ----
+# 화면 파일 내용으로 버전을 만든다. 파일이 바뀌어 배포되면 버전이 바뀌므로
+# ① index.html의 정적 파일 주소(?v=버전)가 달라져 브라우저·CDN 캐시를 우회하고
+# ② 서비스워커 캐시 이름이 달라져 새 서비스워커가 옛 캐시를 지운다 (sw.js의 activate).
+VERSIONED_ASSETS = ("style.css", "app.js", "ondevice.js")
+ASSET_VERSION = hashlib.sha256(b"".join(
+    (STATIC_DIR / name).read_bytes() for name in (*VERSIONED_ASSETS, "index.html", "sw.js")
+)).hexdigest()[:10]
+NO_CACHE = {"Cache-Control": "no-cache"}  # 매번 서버에 새 버전이 있는지 확인 (내용이 같으면 304로 가볍게)
+
+
+def _versioned(text: str) -> str:
+    for name in VERSIONED_ASSETS:
+        text = text.replace(f"/static/{name}'", f"/static/{name}?v={ASSET_VERSION}'")
+        text = text.replace(f'/static/{name}"', f'/static/{name}?v={ASSET_VERSION}"')
+    return text
+
+
+INDEX_HTML = _versioned((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
+SW_JS = _versioned((STATIC_DIR / "sw.js").read_text(encoding="utf-8")).replace("__ASSET_VERSION__", ASSET_VERSION)
+
+
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    return HTMLResponse(INDEX_HTML, headers=NO_CACHE)
 
 
 @app.get("/sw.js")
 def service_worker():
     # 정적 마운트(/static)가 아니라 루트에서 서빙해야 서비스워커 적용 범위가 사이트 전체(/)가 된다.
-    return FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript")
+    return Response(SW_JS, media_type="application/javascript", headers=NO_CACHE)
 
 
 @app.get("/api/health")
@@ -298,7 +330,8 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
     try:
         intent = chat.extract_intent(question, request_id=request_id)
         works, relaxed = chat.find_artworks(intent, limit=art_limit, request_id=request_id)
-        answer = chat.compose_answer(question, works, history, relaxed=relaxed, request_id=request_id)
+        answer = chat.compose_answer(question, works, history, relaxed=relaxed,
+                                     purpose=intent.get("purpose"), request_id=request_id)
     except AIUnavailableError as e:
         latency = int((time.monotonic() - started) * 1000)
         log.error("ai_call_failure code=%s latency_ms=%s", e.code, latency)
@@ -317,8 +350,12 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
     log.info("ai_call_success latency_ms=%s artworks=%s", latency, len(works))
     chat_id = _save_chat(user_id, question, answer, "ok", None, latency, [w["id"] for w in works])
     show_limit_warning = remaining_free is not None and remaining_free <= FREE_LIMIT_WARNING_THRESHOLD
+    # '더 보기'가 AI를 다시 부르지 않고 같은 조건으로 DB만 넘겨 볼 수 있게 검색 조건을 함께 돌려준다
+    search = {k: intent.get(k) for k in ("keywords", "artist", "year_from", "year_to", "orientation", "purpose")}
+    if relaxed:  # 작가/연도 조건을 빼고 찾은 결과면 '더 보기'도 같은 완화 조건을 쓴다
+        search.update(artist=None, year_from=None, year_to=None)
     return {"chat_id": chat_id, "saved": chat_id is not None, "request_id": request_id,
-            "reply": answer, "artworks": works,
+            "reply": answer, "artworks": works, "search": None if intent["chitchat"] else search,
             "remaining_free": remaining_free, "show_limit_warning": show_limit_warning}
 
 
@@ -332,6 +369,63 @@ def my_chats(limit: int = 20, offset: int = 0, user_id: int = Depends(current_us
 
 
 # ---- 작품 즐겨찾기 ----
+@app.get("/api/artworks")
+def browse_artworks(request: Request, q: str = "", artist: str | None = None, year_from: int | None = None,
+                    year_to: int | None = None, offset: int = 0, limit: int = BROWSE_PAGE_SIZE):
+    """'더 보기' — 채팅 답변의 검색 조건으로 작품을 더 넘겨 본다. AI를 부르지 않아 비용이 없고 체험 사용자도 쓸 수 있다."""
+    ip = guardian.client_ip(request)
+    if not guardian.check_rate(f"browse:{ip}", limit=BROWSE_LIMIT_PER_HOUR, window_seconds=3600):
+        return error(429, "RATE_LIMITED", "요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
+    keywords = [k for k in q.split(",") if k.strip()][:6]
+    try:
+        works, has_more = art.browse(keywords, artist or None, year_from, year_to,
+                                     offset=max(0, min(offset, 5000)), limit=max(1, min(limit, 60)))
+    except sqlite3.Error as e:
+        log.error("art_db_failure path=/api/artworks detail=%s", e)
+        return error(503, "ART_DB_ERROR", "작품 데이터베이스를 읽지 못했어요.")
+    return {"artworks": works, "has_more": has_more}
+
+
+class RecordRequest(BaseModel):
+    artwork_id: int
+
+
+@app.post("/api/records")
+def issue_record(body: RecordRequest, request: Request, session_data: dict | None = Depends(optional_session)):
+    """권리 근거 기록 발급 (docs/rights-policy.md §5): 스냅숏 저장 → 인터넷 아카이브 보관 시도 → 기록 번호."""
+    ip = guardian.client_ip(request)
+    if not guardian.check_rate(f"record:{ip}", limit=RECORD_LIMIT_PER_HOUR, window_seconds=3600):
+        return error(429, "RATE_LIMITED", "요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
+    try:
+        number = records.issue(body.artwork_id, session_data["uid"] if session_data else None)
+    except LookupError:
+        return error(404, "ARTWORK_NOT_FOUND", "작품을 찾을 수 없습니다.")
+    except records.RecordNotAllowed as e:
+        return error(409, "RECORD_NOT_ALLOWED", f"판단 규칙({', '.join(e.failed)})을 통과하지 못해 기록을 발급할 수 없어요.")
+    archives = records.archive_missing(number)  # 실패해도 기록은 이미 저장됨 — 기록 페이지에서 다시 시도 가능
+    return {"number": number, "url": f"/records/{number}", "archived": all(a["archived_url"] for a in archives)}
+
+
+@app.post("/api/records/{number}/archive")
+def retry_archive(number: str, request: Request):
+    ip = guardian.client_ip(request)
+    if not guardian.check_rate(f"archive:{ip}", limit=20, window_seconds=3600):
+        return error(429, "RATE_LIMITED", "요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
+    try:
+        archives = records.archive_missing(number)
+    except LookupError:
+        return error(404, "RECORD_NOT_FOUND", "기록을 찾을 수 없습니다.")
+    return {"archives": archives}
+
+
+@app.get("/records/{number}", response_class=HTMLResponse)
+def show_record(number: str):
+    row = records.get(number)
+    if not row:
+        return HTMLResponse("<h1>기록을 찾을 수 없습니다.</h1>", status_code=404)
+    return HTMLResponse(records.render(row))
+
+
 def _artwork_or_404(artwork_id: int) -> None:
     try:
         exists = artwork_id in art.get_by_ids([artwork_id])
@@ -428,7 +522,7 @@ AIC_UA = "AITOOLLEARN-7-1 (student project; https://github.com/KANGSIK-SEO/AITOO
 
 
 @app.get("/api/img/aic/{image_id}")
-def aic_image(image_id: str, w: int = 400, request: Request = None):
+def aic_image(image_id: str, w: int = 400, download: int = 0, request: Request = None):
     ip = guardian.client_ip(request)
     if not guardian.check_rate(f"img:{ip}", limit=300, window_seconds=3600):
         return error(429, "RATE_LIMITED", "이미지 요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
@@ -445,5 +539,7 @@ def aic_image(image_id: str, w: int = 400, request: Request = None):
         log.warning("image_proxy_failure image_id=%s detail=%s", image_id, e)
         return error(502, "IMAGE_UNAVAILABLE", "이미지를 불러오지 못했습니다.")
     # 이미지는 바뀌지 않으므로 CDN·브라우저에 오래 캐시해 프록시 호출을 최소화한다
-    return Response(body, media_type="image/jpeg",
-                    headers={"Cache-Control": "public, max-age=86400, s-maxage=31536000, immutable"})
+    headers = {"Cache-Control": "public, max-age=86400, s-maxage=31536000, immutable"}
+    if download:  # '다운로드' 버튼: 브라우저가 새 탭 대신 파일로 저장하게 한다
+        headers["Content-Disposition"] = f'attachment; filename="aic-{image_id}.jpg"'
+    return Response(body, media_type="image/jpeg", headers=headers)

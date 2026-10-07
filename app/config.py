@@ -100,6 +100,10 @@ ART_RESULTS_LIMIT = 6                  # 일반 사용자에게 보여줄 추천
 ART_RESULTS_LIMIT_PREMIUM = _env_number("ART_RESULTS_LIMIT_PREMIUM", "100", int, minimum=1)  # 초대코드 사용자 추천 작품 수
 ANSWER_NARRATION_LIMIT = 6             # 답변 본문에서 번호로 설명하는 작품 수 상한 (프리미엄이어도 동일 — 토큰 비용 보호)
 
+BROWSE_PAGE_SIZE = 24                  # '더 보기' 한 번에 보여줄 작품 수 (AI 없이 DB만 조회)
+BROWSE_LIMIT_PER_HOUR = 600            # IP당 '더 보기' 시간당 상한
+FAVORITES_MAX = 500                    # 사용자당 즐겨찾기 상한
+RECORD_LIMIT_PER_HOUR = 60             # IP당 권리 근거 기록 발급 시간당 상한 (아카이브 호출 남용 방지)
 
 REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 

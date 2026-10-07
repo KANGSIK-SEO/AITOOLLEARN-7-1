@@ -36,9 +36,27 @@ def signup(client, email="a@b.com", pw="password123"):
     return client.post("/api/auth/signup", json={"email": email, "password": pw})
 
 
-def test_chat_requires_login(client):
-    r = client.post("/api/chat", json={"message": "안녕"})
+def test_my_chats_requires_login(client):
+    r = client.get("/api/me/chats")
     assert r.status_code == 401 and r.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_chat_requires_login(client, monkeypatch):
+    """미션 요구사항: 챗봇 질문/응답은 로그인한 사용자만."""
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    r = client.post("/api/chat", json={"message": "봄 풍경화"})
+    assert r.status_code == 401 and r.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_chat_returns_search_conditions_for_browse(client, monkeypatch):
+    monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
+    signup(client)
+    body = client.post("/api/chat", json={"message": "봄 풍경화"}).json()
+    assert body["search"]["keywords"] == ["landscape", "spring"]
+    page = client.get("/api/artworks", params={"q": ",".join(body["search"]["keywords"]), "limit": 30}).json()
+    assert len(page["artworks"]) == 30 and page["has_more"] is True
+    nxt = client.get("/api/artworks", params={"q": "landscape,spring", "limit": 30, "offset": 30}).json()
+    assert not {w["id"] for w in page["artworks"]} & {w["id"] for w in nxt["artworks"]}
 
 
 def test_signup_login_validation(client):
