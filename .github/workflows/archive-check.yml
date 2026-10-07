@@ -1,0 +1,28 @@
+# 권리 근거 기록의 인터넷 아카이브 보관이 실제로 되는지 점검한다 (scripts/check_wayback.py).
+# 개발 컨테이너는 archive.org 접속이 막혀 있을 수 있어 GitHub 러너에서 진짜로 보관해 본다.
+# IA_ACCESS_KEY / IA_SECRET_KEY 시크릿이 있으면 공식 저장 API, 없으면 익명 저장으로 시험한다.
+name: archive-check
+
+on:
+  push:
+    paths:
+      - app/records.py
+      - scripts/check_wayback.py
+      - .github/workflows/archive-check.yml
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+      IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q -r requirements.txt
+      - name: Save two real pages to the Wayback Machine
+        run: python scripts/check_wayback.py | tee -a "$GITHUB_STEP_SUMMARY"

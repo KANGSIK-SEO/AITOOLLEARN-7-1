@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -68,6 +69,14 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
     db.reset_for_tests()
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def no_real_archive(monkeypatch):
+    """테스트가 진짜 인터넷 아카이브를 부르지 않게 한다 (기존 보관본 조회·계정 키)."""
+    monkeypatch.setattr(records, "latest_snapshot", lambda url, timeout=8: None)
+    monkeypatch.delenv("IA_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("IA_SECRET_KEY", raising=False)
 
 
 @pytest.fixture()
@@ -164,6 +173,56 @@ def test_wayback_reads_archived_url_from_redirect(monkeypatch):
     monkeypatch.setattr(records.urllib.request, "urlopen", lambda req, timeout: Resp())
     assert records.save_to_wayback("https://metmuseum.org/art/1") == (
         "https://web.archive.org/web/20261005010203/https://metmuseum.org/art/1", None)
+
+
+class _JsonResp:
+    def __init__(self, data):
+        self.data = data
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self, *a): return json.dumps(self.data).encode()
+
+
+def test_wayback_uses_spn2_api_when_keys_are_set(monkeypatch):
+    monkeypatch.setenv("IA_ACCESS_KEY", "ak")
+    monkeypatch.setenv("IA_SECRET_KEY", "sk")
+    monkeypatch.setattr(records, "ARCHIVE_POLL_SECONDS", 0)
+    monkeypatch.setattr(records.time, "sleep", lambda s: None)
+    seen = []
+    statuses = iter([{"status": "pending"}, {"status": "success", "timestamp": "20261007120000",
+                                              "original_url": "https://metmuseum.org/art/1"}])
+
+    def fake_open(req, timeout):
+        seen.append((req.full_url, req.get_header("Authorization")))
+        return _JsonResp({"job_id": "spn2-abc"} if req.data else next(statuses))
+    monkeypatch.setattr(records.urllib.request, "urlopen", fake_open)
+    assert records.save_to_wayback("https://metmuseum.org/art/1") == (
+        "https://web.archive.org/web/20261007120000/https://metmuseum.org/art/1", None)
+    assert seen[0] == ("https://web.archive.org/save", "LOW ak:sk")
+    assert seen[1][0].endswith("/save/status/spn2-abc")
+
+
+def test_wayback_spn2_reports_error_message(monkeypatch):
+    monkeypatch.setenv("IA_ACCESS_KEY", "ak")
+    monkeypatch.setenv("IA_SECRET_KEY", "sk")
+    monkeypatch.setattr(records.time, "sleep", lambda s: None)
+
+    def fake_open(req, timeout):
+        return _JsonResp({"job_id": "j"} if req.data else {"status": "error", "message": "blocked by robots.txt"})
+    monkeypatch.setattr(records.urllib.request, "urlopen", fake_open)
+    assert records.save_to_wayback("https://example.org/") == (None, "blocked by robots.txt")
+
+
+def test_failed_archive_falls_back_to_existing_snapshot_clearly_labeled(client, monkeypatch):
+    monkeypatch.setattr(records, "save_to_wayback", lambda url: (None, "HTTP 429"))
+    monkeypatch.setattr(records, "latest_snapshot",
+                        lambda url, timeout=8: (f"https://web.archive.org/web/20250101000000/{url}", "20250101000000"))
+    work = art.search(["landscape"], limit=1)[0]
+    r = _issue(client, work["id"])
+    assert r.json()["archived"] is False  # 오늘 모습을 보관한 건 아니다
+    body = client.get(f"/records/{r.json()['number']}").text
+    assert "이미 있는 보관본 (2025-01-01 보관, 발급일의 모습은 아님)" in body
+    assert "web.archive.org/web/20250101000000" in body and "다시 보관하기" in body
 
 
 def test_cma_to_row_requires_cc0_and_official_image_host():
