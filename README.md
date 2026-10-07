@@ -5,6 +5,9 @@
 
 **서비스 URL: https://art-chatbot-eight.vercel.app**
 
+> **프로젝트 위키**: 기능·구조·결정 이유를 쉬운 말로 정리한 LLM 위키는 [`wiki/index.md`](wiki/index.md).
+> 코드가 바뀌면 [`wiki/AGENTS.md`](wiki/AGENTS.md) 규칙대로 위키도 고치고 `python3 scripts/wiki_lint.py`로 점검한다.
+
 ## 1. 프로젝트 개요
 - **문제**: PPT·블로그·굿즈·썸네일 제작자는 "저작권 걱정 없는 명화"를 찾을 때 라이선스를 일일이 확인해야 한다.
   범용 챗봇은 라이선스·원본 이미지 링크를 보증하지 못한다.
