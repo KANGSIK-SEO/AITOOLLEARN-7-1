@@ -412,7 +412,7 @@ def issue_record(body: RecordRequest, request: Request, session_data: dict | Non
 @app.post("/api/records/{number}/archive")
 def retry_archive(number: str, request: Request):
     ip = guardian.client_ip(request)
-    if not guardian.check_rate(f"archive:{ip}", limit=20, window_seconds=3600):
+    if not guardian.check_rate(f"archive:{ip}", limit=120, window_seconds=3600):
         return error(429, "RATE_LIMITED", "요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
     try:
         archives = records.archive_missing(number)

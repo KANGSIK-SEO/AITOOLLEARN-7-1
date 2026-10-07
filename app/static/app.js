@@ -185,7 +185,7 @@ async function download(w, btn) {
 async function issueRecord(w, btn) {
     // 서버 응답을 기다린 뒤 새 탭을 열면 팝업 차단에 걸려서, 탭을 먼저 열어두고 주소만 나중에 넣는다
     const tab = window.open("", "_blank");
-    if (tab) tab.document.write("<p style='font-family:sans-serif;padding:24px'>권리 근거 기록을 만들고 인터넷 아카이브에 보관하는 중… (최대 50초)</p>");
+    if (tab) tab.document.write("<p style='font-family:sans-serif;padding:24px'>권리 근거 기록을 만들고 인터넷 아카이브에 보관을 요청하는 중… (10초 정도)</p>");
     btn.disabled = true;
     const original = btn.textContent;
     btn.textContent = "발급 중…";

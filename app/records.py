@@ -5,8 +5,8 @@
 
 - issue(): 판단 규칙을 통과한 작품의 스냅숏을 저장하고 기록 번호를 돌려준다 (이후 기관 데이터가 바뀌어도 기록은 그대로).
 - archive_missing(): 기관 작품 페이지와 API 응답을 Wayback Machine에 보관한다 (실패하면 나중에 다시 시도).
-  보관 방법은 save_to_wayback() 참고: 키가 있으면 공식 저장 API(SPN2), 없으면 익명 저장, 둘 다 실패하면
-  가장 최근의 기존 보관본을 "기존 보관본"이라고 분명히 표시해 붙인다.
+  보관은 "요청 → 나중에 확인" 두 단계다 (request_save, check_save). 키가 있으면 공식 저장 API(SPN2),
+  없으면 익명 저장. 실패하면 가장 최근의 기존 보관본을 "기존 보관본"이라고 분명히 표시해 붙인다.
 - render(): 저장된 기록을 인쇄/PDF용 HTML로 보여준다.
 """
 import hashlib
@@ -22,20 +22,24 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import art, db, rights
 from .config import get_secret_key
 
 log = logging.getLogger("app.records")
 
-ARCHIVE_SAVE = "https://web.archive.org/save/"
+ARCHIVE_SAVE = "https://web.archive.org/save/"                # 익명 저장
 ARCHIVE_SPN2 = "https://web.archive.org/save"                 # 공식 저장 API (archive.org 계정 키 필요)
 ARCHIVE_STATUS = "https://web.archive.org/save/status/"
+ARCHIVE_CDX = "https://web.archive.org/cdx/search/cdx"         # 보관본 색인 (익명 저장 결과 찾기)
 ARCHIVE_AVAILABLE = "https://archive.org/wayback/available?url="
-ARCHIVE_TIMEOUT_SECONDS = 25   # 익명 저장 요청 1번의 상한
-ARCHIVE_BUDGET_SECONDS = 40    # 한 주소를 보관하는 데 쓰는 전체 시간 (주소 2개는 병렬) — Vercel 함수 제한 60초 안
-ARCHIVE_POLL_SECONDS = 2
+ARCHIVE_REQUEST_SECONDS = 10   # 보관 요청 1번에 기다리는 시간 — 그 뒤는 아카이브가 뒤에서 계속 보관한다
+ARCHIVE_CHECK_SECONDS = 8      # 보관 결과 확인 1번의 상한
+ARCHIVE_PENDING_LIMIT_SECONDS = 600  # 10분이 지나도 안 끝난 요청은 다시 요청한다
+ARCHIVE_POLL_SECONDS = 5
+ARCHIVE_RETRY_STATUS = {502, 503, 504, 520, 523}  # 아카이브가 기관 페이지를 잠깐 못 가져온 경우 — 한 번 더 시도
+ARCHIVE_RETRY_WAIT_SECONDS = 3
 ARCHIVE_UA = "AITOOLLEARN-7-1 rights-record (https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1)"
 
 CAUTIONS = [
@@ -127,56 +131,91 @@ def _open(req: urllib.request.Request, timeout: float):
     return urllib.request.urlopen(req, timeout=max(1.0, timeout))
 
 
-def _save_spn2(url: str, keys: tuple[str, str], deadline: float) -> tuple[str | None, str | None]:
-    """공식 저장 API: 저장 작업을 요청하고(job_id) 끝날 때까지 상태를 확인한다."""
-    auth = {"Authorization": f"LOW {keys[0]}:{keys[1]}", "Accept": "application/json", "User-Agent": ARCHIVE_UA}
-    req = urllib.request.Request(ARCHIVE_SPN2, data=urllib.parse.urlencode({"url": url}).encode(), headers=auth)
-    try:
-        with _open(req, deadline - time.monotonic()) as resp:
-            job = json.load(resp)
-    except urllib.error.HTTPError as e:
-        return None, f"HTTP {e.code}"
-    except (urllib.error.URLError, socket.timeout, TimeoutError, ValueError) as e:
-        return None, f"연결 실패: {getattr(e, 'reason', e)}"
-    job_id = job.get("job_id")
-    if not job_id:
-        return None, job.get("message") or "저장 작업을 받지 못함"
-    while time.monotonic() + ARCHIVE_POLL_SECONDS < deadline:
-        time.sleep(ARCHIVE_POLL_SECONDS)
+def _spn2_headers(keys: tuple[str, str]) -> dict:
+    return {"Authorization": f"LOW {keys[0]}:{keys[1]}", "Accept": "application/json", "User-Agent": ARCHIVE_UA}
+
+
+def _wayback_url(timestamp: str, url: str) -> str:
+    return f"https://web.archive.org/web/{timestamp}/{url}"
+
+
+# 보관은 "요청"과 "확인"으로 나눈다. 인터넷 아카이브는 한 페이지를 보관하는 데 보통 30초~몇 분이 걸려서
+# 사용자를 그동안 붙잡아 두면 시간 초과가 난다. 요청만 바로 넣고, 기록 페이지가 열려 있는 동안 결과를 확인한다.
+# 항목 상태: archived_url 있음 = 보관됨 / requested_at 있고 error 없음 = 진행 중 / error 있음 = 실패(다시 요청)
+
+def request_save(url: str) -> dict:
+    """보관을 요청한다. 돌려주는 값: {"archived_url"} 바로 끝남 · {"job_id"} 또는 {} 진행 중 · {"error"} 실패."""
+    keys = ia_keys()
+    if keys:
+        req = urllib.request.Request(ARCHIVE_SPN2, data=urllib.parse.urlencode({"url": url}).encode(),
+                                     headers=_spn2_headers(keys))
         try:
-            with _open(urllib.request.Request(ARCHIVE_STATUS + job_id, headers=auth), deadline - time.monotonic()) as resp:
-                status = json.load(resp)
-        except (urllib.error.URLError, socket.timeout, TimeoutError, ValueError):
-            continue  # 상태 확인 한 번 실패는 다음 확인에서 다시 본다
-        if status.get("status") == "success" and status.get("timestamp"):
-            return f"https://web.archive.org/web/{status['timestamp']}/{status.get('original_url') or url}", None
-        if status.get("status") == "error":
-            return None, status.get("message") or status.get("status_ext") or "보관 실패"
-    return None, "보관 진행 중 — 잠시 후 다시 시도해 주세요"
+            with _open(req, ARCHIVE_REQUEST_SECONDS) as resp:
+                job = json.load(resp)
+        except urllib.error.HTTPError as e:
+            return {"error": f"HTTP {e.code}"}
+        except (urllib.error.URLError, socket.timeout, TimeoutError, ValueError) as e:
+            return {"error": f"연결 실패: {getattr(e, 'reason', e)}"}
+        return {"job_id": job["job_id"]} if job.get("job_id") else {"error": job.get("message") or "저장 작업을 받지 못함"}
+    return _request_anonymous(url)
 
 
-ARCHIVE_RETRY_STATUS = {502, 503, 504, 520, 523}  # 아카이브가 기관 페이지를 잠깐 못 가져온 경우 — 한 번 더 시도
-ARCHIVE_RETRY_WAIT_SECONDS = 3
-
-
-def _save_anonymous(url: str, deadline: float, retry: bool = True) -> tuple[str | None, str | None]:
+def _request_anonymous(url: str, retry: bool = True) -> dict:
+    """익명 저장. 응답을 끝까지 기다리지 않는다 — 요청이 들어가면 아카이브가 뒤에서 계속 보관한다."""
     req = urllib.request.Request(ARCHIVE_SAVE + url, headers={"User-Agent": ARCHIVE_UA})
     try:
-        with _open(req, min(ARCHIVE_TIMEOUT_SECONDS, deadline - time.monotonic())) as resp:
+        with _open(req, ARCHIVE_REQUEST_SECONDS) as resp:
             final = resp.geturl()
             location = resp.headers.get("Content-Location")
     except urllib.error.HTTPError as e:
-        if retry and e.code in ARCHIVE_RETRY_STATUS and time.monotonic() + ARCHIVE_RETRY_WAIT_SECONDS + 5 < deadline:
+        if retry and e.code in ARCHIVE_RETRY_STATUS:
             time.sleep(ARCHIVE_RETRY_WAIT_SECONDS)
-            return _save_anonymous(url, deadline, retry=False)
-        return None, f"HTTP {e.code}"
-    except (urllib.error.URLError, socket.timeout, TimeoutError) as e:
-        return None, f"연결 실패: {getattr(e, 'reason', e)}"
+            return _request_anonymous(url, retry=False)
+        return {"error": f"HTTP {e.code}"}
+    except (socket.timeout, TimeoutError):
+        return {}  # 아직 보관 중 — check_save()로 확인한다
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, (socket.timeout, TimeoutError)):
+            return {}
+        return {"error": f"연결 실패: {e.reason}"}
     if "/web/" in final:
-        return final, None
+        return {"archived_url": final}
     if location and location.startswith("/web/"):
-        return "https://web.archive.org" + location, None
-    return None, "보관본 주소를 받지 못함"
+        return {"archived_url": "https://web.archive.org" + location}
+    return {}
+
+
+def check_save(item: dict) -> dict:
+    """진행 중인 보관이 끝났는지 본다. 돌려주는 값은 request_save()와 같은 모양."""
+    keys = ia_keys()
+    if item.get("job_id") and keys:
+        req = urllib.request.Request(ARCHIVE_STATUS + item["job_id"], headers=_spn2_headers(keys))
+        try:
+            with _open(req, ARCHIVE_CHECK_SECONDS) as resp:
+                status = json.load(resp)
+        except (urllib.error.URLError, socket.timeout, TimeoutError, ValueError):
+            return {"job_id": item["job_id"]}  # 확인 실패는 다음 확인에서 다시 본다
+        if status.get("status") == "success" and status.get("timestamp"):
+            return {"archived_url": _wayback_url(status["timestamp"], status.get("original_url") or item["url"])}
+        if status.get("status") == "error":
+            return {"error": status.get("message") or status.get("status_ext") or "보관 실패"}
+        return {"job_id": item["job_id"]}
+    found = capture_since(item["url"], item["requested_at"])
+    return {"archived_url": found} if found else {}
+
+
+def capture_since(url: str, since_iso: str, timeout: float = ARCHIVE_CHECK_SECONDS) -> str | None:
+    """since 이후(1분 여유)에 만들어진 보관본 주소. 익명 저장의 결과를 찾을 때 쓴다 (CDX 색인)."""
+    since = datetime.fromisoformat(since_iso) - timedelta(minutes=1)
+    query = urllib.parse.urlencode({"url": url, "from": since.strftime("%Y%m%d%H%M%S"), "output": "json",
+                                    "fl": "timestamp,original", "limit": "-1"})
+    try:
+        with _open(urllib.request.Request(f"{ARCHIVE_CDX}?{query}", headers={"User-Agent": ARCHIVE_UA}), timeout) as resp:
+            rows = json.load(resp)
+    except (urllib.error.URLError, socket.timeout, TimeoutError, ValueError):
+        return None
+    rows = [r for r in rows if r and r[0] != "timestamp"]  # 첫 줄은 열 이름
+    return _wayback_url(rows[-1][0], rows[-1][1]) if rows else None
 
 
 def latest_snapshot(url: str, timeout: float = 8) -> tuple[str, str] | None:
@@ -192,15 +231,41 @@ def latest_snapshot(url: str, timeout: float = 8) -> tuple[str, str] | None:
     return None
 
 
-def save_to_wayback(url: str) -> tuple[str | None, str | None]:
-    """지금 모습을 인터넷 아카이브에 보관하고 보관본 주소를 돌려준다. 실패하면 (None, 이유)."""
-    deadline = time.monotonic() + ARCHIVE_BUDGET_SECONDS
-    keys = ia_keys()
-    archived, err = _save_spn2(url, keys, deadline) if keys else _save_anonymous(url, deadline)
-    if archived:
-        return archived, None
-    log.warning("wayback_save_failed method=%s reason=%s url=%s", "spn2" if keys else "anonymous", err, url)
-    return None, err
+def save_to_wayback(url: str, budget_seconds: float = 240) -> tuple[str | None, str | None]:
+    """요청하고 끝날 때까지 기다린다 (점검 스크립트용 — 서버 요청 안에서는 쓰지 않는다)."""
+    item = {"url": url, "requested_at": _now(), **request_save(url)}
+    deadline = time.monotonic() + budget_seconds
+    while not item.get("archived_url") and not item.get("error") and time.monotonic() < deadline:
+        time.sleep(ARCHIVE_POLL_SECONDS)
+        item.update(check_save(item))
+    if item.get("archived_url"):
+        return item["archived_url"], None
+    return None, item.get("error") or "보관이 시간 안에 끝나지 않음"
+
+
+def is_pending(item: dict) -> bool:
+    return bool(item.get("requested_at")) and not item.get("archived_url") and not item.get("error")
+
+
+def _step(item: dict) -> None:
+    """항목 하나를 한 단계 진행한다: 진행 중이면 확인, 아니면(처음·실패·너무 오래됨) 다시 요청."""
+    if item.get("archived_url"):
+        return
+    age = (datetime.now(timezone.utc) - datetime.fromisoformat(item["requested_at"])).total_seconds() \
+        if item.get("requested_at") else None
+    if is_pending(item) and age is not None and age < ARCHIVE_PENDING_LIMIT_SECONDS:
+        result = check_save(item)
+    else:
+        item.update(requested_at=_now(), error=None, job_id=None)
+        result = request_save(item["url"])
+    item.update({"job_id": result.get("job_id") or item.get("job_id"), "error": result.get("error")})
+    if result.get("archived_url"):
+        item.update(archived_url=result["archived_url"], archived_at=_now(), error=None)
+        item.pop("existing_url", None), item.pop("existing_at", None)
+    elif result.get("error"):
+        log.warning("wayback_save_failed reason=%s url=%s", result["error"], item["url"])
+        if not item.get("existing_url"):
+            _fallback_snapshot(item)
 
 
 def _fallback_snapshot(item: dict) -> None:
@@ -212,7 +277,7 @@ def _fallback_snapshot(item: dict) -> None:
 
 
 def archive_missing(number: str) -> list[dict]:
-    """아직 보관되지 않은 항목만 병렬로 보관한다 (발급 직후와 '다시 시도' 버튼에서 호출)."""
+    """아직 보관되지 않은 항목을 한 단계씩 진행한다 (발급 직후, 기록 페이지의 자동 확인, '다시 보관하기')."""
     row = get(number)
     if not row:
         raise LookupError(number)
@@ -220,16 +285,11 @@ def archive_missing(number: str) -> list[dict]:
     todo = [a for a in archives if not a["archived_url"]]
     if todo:
         with ThreadPoolExecutor(max_workers=len(todo)) as pool:
-            for item, (archived, err) in zip(todo, pool.map(lambda a: save_to_wayback(a["url"]), todo)):
-                item["archived_url"], item["error"] = archived, err
-                if archived:
-                    item["archived_at"] = _now()
-                    item.pop("existing_url", None), item.pop("existing_at", None)
-            missing = [a for a in todo if not a["archived_url"]]
-            list(pool.map(_fallback_snapshot, missing))
+            list(pool.map(_step, todo))
         db.execute("UPDATE rights_records SET archives = ? WHERE number = ?",
                    (json.dumps(archives, ensure_ascii=False), number))
-        log.info("record_archived number=%s ok=%s", number, sum(bool(a["archived_url"]) for a in archives))
+        log.info("record_archived number=%s ok=%s pending=%s", number,
+                 sum(bool(a["archived_url"]) for a in archives), sum(is_pending(a) for a in archives))
     return archives
 
 
@@ -264,13 +324,16 @@ def render(row: dict) -> str:
         if a["archived_url"]:
             arch_items.append(f'<li>✅ {e(a["label"])}: <a href="{e(a["archived_url"])}" target="_blank" rel="noopener">'
                               f'{e(a["archived_url"])}</a></li>')
+        elif is_pending(a):
+            arch_items.append(f'<li>⏳ {e(a["label"])}: 보관 진행 중 — 보통 1~3분 걸립니다. 이 페이지를 열어 두면 자동으로 확인합니다.</li>')
         else:
             reason = f' ({e(a["error"])})' if a.get("error") else ""
-            arch_items.append(f'<li>⏳ {e(a["label"])}: 오늘 모습은 아직 보관되지 않음{reason}</li>')
+            arch_items.append(f'<li>⚠️ {e(a["label"])}: 오늘 모습은 아직 보관되지 않음{reason}</li>')
             if a.get("existing_url"):
                 arch_items.append(f'<li class="existing">📁 대신 이미 있는 보관본 ({e(a["existing_at"])} 보관, 발급일의 모습은 아님): '
                                   f'<a href="{e(a["existing_url"])}" target="_blank" rel="noopener">{e(a["existing_url"])}</a></li>')
-    retry = "" if all(a["archived_url"] for a in archives) else (
+    pending = any(is_pending(a) for a in archives)
+    retry = "" if pending or all(a["archived_url"] for a in archives) else (
         '<button class="ghost" id="retry">인터넷 아카이브에 다시 보관하기</button>')
 
     return f"""<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">
@@ -311,10 +374,26 @@ button.ghost{{background:#fff;color:#0066ff;border:1px solid #0066ff;margin:8px 
 <span>기록 무결성: {'확인됨 ✓' if intact else '⚠️ 변조 의심'}</span></div>
 </div><button onclick="window.print()">인쇄 / PDF로 저장</button>
 <script>
+const ARCHIVE_API = "/api/records/{e(row['number'])}/archive";
 const r = document.getElementById("retry");
 if (r) r.onclick = async () => {{
-  r.disabled = true; r.textContent = "보관 중… (최대 50초)";
-  await fetch("/api/records/{e(row['number'])}/archive", {{ method: "POST" }});
+  r.disabled = true; r.textContent = "보관 요청 중…";
+  await fetch(ARCHIVE_API, {{ method: "POST" }});
   location.reload();
 }};
+// 진행 중인 보관이 있으면 15초마다 최대 10분 동안 확인하고, 상태가 바뀌면 페이지를 새로 그린다
+if ({'true' if pending else 'false'}) {{
+  let tries = 0;
+  const poll = async () => {{
+    tries += 1;
+    try {{
+      const res = await fetch(ARCHIVE_API, {{ method: "POST" }});
+      const data = await res.json();
+      const still = (data.archives || []).some(a => a.requested_at && !a.archived_url && !a.error);
+      if (!still) return location.reload();
+    }} catch (_) {{ /* 잠깐 실패해도 다음 확인에서 다시 본다 */ }}
+    if (tries < 40) setTimeout(poll, 15000);
+  }};
+  setTimeout(poll, 15000);
+}}
 </script></body></html>"""

@@ -75,6 +75,7 @@ def client(tmp_path, monkeypatch):
 def no_real_archive(monkeypatch):
     """테스트가 진짜 인터넷 아카이브를 부르지 않게 한다 (기존 보관본 조회·계정 키)."""
     monkeypatch.setattr(records, "latest_snapshot", lambda url, timeout=8: None)
+    monkeypatch.setattr(records, "capture_since", lambda url, since, timeout=8: None)
     monkeypatch.delenv("IA_ACCESS_KEY", raising=False)
     monkeypatch.delenv("IA_SECRET_KEY", raising=False)
 
@@ -83,10 +84,10 @@ def no_real_archive(monkeypatch):
 def fake_archive(monkeypatch):
     calls = []
 
-    def _save(url):
+    def _request(url):
         calls.append(url)
-        return f"https://web.archive.org/web/20261005000000/{url}", None
-    monkeypatch.setattr(records, "save_to_wayback", _save)
+        return {"archived_url": f"https://web.archive.org/web/20261005000000/{url}"}
+    monkeypatch.setattr(records, "request_save", _request)
     return calls
 
 
@@ -132,14 +133,14 @@ def test_tampered_record_is_flagged(client, fake_archive):
 
 
 def test_archive_failure_keeps_record_and_can_retry(client, monkeypatch):
-    monkeypatch.setattr(records, "save_to_wayback", lambda url: (None, "HTTP 520"))
+    monkeypatch.setattr(records, "request_save", lambda url: {"error": "HTTP 520"})
     work = art.search(["landscape"], limit=1)[0]
     r = _issue(client, work["id"])
     assert r.status_code == 200 and r.json()["archived"] is False
     number = r.json()["number"]
     body = client.get(f"/records/{number}").text
     assert "아직 보관되지 않음" in body and "HTTP 520" in body and "다시 보관하기" in body
-    monkeypatch.setattr(records, "save_to_wayback", lambda url: (f"https://web.archive.org/web/1/{url}", None))
+    monkeypatch.setattr(records, "request_save", lambda url: {"archived_url": f"https://web.archive.org/web/1/{url}"})
     archives = client.post(f"/api/records/{number}/archive").json()["archives"]
     assert all(a["archived_url"] for a in archives)
     assert "다시 보관하기" not in client.get(f"/records/{number}").text
@@ -214,7 +215,7 @@ def test_wayback_spn2_reports_error_message(monkeypatch):
 
 
 def test_failed_archive_falls_back_to_existing_snapshot_clearly_labeled(client, monkeypatch):
-    monkeypatch.setattr(records, "save_to_wayback", lambda url: (None, "HTTP 429"))
+    monkeypatch.setattr(records, "request_save", lambda url: {"error": "HTTP 429"})
     monkeypatch.setattr(records, "latest_snapshot",
                         lambda url, timeout=8: (f"https://web.archive.org/web/20250101000000/{url}", "20250101000000"))
     work = art.search(["landscape"], limit=1)[0]
@@ -256,3 +257,58 @@ def test_anonymous_save_retries_once_on_520(monkeypatch):
     monkeypatch.setattr(records.urllib.request, "urlopen", fake_open)
     assert records.save_to_wayback("https://metmuseum.org/art/1")[0].startswith("https://web.archive.org/web/")
     assert len(calls) == 2
+
+
+def test_slow_archive_stays_pending_then_completes_on_check(client, monkeypatch):
+    """익명 저장은 1~3분 걸린다: 요청만 넣고(진행 중), 기록 페이지의 확인 호출이 결과를 채운다."""
+    monkeypatch.setattr(records, "request_save", lambda url: {})  # 요청은 들어갔고 아직 보관 중
+    work = art.search(["landscape"], limit=1)[0]
+    r = _issue(client, work["id"])
+    assert r.status_code == 200 and r.json()["archived"] is False
+    number = r.json()["number"]
+    body = client.get(f"/records/{number}").text
+    assert "보관 진행 중" in body and "다시 보관하기" not in body and "setTimeout(poll" in body
+
+    requested = []
+    monkeypatch.setattr(records, "request_save", lambda url: requested.append(url) or {})
+    monkeypatch.setattr(records, "capture_since",
+                        lambda url, since, timeout=8: f"https://web.archive.org/web/20261007123000/{url}")
+    archives = client.post(f"/api/records/{number}/archive").json()["archives"]
+    assert all(a["archived_url"] for a in archives) and requested == []  # 진행 중이면 다시 요청하지 않고 확인만
+    assert "web.archive.org/web/20261007123000" in client.get(f"/records/{number}").text
+
+
+def test_stale_pending_archive_is_requested_again(client, monkeypatch):
+    monkeypatch.setattr(records, "request_save", lambda url: {})
+    work = art.search(["landscape"], limit=1)[0]
+    number = _issue(client, work["id"]).json()["number"]
+    old = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(timespec="seconds")
+    row = records.get(number)
+    archives = [{**a, "requested_at": old} for a in json.loads(row["archives"])]
+    db.execute("UPDATE rights_records SET archives = ? WHERE number = ?", (json.dumps(archives), number))
+    requested = []
+    monkeypatch.setattr(records, "request_save", lambda url: requested.append(url) or {"job_id": "j1"})
+    client.post(f"/api/records/{number}/archive")
+    assert len(requested) == 2
+
+
+def test_anonymous_request_timeout_means_pending_not_failure(monkeypatch):
+    def fake_open(req, timeout):
+        raise records.socket.timeout("timed out")
+    monkeypatch.setattr(records.urllib.request, "urlopen", fake_open)
+    assert records.request_save("https://metmuseum.org/art/1") == {}
+
+
+def test_capture_since_reads_cdx_rows(monkeypatch):
+    rows = [["timestamp", "original"], ["20261007122718", "https://metmuseum.org/art/1"]]
+    seen = []
+
+    def fake_open(req, timeout):
+        seen.append(req.full_url)
+        return _JsonResp(rows)
+    monkeypatch.setattr(records.urllib.request, "urlopen", fake_open)
+    monkeypatch.undo()  # autouse 가짜 capture_since를 풀고 진짜 함수를 시험한다
+    monkeypatch.setattr(records.urllib.request, "urlopen", fake_open)
+    assert records.capture_since("https://metmuseum.org/art/1", "2026-10-07T12:27:00+00:00") == \
+        "https://web.archive.org/web/20261007122718/https://metmuseum.org/art/1"
+    assert "from=20261007122600" in seen[0]

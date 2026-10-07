@@ -34,24 +34,33 @@ def sample_urls() -> list[tuple[str, str]]:
 
 
 def main() -> None:
+    """기록 발급과 같은 순서로 시험한다: 모두 요청 → 최대 5분 동안 결과 확인 → 실패한 것은 기존 보관본 확인."""
     print(f"인증 키 사용: {'예 (공식 저장 API)' if records.ia_keys() else '아니오 (익명 저장)'}\n")
-    saved = fallback = missing = 0
+    items = []
     for label, url in sample_urls():
-        started = time.monotonic()
-        archived, err = records.save_to_wayback(url)
-        took = time.monotonic() - started
-        if archived:
+        item = {"label": label, "url": url, "archived_url": None, "error": None}
+        records._step(item)  # 요청 (실패하면 기존 보관본까지 찾아 둔다)
+        items.append(item)
+        time.sleep(2)
+    started = time.monotonic()
+    while any(records.is_pending(i) for i in items) and time.monotonic() - started < 300:
+        time.sleep(15)
+        for item in items:
+            if records.is_pending(item):
+                records._step(item)  # 확인
+    saved = fallback = missing = 0
+    for i in items:
+        if i["archived_url"]:
             saved += 1
-            print(f"✅ {label}: {archived}  ({took:.1f}초)")
-            continue
-        found = records.latest_snapshot(url)
-        if found:
+            print(f"✅ {i['label']}: {i['archived_url']}")
+        elif i.get("existing_url"):
             fallback += 1
-            print(f"📁 {label}: 새 보관 실패({err}) → 기존 보관본 {found[1][:8]} {found[0]}")
+            print(f"📁 {i['label']}: 새 보관 실패({i['error']}) → 기존 보관본 {i['existing_at']} {i['existing_url']}")
         else:
             missing += 1
-            print(f"❌ {label}: 새 보관 실패({err}), 기존 보관본도 없음 — {url}")
-    print(f"\n새로 보관 {saved} · 기존 보관본 {fallback} · 근거 없음 {missing}")
+            state = "5분 안에 끝나지 않음" if records.is_pending(i) else i["error"]
+            print(f"❌ {i['label']}: {state} — {i['url']}")
+    print(f"\n새로 보관 {saved} · 기존 보관본 {fallback} · 근거 없음 {missing} (확인에 {time.monotonic() - started:.0f}초)")
     sys.exit(1 if missing else 0)
 
 
