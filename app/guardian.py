@@ -85,23 +85,26 @@ def record_incident(category: str, code: str, message: str, context: dict | None
 # ---- Tier 1: 비용 없는 즉시 대응 (매 요청) ----
 
 def check_rate(bucket: str, limit: int, window_seconds: int) -> bool:
-    """bucket 단위 고정 윈도 카운터. True면 허용, False면 초과."""
+    """bucket 단위 고정 윈도 카운터. True면 허용, False면 초과.
+
+    읽고(SELECT) 나서 쓰는(UPDATE) 두 단계였던 예전 버전은 같은 bucket에 동시 요청이
+    들어오면(같은 유저의 중복 클릭, 여러 탭, 혹은 레이트리밋을 노린 동시 공격) 둘 다
+    "아직 limit 안 됐다"를 보고 통과시킬 수 있었다 — 레이트리밋 자체가 새는 레이스였다.
+    INSERT ... ON CONFLICT ... RETURNING 하나로 읽기와 쓰기를 한 SQL 문장에 묶어 원자적으로
+    만든다(Turso·SQLite 모두 단일 문장은 직렬화된다)."""
     now = datetime.now(timezone.utc)
+    now_iso = now.isoformat(timespec="seconds")
+    cutoff_iso = (now - timedelta(seconds=window_seconds)).isoformat(timespec="seconds")
     try:
-        rows = db.execute("SELECT count, window_start FROM rate_counters WHERE bucket = ?", (bucket,))
-        if not rows:
-            db.execute("INSERT INTO rate_counters (bucket, count, window_start) VALUES (?, 1, ?)",
-                      (bucket, now.isoformat()))
-            return True
-        count, window_start = rows[0]["count"], datetime.fromisoformat(rows[0]["window_start"])
-        if now - window_start > timedelta(seconds=window_seconds):
-            db.execute("UPDATE rate_counters SET count = 1, window_start = ? WHERE bucket = ?",
-                      (now.isoformat(), bucket))
-            return True
-        if count >= limit:
-            return False
-        db.execute("UPDATE rate_counters SET count = count + 1 WHERE bucket = ?", (bucket,))
-        return True
+        count = db.execute(
+            "INSERT INTO rate_counters (bucket, count, window_start) VALUES (?, 1, ?) "
+            "ON CONFLICT(bucket) DO UPDATE SET "
+            "count = CASE WHEN window_start < ? THEN 1 ELSE count + 1 END, "
+            "window_start = CASE WHEN window_start < ? THEN ? ELSE window_start END "
+            "RETURNING count",
+            (bucket, now_iso, cutoff_iso, cutoff_iso, now_iso),
+        )[0]["count"]
+        return count <= limit
     except db.DbError as e:
         log.error("rate_check_failure bucket=%s detail=%s", bucket, e)
         return True  # DB 장애로 사용자를 막지 않는다
