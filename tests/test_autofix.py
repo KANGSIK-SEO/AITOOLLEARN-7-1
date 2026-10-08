@@ -48,6 +48,7 @@ def test_small_fix_with_new_test_passes(repo):
     ("eval(user_input)", "코드 동적 실행"),
     ("from urllib import request", "외부 통신"),
     ("import urllib", "외부 통신"),
+    ("compile(src, 'x', 'exec')", "코드 동적 실행"),
 ])
 def test_dangerous_code_is_rejected(repo, line, label):
     (repo / "app" / "guardian.py").write_text(f"LIMIT = 3\n{line}\n")
@@ -56,9 +57,9 @@ def test_dangerous_code_is_rejected(repo, line, label):
     assert any(label in p for p in autofix_guard.check("HEAD"))
 
 
-def test_url_parsing_is_not_network_access(repo):
-    # 주소 문자열을 나누는 urllib.parse는 통신이 아니다 (품질 점검 캐시 수정이 이것 때문에 막혔었다)
-    (repo / "app" / "guardian.py").write_text("LIMIT = 3\nfrom urllib.parse import parse_qs\n")
+def test_harmless_lines_are_not_flagged(repo):
+    # urllib.parse(주소 나누기)와 re.compile(정규식 준비)은 위험하지 않다 — 품질 자동 수정이 이 둘 때문에 막혔었다
+    (repo / "app" / "guardian.py").write_text("LIMIT = 3\nfrom urllib.parse import parse_qs\nRE = re.compile(r'x')\n")
     (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
     _stage(repo)
     assert autofix_guard.check("HEAD") == []
