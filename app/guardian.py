@@ -621,20 +621,38 @@ def probe_ai() -> dict:
     return {"status": "ok", "latency_ms": int((time.monotonic() - started) * 1000)}
 
 
+# 점검의 한 단계에서 미리 생각하지 못한 종류의 오류(예: 바깥 서비스와의 연결이 읽는 도중 끊김)가 나면
+# 예전에는 점검 전체가 500(SERVER_ERROR)으로 끝나 다른 단계의 결과까지 잃었고, 어느 단계였는지도 알 수 없었다.
+# 이제 단계별로 격리한다: 스택트레이스를 로그에 남기고(scan_step_failed), 사건(SCAN_STEP_FAILED, high → 즉시 진단)으로
+# 기록한 뒤 그 단계만 오류 표시한다. DB 장애(DbError)의 처리는 예전과 똑같다 (바꾸지 않는다).
+SCAN_STEP_FAILED = "SCAN_STEP_FAILED"
+
+
+def _scan_step(name: str, fn, on_db_error: dict | None = None, log_key: str | None = None) -> dict:
+    """scan()의 한 단계를 돌린다. on_db_error가 None이면 DbError는 예전처럼 그대로 올린다(503 DB_ERROR).
+    그 밖의 예상 밖 예외는 점검 전체를 죽이지 않도록 사건으로 남기고 오류 표시만 돌려준다."""
+    try:
+        return fn()
+    except db.DbError as e:
+        if on_db_error is None:
+            raise
+        log.error("%s_db_failure detail=%s", log_key or name, e)
+        return dict(on_db_error)
+    except Exception as e:  # noqa: BLE001 — 어떤 오류든 점검 한 단계만 실패로 표시하고 나머지는 계속한다
+        kind = type(e).__name__
+        log.exception("scan_step_failed step=%s error=%s", name, kind)
+        record_incident("reliability", SCAN_STEP_FAILED, f"가디언 점검 단계 {name} 처리 중 오류 ({kind})",
+                        {"step": name, "error": kind}, "high")
+        return {"status": "error", "error": "exception", "code": SCAN_STEP_FAILED, "step": name}
+
+
 def scan() -> dict:
     """요청이 없어도 감시하도록 1분마다 밖에서 부른다 (cron-job.org·monitor.yml → /api/guardian/scan).
-    챗봇 AI가 답하는지 확인하고(probe_ai), 새 접속 기록을 훑고(watch_traffic), 최근 5분 사건이 몰렸으면 즉시 진단한다."""
-    ai = probe_ai()
-    try:
-        traffic = watch_traffic()
-    except db.DbError as e:
-        log.error("traffic_watch_db_failure detail=%s", e)
-        traffic = {"error": "db"}
-    try:
-        capacity = check_capacity()
-    except db.DbError as e:
-        log.error("capacity_check_db_failure detail=%s", e)
-        capacity = {"error": "db"}
+    챗봇 AI가 답하는지 확인하고(probe_ai), 새 접속 기록을 훑고(watch_traffic), 최근 5분 사건이 몰렸으면 즉시 진단한다.
+    각 단계는 _scan_step으로 격리돼 한 단계의 예상 밖 오류가 점검 전체를 500으로 만들지 않는다."""
+    ai = _scan_step("probe_ai", probe_ai)
+    traffic = _scan_step("watch_traffic", watch_traffic, {"error": "db"}, "traffic_watch")
+    capacity = _scan_step("check_capacity", check_capacity, {"error": "db"}, "capacity_check")
     since = (datetime.now(timezone.utc) - timedelta(seconds=ERROR_SPIKE[1])).isoformat(timespec="seconds")
     rows = db.execute(
         "SELECT SUM(CASE WHEN category = 'reliability' THEN 1 ELSE 0 END) AS errors, "
