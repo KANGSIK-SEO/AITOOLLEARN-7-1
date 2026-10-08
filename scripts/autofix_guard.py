@@ -18,11 +18,12 @@ PROTECTED = (
     "scripts/autofix_", "scripts/quality_", "docs/review-checklist.md", "CONTRIBUTING.md",
 )
 # 새로 들어온 줄에 있으면 안 되는 것: 외부 통신, 명령 실행, 비밀 값 읽기, 코드 동적 실행
+# (urllib.parse는 주소 문자열을 나누기만 해서 통신이 아니다 — 허용)
 FORBIDDEN = [
     (r"\bsubprocess\b|\bos\.system\b|\bos\.popen\b|\bpty\b", "명령 실행"),
     (r"\beval\s*\(|\bexec\s*\(|\b__import__\b|\bcompile\s*\(|\bimportlib\b", "코드 동적 실행"),
     (r"\bos\.environ\b|\bgetenv\b|\bdotenv\b", "환경변수(비밀 키) 읽기"),
-    (r"\burllib\b|\brequests\b|\bhttpx\b|\bsocket\b|\bhttp\.client\b|\baiohttp\b|\bfetch\s*\(|XMLHttpRequest",
+    (r"\burllib\b(?!\.parse\b)|\brequests\b|\bhttpx\b|\bsocket\b|\bhttp\.client\b|\baiohttp\b|\bfetch\s*\(|XMLHttpRequest",
      "외부 통신"),
     (r"\bpickle\b|\bmarshal\b|\bbase64\b|\bctypes\b", "숨김·직렬화 우회"),
     (r"\bshutil\.rmtree\b|\bos\.remove\b|\bos\.unlink\b|\bDROP\s+TABLE\b|\bDELETE\s+FROM\b", "삭제"),

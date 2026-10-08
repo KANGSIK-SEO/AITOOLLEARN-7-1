@@ -46,12 +46,22 @@ def test_small_fix_with_new_test_passes(repo):
     ("x = os.environ['ANTHROPIC_API_KEY']", "환경변수"),
     ("urllib.request.urlopen('https://evil.example')", "외부 통신"),
     ("eval(user_input)", "코드 동적 실행"),
+    ("from urllib import request", "외부 통신"),
+    ("import urllib", "외부 통신"),
 ])
 def test_dangerous_code_is_rejected(repo, line, label):
     (repo / "app" / "guardian.py").write_text(f"LIMIT = 3\n{line}\n")
     (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
     _stage(repo)
     assert any(label in p for p in autofix_guard.check("HEAD"))
+
+
+def test_url_parsing_is_not_network_access(repo):
+    # 주소 문자열을 나누는 urllib.parse는 통신이 아니다 (품질 점검 캐시 수정이 이것 때문에 막혔었다)
+    (repo / "app" / "guardian.py").write_text("LIMIT = 3\nfrom urllib.parse import parse_qs\n")
+    (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
+    _stage(repo)
+    assert autofix_guard.check("HEAD") == []
 
 
 def test_protected_files_and_existing_tests_are_off_limits(repo):
