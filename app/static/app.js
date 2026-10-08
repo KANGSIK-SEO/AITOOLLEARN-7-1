@@ -11,7 +11,7 @@
 //   8. 대화                      — 턴(질문 단위), 스크롤, 메시지, AI 답변, 결과 묶음, 전송(스트리밍)
 //   9. 대화 기록 · 즐겨찾기 목록 — 넓은 화면은 왼쪽 사이드바, 좁은 화면은 서랍
 //  10. 온디바이스 추천           — 서버·AI 없이 브라우저에서 Datalog 규칙 평가 (ondevice.js)
-//  11. 테마 · 언어 · 앱 설치
+//  11. 상단 바 접기 · 테마 · 언어 · 앱 설치
 //  12. 시작                      — 이벤트 연결과 첫 화면
 "use strict";
 
@@ -24,6 +24,8 @@ const BROWSE_PAGE_SIZE = 24;          // '작품 더 보기' 한 번에 불러�
 const HISTORY_PAGE_SIZE = 20;         // 대화 기록 한 번에 불러오는 수
 const PENDING_STEP_MS = 2600;         // 응답 대기 문구가 다음 단계로 바뀌는 간격
 const SCROLL_DURATION_MS = 900;       // 새 질문을 화면 위로 올리는 스크롤 시간
+const TOPBAR_HIDE_AFTER = 120;        // 이만큼 내려간 뒤부터 상단 바를 접는다
+const SCROLL_NOISE = 6;               // 이보다 작은 스크롤 움직임은 무시한다
 const TOAST_MS = 2200;
 const STORAGE_KEYS = {                // index.html의 첫 화면 스크립트도 theme·lang 키를 쓴다
     theme: "pd-theme", lang: "pd-lang", sidebar: "pd-sidebar", iosPrompt: "iosInstallPromptShown",
@@ -408,6 +410,7 @@ function show(isLoggedIn, email = "", isPremium = false) {
         state.favorites.clear();
         loadPreview();
     }
+    showTopbar();
     window.scrollTo(0, 0);
 }
 
@@ -709,16 +712,19 @@ function slowScrollTo(target) {
     const gap = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
     const startY = window.scrollY;
     const endY = Math.max(0, startY + target.getBoundingClientRect().top - gap);
+    showTopbar();   // 질문이 상단 바 바로 아래에 붙어야 하므로, 자동 스크롤 동안은 상단 바를 펼쳐 둔다
     if (reducedMotion.matches) { window.scrollTo(0, endY); return; }
 
     const started = performance.now();
     const animation = ++scrollAnimation;   // 새 스크롤이 시작되면 이전 애니메이션은 멈춘다
+    topbarScroll.auto = true;
     const step = (now) => {
         if (animation !== scrollAnimation) return;
         const p = Math.min(1, (now - started) / SCROLL_DURATION_MS);
         const eased = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
         window.scrollTo(0, startY + (endY - startY) * eased);
         if (p < 1) requestAnimationFrame(step);
+        else setTimeout(() => { topbarScroll.auto = false; topbarScroll.lastY = window.scrollY; }, 100);
     };
     requestAnimationFrame(step);
 }
@@ -1177,8 +1183,29 @@ async function runOnDevice() {
 }
 
 // =====================================================================
-// 11. 테마 · 언어 · 앱 설치
+// 11. 상단 바 접기 · 테마 · 언어 · 앱 설치
 // =====================================================================
+// 아래로 내리면 상단 바를 위로 접어 작품 볼 공간을 넓히고, 위로 조금이라도 올리면 다시 펼친다.
+// 페이지 맨 위 근처와 자동 스크롤(slowScrollTo) 중에는 항상 펼쳐 둔다.
+const topbarScroll = { lastY: window.scrollY, auto: false };
+
+function showTopbar() {
+    document.body.classList.remove("topbar-hidden");
+}
+
+function onPageScroll() {
+    const y = window.scrollY;
+    const dy = y - topbarScroll.lastY;
+    if (y < TOPBAR_HIDE_AFTER || topbarScroll.auto) {
+        showTopbar();
+        topbarScroll.lastY = y;
+        return;
+    }
+    if (Math.abs(dy) < SCROLL_NOISE) return;
+    document.body.classList.toggle("topbar-hidden", dy > 0);
+    topbarScroll.lastY = y;
+}
+
 function toggleTheme() {
     const root = document.documentElement;
     const isDark = root.dataset.theme
@@ -1255,6 +1282,7 @@ function bindEvents() {
     $("logout-btn").addEventListener("click", logout);
     $("lang-btn").addEventListener("click", toggleLang);
     $("theme-btn").addEventListener("click", toggleTheme);
+    window.addEventListener("scroll", onPageScroll, { passive: true });
 
     // 랜딩 · 로그인
     $("tab-login").addEventListener("click", () => setAuthMode("login"));

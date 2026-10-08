@@ -134,7 +134,8 @@ main { outline: none; }
     background: color-mix(in srgb, var(--bg) 82%, transparent);
     backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px);
     border-bottom: 1px solid var(--line);
-    transition: background-color 0.25s ease; }
+    transition: transform 0.32s var(--ease), background-color 0.25s ease; }
+body.topbar-hidden .topbar { transform: translateY(-100%); }   /* 아래로 스크롤하면 접는다 (app.js onPageScroll) */
 .topbar-inner { height: 100%; max-width: var(--wide); margin: 0 auto; padding: 0 20px;
     display: flex; align-items: center; gap: 12px; }
 body.signed-in .topbar-inner { max-width: none; }   /* 로그인 후에는 전체 폭 — 로고가 사이드바 위에 정렬된다 */
@@ -400,7 +401,9 @@ body.signed-in .topbar-inner { max-width: none; }   /* 로그인 후에는 전�
 .sidebar { display: none; }
 @media (min-width: 1180px) {
     body.signed-in:not(.sidebar-collapsed) .sidebar { position: fixed; z-index: 20; top: var(--topbar-h); left: 0; bottom: 0;
-        width: var(--sidebar-w); display: flex; flex-direction: column; background: var(--bg); border-right: 1px solid var(--line); }
+        width: var(--sidebar-w); display: flex; flex-direction: column; background: var(--bg); border-right: 1px solid var(--line);
+        transition: top 0.32s var(--ease); }
+    body.signed-in.topbar-hidden .sidebar { top: 0; }   /* 상단 바가 접히면 같이 위로 */
     body.signed-in:not(.sidebar-collapsed) .chat { margin-left: var(--sidebar-w); }
 }
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 10px 10px 20px; }
