@@ -377,6 +377,7 @@ def _art_db_failure(ctx: dict, e: sqlite3.Error, started: float) -> JSONResponse
     latency = int((time.monotonic() - started) * 1000)
     log.error("art_db_failure detail=%s", e)
     _save_chat(ctx["user_id"], ctx["question"], None, "error", "ART_DB_ERROR", latency, [])
+    guardian.record_incident("reliability", "ART_DB_ERROR", "작품 DB를 읽지 못함", {"request_id": ctx["request_id"]}, "high")
     return error(503, "ART_DB_ERROR", "작품 데이터베이스를 읽지 못했어요.")
 
 

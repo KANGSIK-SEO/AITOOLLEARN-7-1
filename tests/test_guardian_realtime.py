@@ -125,3 +125,22 @@ def test_real_routes_are_never_learned(issues):
         client.get(f"/records/PD-0000-0000-{i:04d}")   # 앱이 404를 주는 진짜 경로
     assert "PROBE_PATHS_LEARNED" not in _codes()
     assert client.get("/").status_code == 200
+
+
+def test_first_customer_facing_error_is_diagnosed_immediately(issues):
+    guardian.record_incident("reliability", "AI_TIMEOUT", "고객 질문에 AI가 답하지 못함")
+    assert len(issues) == 1 and "AI_TIMEOUT" in issues[0][0]
+
+
+def test_same_problem_waits_but_a_different_problem_is_diagnosed(issues):
+    guardian.record_incident("reliability", "AI_TIMEOUT", "x")
+    guardian.record_incident("reliability", "AI_TIMEOUT", "x")
+    assert len(issues) == 1                     # 같은 종류는 30분 동안 다시 진단하지 않는다
+    db.execute("UPDATE runtime_flags SET value = '2000-01-01T00:00:00+00:00' WHERE key = 'triage_cooldown_until'")
+    guardian.record_incident("reliability", "DB_ERROR", "x", severity="high")
+    assert len(issues) == 2 and "DB_ERROR" in issues[1][0]   # 다른 문제는 (2분 간격 뒤) 바로 진단
+
+
+def test_refusals_are_not_treated_as_outages(issues):
+    guardian.record_incident("reliability", "AI_REFUSED", "x")
+    assert not issues
