@@ -90,7 +90,7 @@ def score_answer(answer: str, narrated: int, relaxed: bool) -> dict:
 
 def run(dry_run: bool) -> dict:
     if dry_run:  # 채점기 점검용 가짜 AI: 첫 번째 사례 기대값을 그대로 돌려준다
-        def fake(messages, max_tokens=700):
+        def fake(messages, max_tokens=700, **kwargs):
             if "검색 의도 추출기" in messages[0]["content"]:
                 return '{"chitchat": false, "keywords": ["landscape"], "orientation": "portrait", "purpose": "테스트"}'
             return "[1] 테스트 작품입니다. 상업 이용 전 카드의 '근거 기록'을 발급해 두세요.\n\nEnglish: [1] Test."

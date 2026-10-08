@@ -1,18 +1,19 @@
 # LLM 답변 품질 평가 (docs/llm-eval.md). 질문 20개에 실제 AI를 돌려 의도 정확도·근거성·규칙 준수율을 잰다.
-# 필요한 값: Repository secrets 의 GPT_ASTRA_API_KEY (없으면 평가를 건너뛴다)
+# 필요한 값: Repository secrets 의 ANTHROPIC_API_KEY 또는 GPT_ASTRA_API_KEY (둘 다 없으면 평가를 건너뛴다)
 # 실행: 프롬프트가 바뀐 코드가 main에 합쳐질 때 자동, 또는 Actions 탭 → llm-eval → Run workflow
 name: llm-eval
 
 on:
   push:
     branches: [main]
-    paths: ["app/chat.py", "app/llm.py", "scripts/eval_llm.py"]
+    paths: ["app/chat.py", "app/llm.py", "app/claude_llm.py", "scripts/eval_llm.py"]
   workflow_dispatch:
 
 jobs:
   eval:
     runs-on: ubuntu-latest
     env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       GPT_ASTRA_API_KEY: ${{ secrets.GPT_ASTRA_API_KEY }}
       UPSTAGE_API_KEY: ${{ secrets.UPSTAGE_API_KEY }}
     steps:
@@ -22,8 +23,8 @@ jobs:
           python-version: "3.12"
       - name: Run evaluation
         run: |
-          if [ -z "$GPT_ASTRA_API_KEY" ]; then
-            echo "::warning::GPT_ASTRA_API_KEY 시크릿이 없어 평가를 건너뜁니다."
+          if [ -z "$GPT_ASTRA_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY·GPT_ASTRA_API_KEY 시크릿이 모두 없어 평가를 건너뜁니다."
             exit 0
           fi
           pip install -q -r requirements.txt

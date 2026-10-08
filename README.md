@@ -34,7 +34,7 @@
 - `app/auth.py` — **문지기.** 비밀번호 해시(scrypt)와 로그인 쿠키(HMAC 서명) 검증. 초대코드(프리미엄) 여부도 이 쿠키에 담긴다. 서버에 세션을 저장하지 않음.
 - `app/chat.py` — **지휘자.** "질문 → 검색조건 추출 → 검색 → 답변 생성" 파이프라인을 순서대로 지휘.
 - `app/art.py` — **검색엔진.** `data/art.db`에서 SQLite FTS5로 작품을 찾음. AI 호출 없이 순수 DB 검색. 상위 2개(`GUARANTEED_TOP`)는 관련도순 고정, 나머지는 후보 풀에서 무작위로 섞어 같은 질문이라도 항상 똑같은 작품만 나오지 않게 한다.
-- `app/llm.py` — **AI 통신창구.** OpenAI `gpt-6-astra`를 실제로 호출하는 유일한 곳(429/401/403이면 Upstage `solar-pro4`로 비상 폴백). 타임아웃·에러를 통일된 형태로 반환.
+- `app/llm.py` — **AI 통신창구.** `ANTHROPIC_API_KEY`가 있으면 Claude(`app/claude_llm.py`, 기본 `claude-fable-5-1`)를 먼저 쓰고, 실패하면 OpenAI `gpt-6-astra` → Upstage `solar-pro4` 순서로 넘어간다. 답변을 조각조각 받는 스트리밍(`stream_completion`)도 여기서 고른다. 타임아웃·에러를 통일된 형태로 반환.
 - `app/db.py` — **저장소.** 사용자·대화 로그·가디언 사건 저장(로컬 SQLite 또는 Turso 자동 선택).
 - `app/config.py` — **규칙집.** 사용 모델(gpt-6-astra/폴백 solar-pro4)·초대코드·요금제 상한 등 설정을 고정.
 - `app/guardian.py` — **가디언.** 장애·보안 사건을 즉시 기록·대응(잠금, AI 백오프, 악성 입력 차단)하고, 1일 1회 gpt-6-astra로 일괄 분석·GitHub 이슈까지 생성.
@@ -82,6 +82,7 @@
 | POST | `/api/auth/logout` | 쿠키 삭제 → `{"ok": true}` |
 | GET | `/api/me` | **로그인 필요**. 현재 사용자 |
 | POST | `/api/chat` | **로그인 필요**. 질문 → 답변(한국어+영어) + 작품 카드 + 남은 무료 횟수 |
+| POST | `/api/chat/stream` | **로그인 필요**. 같은 일을 한 줄씩(NDJSON) 보낸다: `meta`(작품 카드·검색 조건, 검색이 끝나자마자) → `delta`(답변 글 조각) → `done`(저장 결과) 또는 `error`. 웹 화면은 이걸 쓰고, 안 되면 `/api/chat`으로 다시 시도 |
 | GET | `/api/me/chats?limit=20&offset=0` | **로그인 필요**. 내 대화 로그 (최신순, `limit` 1~100) |
 | POST | `/api/favorites` | **로그인 필요**. `{artwork_id}` 작품 즐겨찾기 저장 (상세: `docs/track-c.md`) |
 | DELETE | `/api/favorites/{artwork_id}` | **로그인 필요**. 즐겨찾기 해제 |
@@ -217,7 +218,9 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 
 | 이름 | 설명 |
 |---|---|
-| `GPT_ASTRA_API_KEY` | OpenAI gpt-6-astra 키 (주 모델) |
+| `ANTHROPIC_API_KEY` (선택) | Claude API 키. **있으면 Claude가 주 모델**이 되고, 한도·인증·통신 문제로 실패하면 GPT로 넘어간다 (`app/claude_llm.py`) |
+| `CLAUDE_MODEL`, `CLAUDE_INTENT_MODEL`, `CLAUDE_EFFORT` (선택) | 답변 모델(기본 `claude-fable-5-1`), 검색 조건 뽑기 모델(기본 같은 모델), 생각 깊이(기본 `low`) |
+| `GPT_ASTRA_API_KEY` | OpenAI gpt-6-astra 키 (Claude 키가 없을 때 주 모델, 있을 때는 대체 모델) |
 | `UPSTAGE_API_KEY` (선택) | Upstage solar-pro4 키. GPT 쪽이 429/401/403일 때만 비상 폴백으로 사용 |
 | `SECRET_KEY` | 세션 서명 키 (32자 이상 랜덤) |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | Turso DB. **없으면 로컬 `data/app.db` 사용** |

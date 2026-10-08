@@ -32,7 +32,7 @@ def test_compose_answer_has_no_extra_note_within_narration_limit(monkeypatch):
 def test_compose_answer_passes_relax_note_to_prompt(monkeypatch):
     seen = {}
 
-    def fake(messages, max_tokens=700):
+    def fake(messages, max_tokens=700, **kwargs):
         seen["prompt"] = messages[1]["content"]
         return "[1] 설명"
 
@@ -44,7 +44,7 @@ def test_compose_answer_passes_relax_note_to_prompt(monkeypatch):
 def test_compose_answer_no_relax_note_by_default(monkeypatch):
     seen = {}
 
-    def fake(messages, max_tokens=700):
+    def fake(messages, max_tokens=700, **kwargs):
         seen["prompt"] = messages[1]["content"]
         return "[1] 설명"
 

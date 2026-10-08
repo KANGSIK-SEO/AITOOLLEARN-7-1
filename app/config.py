@@ -128,7 +128,7 @@ def validate_env() -> list[str]:
     if errors:
         raise ConfigError("필수 환경변수 설정 오류:\n- " + "\n- ".join(errors))
 
-    if not os.environ.get("GPT_ASTRA_API_KEY", ""):
+    if not os.environ.get("GPT_ASTRA_API_KEY", "") and not os.environ.get("ANTHROPIC_API_KEY", "").strip():
         warnings.append("GPT_ASTRA_API_KEY가 없어 챗봇 질문이 503 AI_KEY_MISSING으로 실패합니다"
                         + (" (UPSTAGE_API_KEY 폴백으로 동작)." if get_fallback_api_key() else "."))
     if not CRON_SECRET:

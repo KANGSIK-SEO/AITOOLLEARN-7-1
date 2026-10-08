@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -57,7 +57,7 @@ async def request_context(request: Request, call_next):
 
 
 STATUS_BY_CODE = {"AI_TIMEOUT": 504, "AI_ERROR": 502, "AI_RATE_LIMITED": 429,
-                  "AI_KEY_MISSING": 503, "AI_BACKED_OFF": 503}
+                  "AI_KEY_MISSING": 503, "AI_BACKED_OFF": 503, "AI_REFUSED": 422}
 
 
 def _now() -> str:
@@ -285,11 +285,11 @@ def _save_chat(user_id, question, answer, status, error_code, latency_ms, artwor
         return None
 
 
-@app.post("/api/chat")
-def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_session)):
+def _chat_context(body: ChatRequest, session_data: dict, path: str) -> dict | JSONResponse:
+    """질문 전 검사(입력·사용량·AI 쉼)를 하고, 통과하면 답변에 필요한 값을 돌려준다. 막히면 오류 응답."""
     user_id, is_premium = session_data["uid"], session_data["premium"]
     request_id = reqctx.get_request_id()
-    log.info("request_received user_id=%s path=/api/chat", user_id)
+    log.info("request_received user_id=%s path=%s", user_id, path)
 
     question = body.message.strip()
     if not question:
@@ -325,41 +325,113 @@ def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_sessio
                         f"무료 이용 {CHAT_LIFETIME_LIMIT_FREE}회를 모두 사용했어요. 초대코드가 있다면 입력해 보세요.")
         remaining_free = CHAT_LIFETIME_LIMIT_FREE - used_lifetime - 1
 
-    history = list(reversed(history_rows))
+    return {"user_id": user_id, "request_id": request_id, "question": question,
+            "history": list(reversed(history_rows)), "remaining_free": remaining_free,
+            "art_limit": ART_RESULTS_LIMIT_PREMIUM if is_premium else ART_RESULTS_LIMIT,
+            "show_limit_warning": remaining_free is not None and remaining_free <= FREE_LIMIT_WARNING_THRESHOLD}
 
-    started = time.monotonic()
-    log.info("ai_call_start user_id=%s", user_id)
-    art_limit = ART_RESULTS_LIMIT_PREMIUM if is_premium else ART_RESULTS_LIMIT
-    try:
-        intent = chat.extract_intent(question, request_id=request_id)
-        works, relaxed = chat.find_artworks(intent, limit=art_limit, request_id=request_id)
-        answer = chat.compose_answer(question, works, history, relaxed=relaxed,
-                                     purpose=intent.get("purpose"), request_id=request_id)
-    except AIUnavailableError as e:
-        latency = int((time.monotonic() - started) * 1000)
-        log.error("ai_call_failure code=%s latency_ms=%s", e.code, latency)
-        _save_chat(user_id, question, None, "error", e.code, latency, [])
-        guardian.record_incident("reliability", e.code, str(e), {"request_id": request_id, "latency_ms": latency},
-                                 "medium" if e.code == "AI_RATE_LIMITED" else "low")
-        guardian.note_ai_failure(e.code)
-        return error(STATUS_BY_CODE.get(e.code, 502), e.code, str(e))
-    except sqlite3.Error as e:
-        latency = int((time.monotonic() - started) * 1000)
-        log.error("art_db_failure detail=%s", e)
-        _save_chat(user_id, question, None, "error", "ART_DB_ERROR", latency, [])
-        return error(503, "ART_DB_ERROR", "작품 데이터베이스를 읽지 못했어요.")
 
+def _ai_failure(ctx: dict, e: AIUnavailableError, started: float) -> None:
     latency = int((time.monotonic() - started) * 1000)
-    log.info("ai_call_success latency_ms=%s artworks=%s", latency, len(works))
-    chat_id = _save_chat(user_id, question, answer, "ok", None, latency, [w["id"] for w in works])
-    show_limit_warning = remaining_free is not None and remaining_free <= FREE_LIMIT_WARNING_THRESHOLD
-    # '더 보기'가 AI를 다시 부르지 않고 같은 조건으로 DB만 넘겨 볼 수 있게 검색 조건을 함께 돌려준다
+    log.error("ai_call_failure code=%s latency_ms=%s", e.code, latency)
+    _save_chat(ctx["user_id"], ctx["question"], None, "error", e.code, latency, [])
+    guardian.record_incident("reliability", e.code, str(e), {"request_id": ctx["request_id"], "latency_ms": latency},
+                             "medium" if e.code == "AI_RATE_LIMITED" else "low")
+    guardian.note_ai_failure(e.code)
+
+
+def _art_db_failure(ctx: dict, e: sqlite3.Error, started: float) -> JSONResponse:
+    latency = int((time.monotonic() - started) * 1000)
+    log.error("art_db_failure detail=%s", e)
+    _save_chat(ctx["user_id"], ctx["question"], None, "error", "ART_DB_ERROR", latency, [])
+    return error(503, "ART_DB_ERROR", "작품 데이터베이스를 읽지 못했어요.")
+
+
+def _search_conditions(intent: dict, relaxed: bool) -> dict | None:
+    """'더 보기'가 AI를 다시 부르지 않고 같은 조건으로 DB만 넘겨 볼 수 있게 검색 조건을 함께 돌려준다."""
+    if intent["chitchat"]:
+        return None
     search = {k: intent.get(k) for k in ("keywords", "artist", "year_from", "year_to", "orientation", "purpose")}
     if relaxed:  # 작가/연도 조건을 빼고 찾은 결과면 '더 보기'도 같은 완화 조건을 쓴다
         search.update(artist=None, year_from=None, year_to=None)
+    return search
+
+
+@app.post("/api/chat")
+def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_session)):
+    ctx = _chat_context(body, session_data, "/api/chat")
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    request_id = ctx["request_id"]
+    started = time.monotonic()
+    log.info("ai_call_start user_id=%s", ctx["user_id"])
+    try:
+        intent = chat.extract_intent(ctx["question"], request_id=request_id)
+        works, relaxed = chat.find_artworks(intent, limit=ctx["art_limit"], request_id=request_id)
+        answer = chat.compose_answer(ctx["question"], works, ctx["history"], relaxed=relaxed,
+                                     purpose=intent.get("purpose"), request_id=request_id)
+    except AIUnavailableError as e:
+        _ai_failure(ctx, e, started)
+        return error(STATUS_BY_CODE.get(e.code, 502), e.code, str(e))
+    except sqlite3.Error as e:
+        return _art_db_failure(ctx, e, started)
+
+    latency = int((time.monotonic() - started) * 1000)
+    log.info("ai_call_success latency_ms=%s artworks=%s", latency, len(works))
+    chat_id = _save_chat(ctx["user_id"], ctx["question"], answer, "ok", None, latency, [w["id"] for w in works])
     return {"chat_id": chat_id, "saved": chat_id is not None, "request_id": request_id,
-            "reply": answer, "artworks": works, "search": None if intent["chitchat"] else search,
-            "remaining_free": remaining_free, "show_limit_warning": show_limit_warning}
+            "reply": answer, "artworks": works, "search": _search_conditions(intent, relaxed),
+            "remaining_free": ctx["remaining_free"], "show_limit_warning": ctx["show_limit_warning"]}
+
+
+def _ndjson(event: dict) -> str:
+    return json.dumps(event, ensure_ascii=False) + "\n"
+
+
+@app.post("/api/chat/stream")
+def chat_stream(body: ChatRequest, session_data: dict = Depends(current_session)):
+    """/api/chat과 같은 일을 하되, 결과를 도착하는 대로 한 줄씩(NDJSON) 보낸다.
+    1) meta: 검색이 끝나자마자 작품 카드와 검색 조건 → 화면이 카드부터 그린다
+    2) delta: 답변 글 조각 (Claude는 만들어지는 대로, GPT 경로는 한 번에)
+    3) done: 대화 저장 결과 / error: 답변 도중 실패
+    답변 전에 실패하면(검색 조건 추출·DB) 스트림을 열지 않고 /api/chat과 같은 오류 응답을 준다."""
+    ctx = _chat_context(body, session_data, "/api/chat/stream")
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    request_id = ctx["request_id"]
+    started = time.monotonic()
+    log.info("ai_call_start user_id=%s", ctx["user_id"])
+    try:
+        intent = chat.extract_intent(ctx["question"], request_id=request_id)
+        works, relaxed = chat.find_artworks(intent, limit=ctx["art_limit"], request_id=request_id)
+    except AIUnavailableError as e:
+        _ai_failure(ctx, e, started)
+        return error(STATUS_BY_CODE.get(e.code, 502), e.code, str(e))
+    except sqlite3.Error as e:
+        return _art_db_failure(ctx, e, started)
+
+    def events():
+        yield _ndjson({"type": "meta", "request_id": request_id, "artworks": works,
+                       "search": _search_conditions(intent, relaxed), "remaining_free": ctx["remaining_free"],
+                       "show_limit_warning": ctx["show_limit_warning"]})
+        parts = []
+        try:
+            for piece in chat.compose_answer_stream(ctx["question"], works, ctx["history"], relaxed=relaxed,
+                                                    purpose=intent.get("purpose"), request_id=request_id):
+                parts.append(piece)
+                yield _ndjson({"type": "delta", "text": piece})
+        except AIUnavailableError as e:
+            _ai_failure(ctx, e, started)
+            yield _ndjson({"type": "error", "code": e.code, "message": str(e)})
+            return
+        latency = int((time.monotonic() - started) * 1000)
+        log.info("ai_call_success latency_ms=%s artworks=%s stream=true", latency, len(works))
+        chat_id = _save_chat(ctx["user_id"], ctx["question"], "".join(parts), "ok", None, latency,
+                             [w["id"] for w in works])
+        yield _ndjson({"type": "done", "chat_id": chat_id, "saved": chat_id is not None})
+
+    return StreamingResponse(events(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/me/chats")
