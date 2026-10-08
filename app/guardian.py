@@ -636,25 +636,34 @@ def _scan_step(name: str, fn):
         log.error("scan_step_db_failure step=%s detail=%s", name, e)
         return {"error": "db"}
     except Exception as e:  # noqa: BLE001 — 점검 하나의 버그로 1분 점검 전체가 멈추지 않게
-        log.exception("scan_step_failure step=%s", name)
-        frame = traceback.extract_tb(e.__traceback__)[-1]
-        where = f"{Path(frame.filename).name}:{frame.lineno} {frame.name}"
-        detail = _SECRETISH_RE.sub("[가림]", str(e))[:200]
-        error = type(e).__name__
-        try:
-            record_incident("reliability", "SCAN_STEP_FAILED", f"{name} 단계 실패: {error} ({where})",
-                            {"step": name, "error": error, "where": where, "detail": detail}, "medium")
-            flag = f"scan_step_alert_until:{name}"
-            if not _flag_active_until(flag):
-                _set_flag(flag, (datetime.now(timezone.utc) + timedelta(minutes=SCAN_STEP_ALERT_MINUTES)).isoformat())
-                open_github_issue(
-                    f"[가디언] 1분 점검 '{name}' 단계 오류 — {error}",
-                    f"1분 점검(/api/guardian/scan)의 `{name}` 단계가 실패했습니다. 다른 단계는 계속 돌고 있습니다.\n\n"
-                    f"- 오류 종류: `{error}`\n- 위치: `{where}`\n- 내용(비밀처럼 보이는 값은 가림): `{detail}`\n\n"
-                    "같은 단계의 알림은 30분에 한 번만 엽니다.")
-        except Exception:  # noqa: BLE001 — 알림까지 실패해도 점검 응답은 돌려준다
-            log.exception("scan_step_alert_failure step=%s", name)
-        return {"error": error, "where": where}
+        return report_scan_failure(name, e)
+
+
+def report_scan_failure(name: str, e: Exception) -> dict:
+    """점검 실패를 오류 종류·위치(우리 코드의 파일:줄 흐름)와 함께 사건·이슈로 남긴다 — Vercel 로그 없이도 원인을 찾게."""
+    log.exception("scan_step_failure step=%s", name)
+    frames = traceback.extract_tb(e.__traceback__)
+    ours = [fr for fr in frames if "site-packages" not in fr.filename and "/lib/python" not in fr.filename] or frames
+    where = f"{Path(ours[-1].filename).name}:{ours[-1].lineno} {ours[-1].name}"
+    trail = " → ".join(f"{Path(fr.filename).name}:{fr.lineno} {fr.name}" for fr in ours[-4:])
+    last = frames[-1] if frames else None
+    inner = f"{Path(last.filename).name}:{last.lineno} {last.name}" if last else "-"
+    detail = _SECRETISH_RE.sub("[가림]", str(e))[:200]
+    error = type(e).__name__
+    try:
+        record_incident("reliability", "SCAN_STEP_FAILED", f"{name} 단계 실패: {error} ({where})",
+                        {"step": name, "error": error, "where": where, "detail": detail}, "medium")
+        flag = f"scan_step_alert_until:{name}"
+        if not _flag_active_until(flag):
+            _set_flag(flag, (datetime.now(timezone.utc) + timedelta(minutes=SCAN_STEP_ALERT_MINUTES)).isoformat())
+            open_github_issue(
+                f"[가디언] 1분 점검 '{name}' 단계 오류 — {error}",
+                f"1분 점검(/api/guardian/scan)의 `{name}` 단계가 실패했습니다.\n\n"
+                f"- 오류 종류: `{error}`\n- 우리 코드 흐름: `{trail}`\n- 실제로 터진 곳: `{inner}`\n"
+                f"- 내용(비밀처럼 보이는 값은 가림): `{detail}`\n\n같은 단계의 알림은 30분에 한 번만 엽니다.")
+    except Exception:  # noqa: BLE001 — 알림까지 실패해도 점검 응답은 돌려준다
+        log.exception("scan_step_alert_failure step=%s", name)
+    return {"error": error, "where": where}
 
 
 def _recent_incident_counts() -> dict:
