@@ -592,9 +592,39 @@ def summary(hours: int = 24) -> dict:
             "api_ms": {"p50": pct(0.5), "p95": pct(0.95), "max": ms[-1] if ms else None}, "status": status}
 
 
+# 챗봇 AI가 실제로 답하는지 1분에 한 번 짧게 물어본다 (손님이 없을 때 AI가 고장 나도 바로 알게)
+AI_PROBE_SECONDS = 55
+AI_PROBE_ALERT_MINUTES = 30
+AI_PROBE_SYSTEM = "상태 확인용 요청이다. 'ok' 한 단어만 답한다."
+
+
+def probe_ai() -> dict:
+    """고객과 같은 길(Claude → 대체 AI)로 짧은 질문을 보낸다. 모두 실패하면 고객도 답을 못 받는 상태다."""
+    if not check_rate("probe:ai", limit=1, window_seconds=AI_PROBE_SECONDS):
+        return {"status": "error" if _flag_active_until("ai_probe_down_until") else "ok", "checked": "recently"}
+    started = time.monotonic()
+    try:
+        llm.chat_completion([{"role": "system", "content": AI_PROBE_SYSTEM}, {"role": "user", "content": "ping"}],
+                            max_tokens=20, purpose="probe")
+    except AIUnavailableError as e:
+        now = datetime.now(timezone.utc)
+        _set_flag("ai_probe_down_until", (now + timedelta(seconds=AI_PROBE_SECONDS + 10)).isoformat())
+        record_incident("reliability", "AI_PROBE_FAILED", f"챗봇 AI 답변 확인 실패 ({e.code})", {"code": e.code}, "medium")
+        if not _flag_active_until("ai_probe_alert_until"):   # 같은 장애로 이슈가 1분마다 쌓이지 않게 30분에 한 번
+            _set_flag("ai_probe_alert_until", (now + timedelta(minutes=AI_PROBE_ALERT_MINUTES)).isoformat())
+            open_github_issue(f"[감시] 챗봇 AI가 답하지 못함 — {e.code}",
+                              f"1분 점검의 짧은 질문에 Claude와 대체 AI가 모두 답하지 못했습니다 ({e.code}: {e}).\n"
+                              "손님도 답을 받지 못하는 상태입니다. Vercel Logs에서 `claude_call_failed`, `llm_fallback`을 확인하세요.",
+                              labels=["outage"])
+        return {"status": "error", "code": e.code}
+    db.execute("DELETE FROM runtime_flags WHERE key = 'ai_probe_down_until'")
+    return {"status": "ok", "latency_ms": int((time.monotonic() - started) * 1000)}
+
+
 def scan() -> dict:
-    """요청이 없어도 감시하도록 1분마다 밖에서 부른다 (.github/workflows/monitor.yml → /api/guardian/scan).
-    새 접속 기록을 AI가 훑고(watch_traffic), 최근 5분 사건이 몰렸으면 즉시 진단한다."""
+    """요청이 없어도 감시하도록 1분마다 밖에서 부른다 (cron-job.org·monitor.yml → /api/guardian/scan).
+    챗봇 AI가 답하는지 확인하고(probe_ai), 새 접속 기록을 훑고(watch_traffic), 최근 5분 사건이 몰렸으면 즉시 진단한다."""
+    ai = probe_ai()
     try:
         traffic = watch_traffic()
     except db.DbError as e:
@@ -610,7 +640,7 @@ def scan() -> dict:
         "SELECT SUM(CASE WHEN category = 'reliability' THEN 1 ELSE 0 END) AS errors, "
         "SUM(CASE WHEN severity = 'high' THEN 1 ELSE 0 END) AS high FROM incidents WHERE created_at > ?", (since,))
     errors, high = rows[0]["errors"] or 0, rows[0]["high"] or 0
-    result = {"errors_5m": errors, "high_5m": high, "traffic": traffic, "capacity": capacity}
+    result = {"ai": ai, "errors_5m": errors, "high_5m": high, "traffic": traffic, "capacity": capacity}
     if errors >= ERROR_SPIKE[0] or high:
         result["triage"] = run_triage("scan")
     return result

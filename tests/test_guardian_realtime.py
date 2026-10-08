@@ -261,3 +261,42 @@ def test_summary_endpoint_needs_secret_and_reports_latency(issues, monkeypatch):
     s = guardian.summary()
     assert s["api_requests"] == 10 and s["api_ms"]["p95"] == 1000
     assert {"category": "reliability", "code": "AI_TIMEOUT", "n": 1} in s["incidents"]
+
+
+def test_ai_probe_ok_then_reuses_result_within_a_minute(issues, monkeypatch):
+    seen = []
+    _verdict(monkeypatch, "ok", seen)
+    assert guardian.probe_ai()["status"] == "ok"
+    assert guardian.probe_ai() == {"status": "ok", "checked": "recently"}   # 1분 안에 다시 묻지 않는다
+    assert len(seen) == 1 and seen[0][1]["purpose"] == "probe"
+
+
+def test_ai_probe_failure_alerts_once_as_outage(issues, monkeypatch):
+    def down(*a, **k):
+        raise AIUnavailableError("AI_KEY_MISSING", "크레딧 소진")
+    monkeypatch.setattr(llm, "chat_completion", down)
+    assert guardian.probe_ai() == {"status": "error", "code": "AI_KEY_MISSING"}
+    assert "AI_PROBE_FAILED" in _codes()
+    outage = [i for i in issues if i[2] == ["outage"]]
+    assert len(outage) == 1 and "AI_KEY_MISSING" in outage[0][0]
+    assert guardian.probe_ai()["status"] == "error"   # 1분 안 재확인은 마지막 결과(고장)를 그대로
+    db.execute("DELETE FROM rate_counters WHERE bucket = 'probe:ai'")
+    guardian.probe_ai()
+    assert len([i for i in issues if i[2] == ["outage"]]) == 1   # 이슈는 30분에 한 번만
+
+
+def test_scan_endpoint_get_reports_503_when_ai_is_down(issues, monkeypatch):
+    from app import main
+    monkeypatch.setattr(main, "CRON_SECRET", "s3cret")
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer s3cret"}
+    r = client.get("/api/guardian/scan", headers=headers)
+    assert r.status_code == 200 and r.json()["status"] == "ok" and r.json()["ai"]["status"] == "ok"
+
+    def down(*a, **k):
+        raise AIUnavailableError("AI_ERROR", "down")
+    monkeypatch.setattr(llm, "chat_completion", down)
+    db.execute("DELETE FROM rate_counters WHERE bucket = 'probe:ai'")
+    r = client.get("/api/guardian/scan", headers=headers)
+    assert r.status_code == 503 and r.json()["ai"]["status"] == "error"
+    assert client.get("/api/guardian/scan").status_code == 401
