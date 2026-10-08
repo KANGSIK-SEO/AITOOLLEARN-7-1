@@ -9,7 +9,7 @@
 //   6. 작품 카드                 — 카드, 즐겨찾기, 다운로드, 출처 복사, 권리 근거 기록
 //   7. 작품 상세 창
 //   8. 대화                      — 턴(질문 단위), 스크롤, 메시지, AI 답변, 결과 묶음, 전송(스트리밍)
-//   9. 즐겨찾기 목록             — 오른쪽 서랍
+//   9. 대화 기록 · 즐겨찾기 목록 — 넓은 화면은 왼쪽 사이드바, 좁은 화면은 서랍
 //  10. 온디바이스 추천           — 서버·AI 없이 브라우저에서 Datalog 규칙 평가 (ondevice.js)
 //  11. 테마 · 언어 · 앱 설치
 //  12. 시작                      — 이벤트 연결과 첫 화면
@@ -21,16 +21,18 @@
 const CHAT_MAX_LENGTH = 500;          // 서버 CHAT_MAX_LENGTH와 같다 (textarea maxlength도 500)
 const PREVIEW_LIMIT = 16;             // 랜딩 미리보기 작품 수
 const BROWSE_PAGE_SIZE = 24;          // '작품 더 보기' 한 번에 불러오는 수
+const HISTORY_PAGE_SIZE = 20;         // 대화 기록 한 번에 불러오는 수
 const PENDING_STEP_MS = 2600;         // 응답 대기 문구가 다음 단계로 바뀌는 간격
 const SCROLL_DURATION_MS = 900;       // 새 질문을 화면 위로 올리는 스크롤 시간
 const TOAST_MS = 2200;
 const STORAGE_KEYS = {                // index.html의 첫 화면 스크립트도 theme·lang 키를 쓴다
-    theme: "pd-theme", lang: "pd-lang", iosPrompt: "iosInstallPromptShown",
+    theme: "pd-theme", lang: "pd-lang", sidebar: "pd-sidebar", iosPrompt: "iosInstallPromptShown",
 };
 const MUSEUMS = { met: "The Metropolitan Museum of Art", aic: "Art Institute of Chicago", cma: "Cleveland Museum of Art" };
 
 const $ = (id) => document.getElementById(id);
 const chatLog = $("chat-log");
+const wideScreen = window.matchMedia("(min-width: 1180px)");   // 이 폭 이상이면 대화 기록 사이드바를 띄운다
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 // 프라이빗 모드 등에서 localStorage가 막혀도 앱은 동작해야 한다
@@ -94,6 +96,7 @@ function timeEl(className, date, format) {
 }
 const locale = () => (state.lang === "en" ? "en-US" : "ko-KR");
 const formatTime = (date) => date.toLocaleString(locale(), { hour: "2-digit", minute: "2-digit" });
+const formatDateTime = (date) => date.toLocaleString(locale(), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 // =====================================================================
 // 2. 다국어(i18n)
@@ -102,7 +105,7 @@ const formatTime = (date) => date.toLocaleString(locale(), { hour: "2-digit", mi
 // HTML은 data-i18n(글자) · data-i18n-html · data-i18n-placeholder · data-i18n-aria · data-i18n-title 속성으로 연결한다.
 const I18N = {
     ko: {
-        skip: "본문으로 건너뛰기", brandName: "명화 찾기", favorites: "즐겨찾기", lab: "온디바이스",
+        skip: "본문으로 건너뛰기", brandName: "명화 찾기", history: "대화 기록", favorites: "즐겨찾기", lab: "온디바이스",
         install: "앱으로 설치하기", theme: "밝게/어둡게 전환", premium: "초대 회원", logout: "로그아웃",
         // 랜딩
         eyebrow: "CC0 · 퍼블릭 도메인 · 상업적 이용 가능",
@@ -150,7 +153,8 @@ const I18N = {
         close: "닫기", creditLabel: "출처 표기 예시", original: "원본 이미지", sourcePage: "미술관 작품 페이지",
         metaDate: "제작", metaMedium: "재료", metaCredit: "소장 경위", metaLicense: "라이선스", licenseText: "{l} · 퍼블릭 도메인",
         // 대화 기록 · 즐겨찾기
-        favEmpty: "아직 담은 작품이 없어요. 카드의 ♡를 눌러 모아 보세요.",
+        historyEmpty: "아직 대화 기록이 없어요.", favEmpty: "아직 담은 작품이 없어요. 카드의 ♡를 눌러 모아 보세요.",
+        loadMore: "더 불러오기", refresh: "새로고침", hideSidebar: "대화 기록 숨기기", showSidebar: "대화 기록 보기", askAgain: "다시 묻기",
         // 온디바이스
         labEyebrow: "실험실 · 서버/AI 호출 없음", labTitle: "온디바이스 추천",
         labLead: "브라우저에 받아 둔 작품 데이터를 Datalog 규칙으로 바로 걸러요. 자유 문장은 AI 대신 키워드 사전으로 해석합니다.",
@@ -166,7 +170,7 @@ const I18N = {
         genericSteps: ["브라우저 메뉴(⋮)를 여세요.", "\"앱 설치\" 또는 \"홈 화면에 추가\"를 고르세요."],
     },
     en: {
-        skip: "Skip to content", brandName: "Masterpiece Finder", favorites: "Favorites", lab: "On-device",
+        skip: "Skip to content", brandName: "Masterpiece Finder", history: "History", favorites: "Favorites", lab: "On-device",
         install: "Install app", theme: "Toggle light/dark", premium: "Invited", logout: "Log out",
         eyebrow: "CC0 · Public domain · Free for commercial use",
         heroTitle: "Copyright-free<br>public domain masterpieces",
@@ -209,7 +213,8 @@ const I18N = {
         recordNeedLogin: "Sign in to issue rights records",
         close: "Close", creditLabel: "Credit line example", original: "Original image", sourcePage: "Museum page",
         metaDate: "Date", metaMedium: "Medium", metaCredit: "Credit", metaLicense: "License", licenseText: "{l} · Public domain",
-        favEmpty: "No favorites yet — tap ♡ on a card to save it.",
+        historyEmpty: "No conversations yet.", favEmpty: "No favorites yet — tap ♡ on a card to save it.",
+        loadMore: "Load more", refresh: "Refresh", hideSidebar: "Hide history", showSidebar: "Show history", askAgain: "Ask again",
         labEyebrow: "Lab · no server or AI calls", labTitle: "On-device recommendations",
         labLead: "Filters artwork data cached in your browser with Datalog-style rules. Free text is parsed with a keyword dictionary instead of AI.",
         labFree: "Free text", labFreePh: "e.g. spring landscape, 19th-century impressionist sea", labParse: "Parse keywords",
@@ -291,6 +296,7 @@ function applyI18n() {
     document.querySelectorAll("[data-i18n-title]").forEach((n) => { n.title = t(n.dataset.i18nTitle); });
     document.querySelectorAll("[data-err]").forEach((n) => { n.textContent = errorMessage({ code: n.dataset.err }); });
     document.querySelectorAll("time.msg-time").forEach((n) => { n.textContent = formatTime(new Date(n.dateTime)); });
+    document.querySelectorAll("time.history-meta").forEach((n) => { n.textContent = formatDateTime(new Date(n.dateTime)); });
     $("lang-btn").textContent = state.lang === "en" ? "KO" : "EN";
     $("lang-btn").title = state.lang === "en" ? "한국어로 보기" : "View in English";
 }
@@ -389,10 +395,13 @@ function show(isLoggedIn, email = "", isPremium = false) {
     $("auth-panel").hidden = isLoggedIn;
     $("site-footer").hidden = isLoggedIn;        // 대화 화면은 입력창이 하단에 고정이라 푸터를 두지 않는다
     $("chat-panel").hidden = !isLoggedIn;
-    ["favorites-btn", "lab-btn", "user-chip"].forEach((id) => { $(id).hidden = !isLoggedIn; });
+    $("sidebar").hidden = !isLoggedIn;
+    ["history-btn", "favorites-btn", "lab-btn", "user-chip"].forEach((id) => { $(id).hidden = !isLoggedIn; });
     $("user-email").textContent = email;
     $("premium-badge").hidden = !(isLoggedIn && isPremium);
+    syncHistoryButton();
     if (isLoggedIn) {
+        refreshSidebar();
         loadFavorites();
         $("message-input").focus();
     } else {
@@ -943,6 +952,7 @@ async function sendMessage(message) {
     } finally {
         pending.remove();
         setSending(false);
+        if (state.loggedIn) refreshSidebar();   // 성공·실패 모두 서버 대화 기록에 남는다
     }
 }
 
@@ -1028,8 +1038,68 @@ function submitChat(event) {
 }
 
 // =====================================================================
-// 9. 즐겨찾기 목록
+// 9. 대화 기록 · 즐겨찾기 목록
 // =====================================================================
+// 대화 기록 버튼: 넓은 화면에서는 왼쪽 사이드바 숨기기/보기, 좁은 화면에서는 서랍 열기
+function onHistoryButton() {
+    if (wideScreen.matches) {
+        const collapsed = document.body.classList.toggle("sidebar-collapsed");
+        store.set(STORAGE_KEYS.sidebar, collapsed ? "hidden" : "shown");
+        syncHistoryButton();
+        if (!collapsed) fitLatestTurn();
+        return;
+    }
+    openDrawer("history");
+    loadHistoryInto($("drawer-body"));
+}
+
+function syncHistoryButton() {
+    const pressed = wideScreen.matches && !document.body.classList.contains("sidebar-collapsed");
+    $("history-btn").setAttribute("aria-pressed", String(pressed));
+    $("history-btn").title = t(wideScreen.matches ? (pressed ? "hideSidebar" : "showSidebar") : "history");
+}
+
+function refreshSidebar() {
+    if (state.loggedIn) loadHistoryInto($("sidebar-body"));
+}
+
+// GET /api/me/chats를 페이지 단위로 불러와 목록을 그린다 (사이드바와 서랍이 같이 쓴다)
+let historyRequest = 0;
+async function loadHistoryInto(list) {
+    const request = ++historyRequest;   // 새로 불러오기 시작하면 이전에 늦게 도착한 응답은 버린다
+    list.replaceChildren(bindText(el("p", "empty"), "loading"));
+    let offset = 0;
+    const loadPage = async () => {
+        const { ok, data } = await api(`/api/me/chats?limit=${HISTORY_PAGE_SIZE}&offset=${offset}`);
+        if (request !== historyRequest) return;
+        list.querySelector(".empty, .load-more")?.remove();
+        if (!ok) { list.appendChild(bindError(el("p", "empty"), data.error)); return; }
+        if (!offset && !data.chats.length) { list.appendChild(bindText(el("p", "empty"), "historyEmpty")); return; }
+        list.append(...data.chats.map(historyItem));
+        offset += data.chats.length;
+        if (data.chats.length === HISTORY_PAGE_SIZE) {
+            list.appendChild(button("btn btn-ghost btn-sm load-more", { labelKey: "loadMore", onClick: loadPage }));
+        }
+    };
+    await loadPage();
+}
+
+// 질문 + 날짜·시간 한 줄. 펼치면 저장된 답변과 '다시 묻기'
+function historyItem(chat) {
+    const item = el("details", "history-item");
+    const summary = el("summary");
+    summary.append(el("span", "history-q", chat.question), timeEl("history-meta", new Date(chat.created_at), formatDateTime));
+    item.appendChild(summary);
+    if (chat.answer) item.appendChild(el("div", "history-answer", chat.answer));
+    const actions = el("div", "history-actions");
+    actions.appendChild(button("btn btn-soft btn-sm", { iconName: "retry", labelKey: "askAgain", onClick: () => {
+        if ($("drawer").open) $("drawer").close();
+        sendMessage(chat.question);
+    } }));
+    item.appendChild(actions);
+    return item;
+}
+
 async function openFavorites() {
     openDrawer("favorites");
     const list = $("drawer-body");
@@ -1122,6 +1192,7 @@ function toggleLang() {
     renderTopics();
     langRerenders.forEach((render) => render());
     renderFavButtons();
+    syncHistoryButton();
 }
 
 // ---- 앱 설치 (PWA) ----
@@ -1173,6 +1244,7 @@ function bindEvents() {
     });
 
     // 상단 바
+    $("history-btn").addEventListener("click", onHistoryButton);
     $("favorites-btn").addEventListener("click", openFavorites);
     $("lab-btn").addEventListener("click", openLab);
     $("logout-btn").addEventListener("click", logout);
@@ -1201,6 +1273,13 @@ function bindEvents() {
     });
     window.addEventListener("resize", fitLatestTurn);
 
+    // 대화 기록 사이드바
+    $("sidebar-refresh").addEventListener("click", refreshSidebar);
+    wideScreen.addEventListener("change", () => {
+        syncHistoryButton();
+        if (wideScreen.matches && $("drawer").open) $("drawer").close();   // 넓어지면 사이드바가 대신 보인다
+    });
+
     // 온디바이스
     $("od-parse-btn").addEventListener("click", parseOnDevice);
     $("od-run-btn").addEventListener("click", runOnDevice);
@@ -1210,6 +1289,7 @@ function bindEvents() {
 }
 
 async function init() {
+    if (store.get(STORAGE_KEYS.sidebar) === "hidden") document.body.classList.add("sidebar-collapsed");
     bindEvents();
     applyI18n();
     setAuthMode("login");

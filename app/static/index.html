@@ -58,12 +58,14 @@
             <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
             <symbol id="i-record" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-4"/></symbol>
             <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+            <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></symbol>
             <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></symbol>
             <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></symbol>
             <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
             <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
             <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></symbol>
             <symbol id="i-lab" viewBox="0 0 24 24"><path d="M10 2v7.31"/><path d="M14 9.3V2"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/><path d="M5.52 16h12.96"/></symbol>
+            <symbol id="i-retry" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></symbol>
             <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
             <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/></symbol>
             <symbol id="i-install" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></symbol>
@@ -84,6 +86,9 @@
                 </span>
             </a>
             <nav class="topbar-nav" aria-label="주 메뉴 / Main menu">
+                <button id="history-btn" class="nav-btn" type="button" aria-haspopup="dialog" hidden>
+                    <svg class="i"><use href="#i-history"/></svg><span data-i18n="history">대화 기록</span>
+                </button>
                 <button id="favorites-btn" class="nav-btn" type="button" aria-haspopup="dialog" hidden>
                     <svg class="i"><use href="#i-heart"/></svg><span data-i18n="favorites">즐겨찾기</span>
                 </button>
@@ -174,6 +179,16 @@
         </section>
 
         <!-- ===== 로그인 후: 대화 ===== -->
+        <aside id="sidebar" class="sidebar" aria-labelledby="sidebar-title" hidden>
+            <div class="sidebar-head">
+                <h2 id="sidebar-title" class="sidebar-title" data-i18n="history">대화 기록</h2>
+                <button id="sidebar-refresh" class="icon-btn" type="button" data-i18n-aria="refresh" data-i18n-title="refresh">
+                    <svg class="i"><use href="#i-retry"/></svg>
+                </button>
+            </div>
+            <div id="sidebar-body" class="sidebar-body"></div>
+        </aside>
+
         <section id="chat-panel" class="chat" aria-label="명화 찾기 대화 / Masterpiece finder conversation" hidden>
             <div id="chat-log" class="thread" role="log" aria-live="polite" aria-relevant="additions" data-i18n-aria="conversation">
                 <div id="welcome" class="welcome">
