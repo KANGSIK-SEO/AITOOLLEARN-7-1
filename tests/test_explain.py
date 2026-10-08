@@ -53,7 +53,7 @@ def test_missing_ai_key_does_not_leak_env_var_name(client, monkeypatch, caplog):
 
 
 @pytest.mark.parametrize("code, status, hint", [
-    ("AI_TIMEOUT", 504, "구체적으로"),
+    ("AI_TIMEOUT", 504, "접속자가 많습니다"),
     ("AI_RATE_LIMITED", 429, "1분쯤 뒤에"),
     ("AI_ERROR", 502, "한 번 더 보내"),
     ("SOMETHING_NEW", 502, "한 번 더 보내"),  # 모르는 코드도 기본 안내

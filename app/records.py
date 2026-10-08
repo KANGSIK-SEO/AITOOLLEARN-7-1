@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from . import art, db, rights
-from .config import get_secret_key
+from .config import TIMEOUT_SECONDS, get_secret_key
 
 log = logging.getLogger("app.records")
 
@@ -34,8 +34,8 @@ ARCHIVE_SPN2 = "https://web.archive.org/save"                 # 공식 저장 AP
 ARCHIVE_STATUS = "https://web.archive.org/save/status/"
 ARCHIVE_CDX = "https://web.archive.org/cdx/search/cdx"         # 보관본 색인 (익명 저장 결과 찾기)
 ARCHIVE_AVAILABLE = "https://archive.org/wayback/available?url="
-ARCHIVE_REQUEST_SECONDS = 10   # 보관 요청 1번에 기다리는 시간 — 그 뒤는 아카이브가 뒤에서 계속 보관한다
-ARCHIVE_CHECK_SECONDS = 8      # 보관 결과 확인 1번의 상한
+ARCHIVE_REQUEST_SECONDS = TIMEOUT_SECONDS   # 보관 요청 1번에 기다리는 시간(25초) — 그 뒤는 아카이브가 뒤에서 계속 보관한다
+ARCHIVE_CHECK_SECONDS = TIMEOUT_SECONDS     # 보관 결과 확인 1번의 상한(25초)
 ARCHIVE_PENDING_LIMIT_SECONDS = 600  # 10분이 지나도 안 끝난 요청은 다시 요청한다
 ARCHIVE_POLL_SECONDS = 5
 ARCHIVE_RETRY_STATUS = {502, 503, 504, 520, 523}  # 아카이브가 기관 페이지를 잠깐 못 가져온 경우 — 한 번 더 시도
@@ -218,7 +218,7 @@ def capture_since(url: str, since_iso: str, timeout: float = ARCHIVE_CHECK_SECON
     return _wayback_url(rows[-1][0], rows[-1][1]) if rows else None
 
 
-def latest_snapshot(url: str, timeout: float = 8) -> tuple[str, str] | None:
+def latest_snapshot(url: str, timeout: float = TIMEOUT_SECONDS) -> tuple[str, str] | None:
     """이미 있는 보관본 중 가장 최근 것 (주소, 보관 시각 YYYYMMDDhhmmss). 없으면 None."""
     req = urllib.request.Request(ARCHIVE_AVAILABLE + urllib.parse.quote(url, safe=""), headers={"User-Agent": ARCHIVE_UA})
     try:
