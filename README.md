@@ -218,10 +218,10 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 
 | 이름 | 설명 |
 |---|---|
-| `ANTHROPIC_API_KEY` (선택) | Claude API 키. **있으면 Claude가 주 모델**이 되고, 한도·인증·통신 문제로 실패하면 GPT로 넘어간다 (`app/claude_llm.py`) |
+| `ANTHROPIC_API_KEY` (선택) | Claude API 키. **있으면 Claude가 주 모델**이 되고, 크레딧 소진·한도·인증 문제로 실패하면 Upstage solar-pro4가 이어받는다(solar 키가 없으면 GPT) (`app/claude_llm.py`) |
 | `CLAUDE_MODEL`, `CLAUDE_INTENT_MODEL`, `CLAUDE_EFFORT` (선택) | 답변 모델(기본 `claude-fable-5-1`), 검색 조건 뽑기 모델(기본 같은 모델), 생각 깊이(기본 `low`) |
 | `GPT_ASTRA_API_KEY` | OpenAI gpt-6-astra 키 (Claude 키가 없을 때 주 모델, 있을 때는 대체 모델) |
-| `UPSTAGE_API_KEY` (선택) | Upstage solar-pro4 키. GPT 쪽이 429/401/403일 때만 비상 폴백으로 사용 |
+| `UPSTAGE_API_KEY` (선택) | Upstage solar-pro4 키. Claude나 GPT가 소진·한도·인증 문제로 실패할 때 이어받는 비상용 |
 | `SECRET_KEY` | 세션 서명 키 (32자 이상 랜덤) |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | Turso DB. **없으면 로컬 `data/app.db` 사용** |
 | `LLM_TIMEOUT_SECONDS` | AI 호출 타임아웃(기본 20) |
