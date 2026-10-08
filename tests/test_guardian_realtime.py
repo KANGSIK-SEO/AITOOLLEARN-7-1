@@ -312,3 +312,21 @@ def test_cron_secret_tolerates_copied_whitespace_but_not_wrong_values(issues, mo
     assert client.get("/api/guardian/scan", headers={"Authorization": "s3cret"}).status_code == 401
     monkeypatch.setattr(main, "CRON_SECRET", "  ")
     assert client.get("/api/guardian/scan", headers={"Authorization": "Bearer "}).status_code == 401
+
+
+def test_one_broken_scan_step_does_not_crash_the_whole_check(issues, monkeypatch):
+    from app import main
+    monkeypatch.setattr(main, "CRON_SECRET", "s3cret")
+
+    def broken():
+        raise KeyError("status sk-ant-abcdefghijklmnop")
+    monkeypatch.setattr(guardian, "watch_traffic", broken)
+    r = TestClient(app).get("/api/guardian/scan", headers={"Authorization": "Bearer s3cret"})
+    assert r.status_code == 503   # 500(서버 오류)이 아니라 '일부 고장'으로 답한다
+    body = r.json()
+    assert body["failed_steps"] == ["traffic"] and body["traffic"]["error"] == "KeyError"
+    assert "broken" in body["traffic"]["where"] and body["ai"]["status"] == "ok"   # 다른 단계는 계속 돈다
+    alert = [i for i in issues if "'traffic' 단계 오류" in i[0]]
+    assert len(alert) == 1 and "KeyError" in alert[0][1] and "sk-ant" not in alert[0][1]   # 비밀처럼 보이는 값은 가린다
+    TestClient(app).get("/api/guardian/scan", headers={"Authorization": "Bearer s3cret"})
+    assert len([i for i in issues if "'traffic' 단계 오류" in i[0]]) == 1   # 같은 단계 알림은 30분에 한 번

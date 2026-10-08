@@ -25,9 +25,11 @@ import logging
 import os
 import re
 import time
+import traceback
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from . import db, llm, reqctx
 from .config import TIMEOUT_SECONDS, AIUnavailableError
@@ -621,28 +623,63 @@ def probe_ai() -> dict:
     return {"status": "ok", "latency_ms": int((time.monotonic() - started) * 1000)}
 
 
-def scan() -> dict:
-    """요청이 없어도 감시하도록 1분마다 밖에서 부른다 (cron-job.org·monitor.yml → /api/guardian/scan).
-    챗봇 AI가 답하는지 확인하고(probe_ai), 새 접속 기록을 훑고(watch_traffic), 최근 5분 사건이 몰렸으면 즉시 진단한다."""
-    ai = probe_ai()
+SCAN_STEP_ALERT_MINUTES = 30
+_SECRETISH_RE = re.compile(r"sk-[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9._-]{10,}|(?i:bearer)\s+\S+|[A-Za-z0-9_-]{32,}")
+
+
+def _scan_step(name: str, fn):
+    """점검 한 단계를 실행한다. 실패해도 나머지 단계는 계속 하고, 어느 단계가 어떤 오류로(파일:줄) 실패했는지
+    사건과 이슈에 남긴다 — Vercel 로그를 못 보는 사람·AI도 원인을 알 수 있게 (2026-10-09 원인 모를 500 반복 이후)."""
     try:
-        traffic = watch_traffic()
+        return fn()
     except db.DbError as e:
-        log.error("traffic_watch_db_failure detail=%s", e)
-        traffic = {"error": "db"}
-    try:
-        capacity = check_capacity()
-    except db.DbError as e:
-        log.error("capacity_check_db_failure detail=%s", e)
-        capacity = {"error": "db"}
+        log.error("scan_step_db_failure step=%s detail=%s", name, e)
+        return {"error": "db"}
+    except Exception as e:  # noqa: BLE001 — 점검 하나의 버그로 1분 점검 전체가 멈추지 않게
+        log.exception("scan_step_failure step=%s", name)
+        frame = traceback.extract_tb(e.__traceback__)[-1]
+        where = f"{Path(frame.filename).name}:{frame.lineno} {frame.name}"
+        detail = _SECRETISH_RE.sub("[가림]", str(e))[:200]
+        error = type(e).__name__
+        try:
+            record_incident("reliability", "SCAN_STEP_FAILED", f"{name} 단계 실패: {error} ({where})",
+                            {"step": name, "error": error, "where": where, "detail": detail}, "medium")
+            flag = f"scan_step_alert_until:{name}"
+            if not _flag_active_until(flag):
+                _set_flag(flag, (datetime.now(timezone.utc) + timedelta(minutes=SCAN_STEP_ALERT_MINUTES)).isoformat())
+                open_github_issue(
+                    f"[가디언] 1분 점검 '{name}' 단계 오류 — {error}",
+                    f"1분 점검(/api/guardian/scan)의 `{name}` 단계가 실패했습니다. 다른 단계는 계속 돌고 있습니다.\n\n"
+                    f"- 오류 종류: `{error}`\n- 위치: `{where}`\n- 내용(비밀처럼 보이는 값은 가림): `{detail}`\n\n"
+                    "같은 단계의 알림은 30분에 한 번만 엽니다.")
+        except Exception:  # noqa: BLE001 — 알림까지 실패해도 점검 응답은 돌려준다
+            log.exception("scan_step_alert_failure step=%s", name)
+        return {"error": error, "where": where}
+
+
+def _recent_incident_counts() -> dict:
     since = (datetime.now(timezone.utc) - timedelta(seconds=ERROR_SPIKE[1])).isoformat(timespec="seconds")
     rows = db.execute(
         "SELECT SUM(CASE WHEN category = 'reliability' THEN 1 ELSE 0 END) AS errors, "
         "SUM(CASE WHEN severity = 'high' THEN 1 ELSE 0 END) AS high FROM incidents WHERE created_at > ?", (since,))
-    errors, high = rows[0]["errors"] or 0, rows[0]["high"] or 0
-    result = {"ai": ai, "errors_5m": errors, "high_5m": high, "traffic": traffic, "capacity": capacity}
-    if errors >= ERROR_SPIKE[0] or high:
-        result["triage"] = run_triage("scan")
+    return {"errors": rows[0]["errors"] or 0, "high": rows[0]["high"] or 0}
+
+
+def scan() -> dict:
+    """요청이 없어도 감시하도록 1분마다 밖에서 부른다 (cron-job.org·monitor.yml → /api/guardian/scan).
+    챗봇 AI가 답하는지 확인하고(probe_ai), 새 접속 기록을 훑고(watch_traffic), 최근 5분 사건이 몰렸으면 즉시 진단한다.
+    단계마다 따로 실행해, 한 단계가 실패하면 그 단계만 {"error": 오류 종류, "where": 파일:줄}로 표시한다."""
+    result = {"ai": _scan_step("ai", probe_ai), "traffic": _scan_step("traffic", watch_traffic),
+              "capacity": _scan_step("capacity", check_capacity)}
+    counts = _scan_step("incidents", _recent_incident_counts)
+    result.update(errors_5m=counts.get("errors", 0), high_5m=counts.get("high", 0))
+    if "error" in counts:
+        result["incidents"] = counts
+    if result["errors_5m"] >= ERROR_SPIKE[0] or result["high_5m"]:
+        result["triage"] = _scan_step("triage", lambda: run_triage("scan"))
+    def broken(step: dict | None) -> bool:   # _scan_step이 잡은 실패 (코드 오류는 where, DB 오류는 error=db)
+        return isinstance(step, dict) and ("where" in step or step.get("error") == "db")
+    result["failed_steps"] = [k for k in ("ai", "traffic", "capacity", "incidents", "triage") if broken(result.get(k))]
     return result
 
 
