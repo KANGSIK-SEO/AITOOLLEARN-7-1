@@ -30,7 +30,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from . import db, llm, reqctx
-from .config import AIUnavailableError
+from .config import TIMEOUT_SECONDS, AIUnavailableError
 
 log = logging.getLogger("app.guardian")
 
@@ -529,7 +529,7 @@ def open_github_issue(title: str, body: str, labels: list[str] | None = None) ->
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=10):
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS):
             log.info("github_issue_created title=%s", title)
     except (urllib.error.URLError, TimeoutError) as e:
         log.error("github_issue_failed title=%s detail=%s", title, e)

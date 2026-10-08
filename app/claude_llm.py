@@ -8,6 +8,8 @@
 - 안전 분류기가 요청을 거절하면 서버 쪽 폴백(fallbacks="default")이 다른 모델로 다시 시도한다.
   Haiku는 서버 폴백이 없어 이 옵션을 보내지 않는다.
 - 실패는 app/llm.py와 같은 AIUnavailableError 코드로 바꿔서 올린다 (화면 안내·가디언 집계가 그대로 동작).
+- 타임아웃: 25초(TIMEOUT_SECONDS)와 요청의 남은 시간 중 짧은 쪽. SDK 자체 재시도는 끄고(시간이 두 배가 되므로)
+  실패하면 app/llm.py가 다른 AI로 넘긴다. 시간이 다 되면 "죄송합니다. 접속자가 많습니다."로 끝낸다.
 """
 import logging
 import os
@@ -15,7 +17,8 @@ from collections.abc import Iterator
 
 import anthropic
 
-from .config import AIUnavailableError
+from . import reqctx
+from .config import BUSY_MESSAGE, TIMEOUT_SECONDS, AIUnavailableError
 
 log = logging.getLogger("app.claude")
 
@@ -47,8 +50,7 @@ def effort() -> str:
 def _get_client() -> anthropic.Anthropic:
     global _client
     if _client is None:
-        timeout = float(os.environ.get("CLAUDE_TIMEOUT_SECONDS", "40") or 40)
-        _client = anthropic.Anthropic(timeout=timeout, max_retries=1)
+        _client = anthropic.Anthropic(timeout=TIMEOUT_SECONDS, max_retries=0)
     return _client
 
 
@@ -76,12 +78,22 @@ def _as_unavailable(e: Exception) -> AIUnavailableError:
     if _credit_exhausted(e):
         return AIUnavailableError("AI_KEY_MISSING", "AI 서비스 크레딧이 소진되었어요.")
     if isinstance(e, anthropic.APITimeoutError):
-        return AIUnavailableError("AI_TIMEOUT", "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요.")
+        return AIUnavailableError("AI_TIMEOUT", BUSY_MESSAGE)
     if isinstance(e, anthropic.RateLimitError):
         return AIUnavailableError("AI_RATE_LIMITED", "AI 서비스 요청이 많아 잠시 제한되었어요. 잠시 후 다시 시도해 주세요.")
     if isinstance(e, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
         return AIUnavailableError("AI_KEY_MISSING", "AI 서비스 인증에 실패했어요.")
     return AIUnavailableError("AI_ERROR", "AI 서버와 통신하지 못했어요. 잠시 후 다시 시도해 주세요.")
+
+
+MIN_ATTEMPT_SECONDS = 2.0   # 남은 시간이 이보다 적으면 부르지 않는다
+
+
+def _time_left() -> float:
+    left = reqctx.remaining(TIMEOUT_SECONDS)
+    if left < MIN_ATTEMPT_SECONDS:
+        raise AIUnavailableError("AI_TIMEOUT", BUSY_MESSAGE)
+    return left
 
 
 def _refused() -> AIUnavailableError:
@@ -91,7 +103,7 @@ def _refused() -> AIUnavailableError:
 def complete(messages: list[dict], purpose: str = "answer", json_schema: dict | None = None) -> str:
     params = _params(messages, purpose, json_schema)
     try:
-        response = _get_client().beta.messages.create(**params)
+        response = _get_client().beta.messages.create(**params, timeout=_time_left())
     except anthropic.APIError as e:
         log.warning("claude_call_failed model=%s error=%s", params["model"], type(e).__name__)
         raise _as_unavailable(e) from e
@@ -107,7 +119,7 @@ def stream(messages: list[dict], purpose: str = "answer") -> Iterator[str]:
     """글이 만들어지는 대로 조각을 내보낸다. 첫 조각 전에 실패하면 호출부가 다른 모델로 넘어갈 수 있다."""
     params = _params(messages, purpose, None)
     try:
-        with _get_client().beta.messages.stream(**params) as s:
+        with _get_client().beta.messages.stream(**params, timeout=_time_left()) as s:
             for text in s.text_stream:
                 if text:
                     yield text

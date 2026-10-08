@@ -1,6 +1,9 @@
 const $ = (id) => document.getElementById(id);
 const chatLog = $("chat-log");
 
+// 25초 안에 답을 못 주면 서버도 화면도 같은 안내를 쓴다 (app/config.py BUSY_MESSAGE)
+const BUSY_TEXT = "죄송합니다. 접속자가 많습니다. 잠시 후 다시 시도해 주세요. / Sorry, we have a lot of visitors right now. Please try again shortly.";
+const CLIENT_TIMEOUT_MS = 30000;   // 서버 25초 + 네트워크 여유. 이만큼 아무 응답이 없으면 기다리지 않는다
 const ERROR_MESSAGES = {
     UNAUTHENTICATED: "로그인이 필요합니다. / Login required.",
     INVALID_EMAIL: "이메일 형식이 올바르지 않습니다. / That email address isn't valid.",
@@ -16,7 +19,8 @@ const ERROR_MESSAGES = {
     DB_ERROR: "데이터베이스에 문제가 생겼어요. 잠시 후 다시 시도해 주세요. / There was a database problem. Please try again shortly.",
     INTERNAL_ERROR: "예상치 못한 오류가 발생했어요. 잠시 후 다시 시도해 주세요. / An unexpected error occurred. Please try again shortly.",
     ART_DB_ERROR: "작품 데이터베이스를 읽지 못했어요. / Couldn't read the artwork database.",
-    AI_TIMEOUT: "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요. / The response is taking too long. Please try again shortly.",
+    AI_TIMEOUT: BUSY_TEXT,
+    BUSY: BUSY_TEXT,
     AI_REFUSED: "이 질문에는 답할 수 없어요. 질문을 바꿔 다시 시도해 주세요. / I can't answer this question. Please rephrase and try again.",
     AI_RATE_LIMITED: "AI 서비스 요청이 많아 잠시 제한되었어요. 잠시 후 다시 시도해 주세요. / The AI service is rate-limited right now. Please try again shortly.",
     AI_KEY_MISSING: "AI 서비스 인증에 실패했어요. / AI service authentication failed.",
@@ -397,13 +401,27 @@ function showLimitWarning(data) {
 }
 
 function showChatError(status, error) {
+    // Vercel이 시간 초과로 끊으면 JSON 없이 504가 온다 — 이것도 '접속자가 많습니다'로 안내한다
+    if (!error?.code && [502, 503, 504].includes(status)) error = { code: "BUSY" };
     const msg = errorMessage(error, GENERIC_CHAT_ERROR);
     addStatusMessage("error", `${msg} (${error?.code || status})`);
 }
 
 // 답을 한 번에 받는 방식 — 스트리밍을 못 쓰는 브라우저·연결에서 쓴다
 async function sendMessageOnce(message, pending) {
-    const { ok, status, data } = await api("/api/chat", { method: "POST", body: JSON.stringify({ message }) });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CLIENT_TIMEOUT_MS);
+    let result;
+    try {
+        result = await api("/api/chat", { method: "POST", body: JSON.stringify({ message }), signal: controller.signal });
+    } catch (_) {
+        pending.remove();
+        showChatError(504, { code: "BUSY" });
+        return;
+    } finally {
+        clearTimeout(timer);
+    }
+    const { ok, status, data } = result;
     pending.remove();
     if (status === 401) { show(false); return; }
     if (!ok) { showChatError(status, data.error); return; }
@@ -414,6 +432,15 @@ async function sendMessageOnce(message, pending) {
 
 // 스트리밍: 검색이 끝나면 작품 카드부터 보여주고, 답변 글은 만들어지는 대로 이어 붙인다
 async function sendMessageStream(message, pending) {
+    // 30초 동안 아무것도 오지 않으면 끊고 '접속자가 많습니다'를 보여준다 (조각이 올 때마다 다시 잰다)
+    const controller = new AbortController();
+    let timedOut = false;
+    let timer = null;
+    const arm = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { timedOut = true; controller.abort(); }, CLIENT_TIMEOUT_MS);
+    };
+    arm();
     let res;
     try {
         res = await fetch("/api/chat/stream", {
@@ -421,12 +448,16 @@ async function sendMessageStream(message, pending) {
             headers: { "Content-Type": "application/json" },
             credentials: "same-origin",
             body: JSON.stringify({ message }),
+            signal: controller.signal,
         });
     } catch (_) {
+        clearTimeout(timer);
+        if (timedOut) { pending.remove(); showChatError(504, { code: "BUSY" }); return; }
         return sendMessageOnce(message, pending);   // 연결 자체가 안 되면 한 번에 받기로 다시 시도
     }
-    if (res.status === 401) { pending.remove(); show(false); return; }
+    if (res.status === 401) { clearTimeout(timer); pending.remove(); show(false); return; }
     if (!res.ok || !res.body) {
+        clearTimeout(timer);
         let data = {};
         try { data = await res.json(); } catch (_) { /* 본문 없음 */ }
         pending.remove();
@@ -459,6 +490,7 @@ async function sendMessageStream(message, pending) {
         for (;;) {
             const { value, done } = await reader.read();
             if (done) break;
+            arm();
             buffer += decoder.decode(value, { stream: true });
             let nl;
             while ((nl = buffer.indexOf("\n")) >= 0) {
@@ -468,10 +500,14 @@ async function sendMessageStream(message, pending) {
             }
         }
     } catch (_) {
+        clearTimeout(timer);
         pending.remove();
-        addStatusMessage("error", "답변을 받는 중 연결이 끊겼어요. 다시 시도해 주세요. / The connection dropped. Please try again.");
+        if (text && text.dataset.empty) text.closest(".message").remove();
+        if (timedOut) showChatError(504, { code: "BUSY" });
+        else addStatusMessage("error", "답변을 받는 중 연결이 끊겼어요. 다시 시도해 주세요. / The connection dropped. Please try again.");
         return;
     }
+    clearTimeout(timer);
     if (meta) showLimitWarning(meta); else pending.remove();
 }
 

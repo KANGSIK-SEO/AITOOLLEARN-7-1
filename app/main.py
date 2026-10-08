@@ -25,7 +25,8 @@ from . import art, auth, chat, db, explain, guardian, records, reqctx
 from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, CHAT_LIFETIME_LIMIT_FREE,
                      CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
                      CONTEXT_TURNS, CRON_SECRET, FREE_LIMIT_WARNING_THRESHOLD, BROWSE_LIMIT_PER_HOUR,
-                     BROWSE_PAGE_SIZE, RECORD_LIMIT_PER_HOUR, AIUnavailableError, validate_env)
+                     BROWSE_PAGE_SIZE, BUSY_MESSAGE, RECORD_LIMIT_PER_HOUR, TIMEOUT_SECONDS, AIUnavailableError,
+                     validate_env)
 
 reqctx.install()
 logging.basicConfig(level=logging.INFO, format=reqctx.LOG_FORMAT)
@@ -58,6 +59,7 @@ async def request_context(request: Request, call_next):
     - 처리 중 생긴 즉시 분석 요청과 접속 기록(1분마다 AI가 읽음)은 응답을 보낸 뒤에 남겨 사용자를 기다리게 하지 않는다"""
     started = time.monotonic()
     reqctx.set_request_id(reqctx.new_request_id())
+    reqctx.start_deadline(TIMEOUT_SECONDS)   # 이 요청은 25초 안에 끝낸다 — 바깥 호출은 남은 시간만큼만 기다린다
     pending = reqctx.start_pending()
     ip = guardian.client_ip(request)
     if await run_in_threadpool(guardian.is_blocked, ip):
@@ -78,14 +80,20 @@ async def request_context(request: Request, call_next):
     tasks = BackgroundTasks()
     if response.background is not None:
         tasks.tasks.append(response.background)
-    tasks.add_task(guardian.log_access, ip, request.method,
+    tasks.add_task(_after_response, guardian.log_access, ip, request.method,
                    request.url.path + (f"?{request.url.query}" if request.url.query else ""),
                    response.status_code, request.headers.get("user-agent", ""),
                    int((time.monotonic() - started) * 1000))
     if pending.get("triage"):
-        tasks.add_task(guardian.run_triage, pending["triage"])
+        tasks.add_task(_after_response, guardian.run_triage, pending["triage"])
     response.background = tasks
     return response
+
+
+def _after_response(fn, *args) -> None:
+    """응답을 보낸 뒤의 일은 사용자가 기다리지 않으므로 요청의 25초 마감에 묶지 않는다 (각 호출의 25초 상한은 그대로)."""
+    reqctx.clear_deadline()
+    fn(*args)
 
 
 STATUS_BY_CODE = {"AI_TIMEOUT": 504, "AI_ERROR": 502, "AI_RATE_LIMITED": 429,
@@ -114,6 +122,9 @@ async def validation_exc(_: Request, __: RequestValidationError):
 @app.exception_handler(db.DbError)
 async def db_exc(_: Request, exc: db.DbError):
     log.error("db_error detail=%s", exc)
+    if isinstance(exc, db.DbTimeout):   # 25초 안에 답이 없으면 '접속자가 많습니다'
+        guardian.record_incident("reliability", "DB_ERROR", str(exc), {"timeout": True}, "high")
+        return error(503, "BUSY", BUSY_MESSAGE)
     guardian.record_incident("reliability", "DB_ERROR", str(exc), {}, "high")
     return error(503, "DB_ERROR", "데이터베이스에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.")
 
@@ -656,7 +667,7 @@ def aic_image(image_id: str, w: int = 400, download: int = 0, request: Request =
         return error(400, "INVALID_IMAGE", "지원하지 않는 이미지 요청입니다.")
     req = urllib.request.Request(f"{AIC_IIIF}/{image_id}/full/{w},/0/default.jpg", headers={"AIC-User-Agent": AIC_UA, "User-Agent": "AITOOLLEARN-7-1/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
             body = resp.read()
     except urllib.error.HTTPError as e:
         log.warning("image_proxy_failure image_id=%s status=%s", image_id, e.code)

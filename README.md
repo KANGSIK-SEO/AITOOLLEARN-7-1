@@ -224,7 +224,7 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 | `UPSTAGE_API_KEY` (선택) | Upstage solar-pro4 키. Claude나 GPT가 소진·한도·인증 문제로 실패할 때 이어받는 비상용 |
 | `SECRET_KEY` | 세션 서명 키 (32자 이상 랜덤) |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | Turso DB. **없으면 로컬 `data/app.db` 사용** |
-| `LLM_TIMEOUT_SECONDS` | AI 호출 타임아웃(기본 20) |
+| `TIMEOUT_SECONDS` | **모든 타임아웃(기본 25초)** — 요청 하나도 25초 안에 끝내고, 넘으면 "죄송합니다. 접속자가 많습니다." (AI·Turso·이미지·아카이브·GitHub 공통. `LLM_TIMEOUT_SECONDS`, `LLM_CALL_BUDGET_SECONDS`로 AI만 따로 줄일 수 있음) |
 | `LLM_REASONING_EFFORT` | gpt-6-astra reasoning_effort (기본 low — 비용 보호) |
 | `CRON_SECRET` | 가디언 일일 점검(`/api/guardian/daily-digest`)을 Vercel Cron만 호출하게 막는 값 |
 | `GITHUB_TOKEN` (선택) | 긴급도 medium/high 사건 발생 시 GitHub 이슈 자동 생성 (issues:write) |

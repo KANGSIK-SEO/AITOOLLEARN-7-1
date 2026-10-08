@@ -83,10 +83,14 @@ def get_premium_code() -> str:
     return os.environ.get("PREMIUM_CODE", "")
 
 
-LLM_TIMEOUT_SECONDS = _env_number("LLM_TIMEOUT_SECONDS", "20", float, minimum=1)  # 요청 1회의 소켓 타임아웃
-# chat_completion 1번(재시도·폴백 포함)에 쓸 수 있는 총 시간. /api/chat은 AI를 2번(의도 추출, 답변) 부르고
-# Vercel 함수 최대 실행시간이 60초(vercel.json)이므로 2번 × 25초 + DB 여유가 그 안에 들어오게 잡았다.
-LLM_CALL_BUDGET_SECONDS = _env_number("LLM_CALL_BUDGET_SECONDS", "25", float, minimum=1)
+# 모든 바깥 호출(AI·DB·이미지·아카이브·GitHub)의 타임아웃은 25초로 통일한다. 요청 하나도 25초가 상한이라
+# (app/main.py 미들웨어가 reqctx에 마감 시각을 건다) AI를 두 번 불러도 사용자는 25초 넘게 기다리지 않는다.
+# 넘으면 BUSY_MESSAGE("죄송합니다. 접속자가 많습니다.")로 끝낸다.
+TIMEOUT_SECONDS = _env_number("TIMEOUT_SECONDS", "25", float, minimum=1)
+BUSY_MESSAGE = "죄송합니다. 접속자가 많습니다. 잠시 후 다시 시도해 주세요."
+LLM_TIMEOUT_SECONDS = _env_number("LLM_TIMEOUT_SECONDS", str(TIMEOUT_SECONDS), float, minimum=1)  # 요청 1회의 소켓 타임아웃
+# chat_completion 1번(재시도·폴백 포함)에 쓸 수 있는 총 시간 — 요청의 남은 시간이 더 짧으면 그쪽을 따른다
+LLM_CALL_BUDGET_SECONDS = _env_number("LLM_CALL_BUDGET_SECONDS", str(TIMEOUT_SECONDS), float, minimum=1)
 LLM_MAX_RETRIES = _env_number("LLM_MAX_RETRIES", "1", int, minimum=0)  # 일시 장애(5xx·연결 오류) 시 같은 제공자 재시도 횟수
 LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "low")  # low|medium|high|xhigh|max
 CHAT_MAX_LENGTH = 500          # 질문 최대 글자 수
