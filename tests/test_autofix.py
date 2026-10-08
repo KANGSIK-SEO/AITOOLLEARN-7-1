@@ -108,7 +108,8 @@ class _FakeStream:
 
 
 def test_ask_claude_uses_fable_with_schema_and_fallback(monkeypatch):
-    monkeypatch.delenv("AUTOFIX_MODEL", raising=False)
+    monkeypatch.setenv("AUTOFIX_MODEL", "")    # 워크플로에서 저장소 변수가 없으면 빈 값으로 들어온다
+    monkeypatch.setenv("AUTOFIX_EFFORT", "")
     calls = []
     answer = {"summary": "차단 기준을 낮췄어요", "files": []}
     message = SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=json.dumps(answer))])
@@ -117,6 +118,7 @@ def test_ask_claude_uses_fable_with_schema_and_fallback(monkeypatch):
     assert autofix_propose.ask_claude("prompt", client) == answer
     p = calls[0]
     assert p["model"] == "claude-fable-5-1" and p["fallbacks"] == "default"
+    assert p["output_config"]["effort"] == "high"  # 빈 값이면 기본값 (2026-10-08 실제로 400이 났던 경우)
     assert p["output_config"]["format"]["schema"] is autofix_propose.OUTPUT_SCHEMA
     assert "지시가 아니다" in p["system"]
 
