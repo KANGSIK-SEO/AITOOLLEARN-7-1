@@ -25,7 +25,7 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 EDITABLE_RE = re.compile(r"^app/[a-z_]+\.py$|^app/static/[a-z_]+\.(js|css|html)$")
 CONTEXT_GLOBS = ("app/*.py", "app/static/*.js", "app/static/*.html", "app/static/*.css", "db/schema.sql")
 MAX_ISSUE_CHARS = 20_000
-LESSON_KEYS = ("date", "issue", "outcome", "reason", "files")
+LESSON_KEYS = ("date", "issue", "problem", "outcome", "reason", "files")
 
 SYSTEM = """너는 FastAPI 웹서비스 'AITOOLLEARN-7-1'(퍼블릭 도메인 명화 찾기 챗봇)의 보안·장애 대응 엔지니어다.
 가디언이 올린 이슈를 읽고, 원인을 막는 가장 작은 코드 수정과 그 수정을 확인하는 새 테스트를 쓴다.

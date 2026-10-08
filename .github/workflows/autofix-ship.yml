@@ -144,9 +144,12 @@ jobs:
           elif [ "$ROLLBACK" = "success" ]; then outcome=rolled_back; reason="배포 후 사이트 이상 → 되돌림 (재배포: $REDEPLOY)"
           else outcome=ship_failed; reason="배포 또는 되돌리기 실패 — 사람 확인 필요"; fi
           num=$(gh issue list --label guardian-lessons --state all --json number --jq '.[0].number')
+          problem=""
+          [ -n "$issue" ] && problem=$(gh issue view "$issue" --json title --jq .title)
           if [ -n "$num" ]; then
             jq -nc --arg date "$(date -u +%F)" --arg issue "$issue" --arg outcome "$outcome" --arg reason "$reason" --arg files "$files" \
-              '{date:$date, issue:$issue, outcome:$outcome, reason:$reason, files:$files}' | gh issue comment "$num" --body-file -
+              --arg problem "$problem" \
+              '{date:$date, issue:$issue, problem:$problem, outcome:$outcome, reason:$reason, files:$files}' | gh issue comment "$num" --body-file -
           fi
           msg="🤖 자동 수정 결과: **$outcome** — $reason (PR #$PR)"
           gh pr comment "$PR" --body "$msg"

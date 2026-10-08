@@ -8,3 +8,4 @@
 ## [2026-10-08] ingest | 가디언 실시간 감시(IP 자동 차단, 즉시 분석, monitor.yml) — guardian 갱신
 ## [2026-10-08] ingest | 공격 주소 자동 학습, 가디언 자동 수정(autofix.yml·autofix-ship.yml, 승인 한 번) — guardian 갱신
 ## [2026-10-08] ingest | Claude 소진 시 solar-pro4가 바로 이어받도록 변경 — ai-llm 갱신
+## [2026-10-08] ingest | 고객 오류 첫 발생 즉시 진단, 자동 수정 제한을 문제별 6시간·하루 8번으로 — guardian 갱신

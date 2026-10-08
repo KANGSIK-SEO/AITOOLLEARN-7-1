@@ -212,7 +212,11 @@ LEARN_MAX = 500
 LEARN_DAYS = 30
 SAFE_PREFIXES = ("/api/", "/static/", "/records/", "/explain/", "/healthz", "/sw.js", "/favicon")
 ERROR_SPIKE = (10, 300)            # 장애 사건 10건 / 5분 → 즉시 분석
-TRIAGE_COOLDOWN_MINUTES = 10       # 즉시 분석은 10분에 한 번만 (AI 비용과 이슈 폭주 방지)
+TRIAGE_COOLDOWN_MINUTES = 30       # 같은 종류의 문제는 30분에 한 번만 진단 (AI 비용과 이슈 폭주 방지)
+TRIAGE_GAP_MINUTES = 2             # 서로 다른 문제라도 진단 사이에 최소 2분 (여러 문제가 한꺼번에 터질 때)
+# 고객이 직접 겪는 오류 — 한 번만 나도 바로 Claude가 진단한다 (같은 종류는 위 30분 규칙)
+CUSTOMER_IMPACT_CODES = {"AI_TIMEOUT", "AI_ERROR", "AI_RATE_LIMITED", "AI_KEY_MISSING", "AI_BACKED_OFF",
+                         "DB_ERROR", "ART_DB_ERROR", "SERVER_ERROR"}
 BLOCK_CACHE_SECONDS = 30           # 차단 목록은 서버마다 30초씩 기억해 요청마다 DB를 읽지 않는다
 
 _blocks: dict = {"source": None, "loaded_at": 0.0, "until": {}, "learned": set()}
@@ -319,7 +323,7 @@ def note_probe(ip: str, path: str) -> None:
 
 def _watch_incident(category: str, code: str, severity: str) -> None:
     """사건이 하나 기록될 때마다 부른다. 장애가 몰리거나 심각한 사건이면 즉시 분석을 요청한다."""
-    if severity == "high":
+    if severity == "high" or (category == "reliability" and code in CUSTOMER_IMPACT_CODES):
         request_triage(code)
     elif category == "reliability" and not check_rate("strike:errors:all", limit=ERROR_SPIKE[0] - 1,
                                                        window_seconds=ERROR_SPIKE[1]):
@@ -338,10 +342,12 @@ def request_triage(reason: str) -> None:
 def run_triage(reason: str) -> dict:
     """즉시 분석: 쌓인 사건을 AI로 진단하고 GitHub 이슈를 연다. AI가 안 되면 사건 목록만이라도 이슈로 올린다."""
     now = datetime.now(timezone.utc)
+    same_kind = f"triage_cooldown_until:{reason}"
     try:
-        if _flag_active_until("triage_cooldown_until"):
+        if _flag_active_until(same_kind) or _flag_active_until("triage_cooldown_until"):
             return {"skipped": "cooldown"}
-        _set_flag("triage_cooldown_until", (now + timedelta(minutes=TRIAGE_COOLDOWN_MINUTES)).isoformat())
+        _set_flag(same_kind, (now + timedelta(minutes=TRIAGE_COOLDOWN_MINUTES)).isoformat())
+        _set_flag("triage_cooldown_until", (now + timedelta(minutes=TRIAGE_GAP_MINUTES)).isoformat())
     except db.DbError as e:
         log.error("triage_flag_failure detail=%s", e)
         return {"skipped": "db_error"}
