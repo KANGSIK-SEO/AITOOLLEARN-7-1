@@ -43,6 +43,9 @@ function show(isLoggedIn, email, isPremium) {
     $("chat-panel").hidden = !isLoggedIn;
     $("logout-btn").hidden = !isLoggedIn;
     $("favorites-btn").hidden = !isLoggedIn;
+    // '본문으로 건너뛰기'는 지금 보이는 패널로 보낸다 (숨겨진 패널로 보내면 포커스가 움직이지 않는다)
+    const skip = $("skip-link");
+    if (skip) skip.setAttribute("href", isLoggedIn ? "#chat-panel" : "#auth-panel");
     if (isLoggedIn) loadFavorites(); else favorites.clear();
     $("status-bar").textContent = isLoggedIn
         ? `${email}${isPremium ? " · 초대코드 회원 / invite member" : ""}`

@@ -34,6 +34,9 @@
     <meta name="apple-mobile-web-app-title" content="명화 챗봇">
 </head>
 <body>
+    <!-- 키보드 사용자용 '본문으로 건너뛰기' — 헤더 버튼을 거치지 않고 바로 로그인 폼/채팅 입력으로 간다.
+         로그인 전에는 app.js의 show()가 href를 #auth-panel로 바꾼다 (숨겨진 패널로 보내지 않기 위해). -->
+    <a id="skip-link" class="skip-link" href="#chat-panel">본문으로 건너뛰기 / Skip to main content</a>
     <main class="chat-container" aria-label="명화 찾기 채팅 / Masterpiece finder chat">
         <header class="chat-header" role="banner">
             <div class="chat-title" role="heading" aria-level="1">🖼️ 저작권 걱정 없는 퍼블릭 도메인 명화 찾기<br><span class="chat-subtitle">Public Domain Masterpiece Finder</span></div>
@@ -48,7 +51,7 @@
             <button id="install-btn" class="pill install-btn">📲 앱으로 설치하기 / Install app</button>
         </div>
 
-        <section id="auth-panel" class="auth-panel" aria-label="로그인 및 회원가입 / Log in and sign up">
+        <section id="auth-panel" class="auth-panel" aria-label="로그인 및 회원가입 / Log in and sign up" tabindex="-1">
             <p class="hint">어디에 쓸지 말하면 용도에 맞는 CC0 명화를 찾고, 써도 되는지 확인한 근거를 날짜와 함께 기록해 드려요. / Tell us what it's for — we find CC0 masterpieces that fit and keep a dated record of the rights evidence.<br>(MET · Art Institute of Chicago · Cleveland Museum of Art 공개 데이터 / Open data)</p>
             <input type="email" id="email" aria-label="이메일 / Email" placeholder="이메일 / Email" autocomplete="username">
             <input type="password" id="password" aria-label="비밀번호 (8자 이상) / Password (8+ characters)" placeholder="비밀번호 (8자 이상) / Password (8+ characters)" autocomplete="current-password">
@@ -60,7 +63,7 @@
             <div id="auth-error" class="error-text" role="alert"></div>
         </section>
 
-        <section id="chat-panel" aria-label="명화 찾기 대화 / Masterpiece finder conversation" hidden>
+        <section id="chat-panel" aria-label="명화 찾기 대화 / Masterpiece finder conversation" tabindex="-1" hidden>
             <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions" aria-label="대화 내용 / Conversation">
                 <div class="message bot" role="article">안녕하세요! 어디에 쓸지 말해 주세요. 용도에 맞는 비율·분위기의 CC0 명화를 찾고, 써도 되는지 확인하는 수고를 대신해 드려요. 근거는 날짜와 함께 기록으로 보관해 드려요. / Tell me what it's for — I'll find CC0 masterpieces that fit, check the rights for you, and keep a dated record of the evidence.</div>
                 <div class="examples" id="examples" role="group" aria-label="예시 질문 / Example questions">
