@@ -15,7 +15,7 @@ import sys
 PROTECTED = (
     ".github/", "app/auth.py", "app/config.py", "app/db.py", "app/llm.py", "app/claude_llm.py",
     "requirements", "vercel.json", "index.py", "Dockerfile", "deploy/", ".env", "data/",
-    "scripts/autofix_", "CONTRIBUTING.md",
+    "scripts/autofix_", "scripts/quality_", "docs/review-checklist.md", "CONTRIBUTING.md",
 )
 # 새로 들어온 줄에 있으면 안 되는 것: 외부 통신, 명령 실행, 비밀 값 읽기, 코드 동적 실행
 FORBIDDEN = [

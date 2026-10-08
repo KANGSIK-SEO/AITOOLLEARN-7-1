@@ -309,6 +309,8 @@ GitHub Actions 배포를 구현했다. 모든 변경은 PR로 리뷰 후 병합�
   **Approve**하면 `autofix-ship.yml`이 다시 검사 → main 병합 → Vercel 배포 → `/healthz` 확인, 이상하면 자동으로 되돌리고 재배포한다.
   결과(배포·되돌림·검사 거부)는 "학습 기록" 이슈에 정해진 칸으로 남고, 다음 수정안을 만들 때 AI가 참고한다.
   필요: GitHub secrets `ANTHROPIC_API_KEY`. 끄기: Repository variables `AUTOFIX_ENABLED=false`. 중복 방지: 같은 문제는 10분에 한 번, 같은 문제의 수정 PR이 열려 있으면 건너뜀, 하루 총횟수 제한 없음(`AUTOFIX_SAME_PROBLEM_MINUTES`, `AUTOFIX_DAILY_MAX`로 조정).
+- **품질 자동 점검(매일, `.github/workflows/quality-review.yml`)**: `docs/review-checklist.md`의 평가 질문(서비스 이해·기술 스택·확장성·캐시·외부 의존성·로깅·보안·UX·비동기·접근성·코드 품질·LLM)마다 Claude(`claude-haiku-5-5`)가 코드·운영 사이트 응답 헤더·최근 24시간 운영 요약(`/api/guardian/summary`)을 보고 ok/fix/manual로 판정해 '[품질 점검] 체크리스트 보고서' 이슈를 갱신한다. 코드로 고칠 수 있는 항목은 `[품질]` 이슈 → 자동 수정 PR(Fable, 승인 필요), 한 번에 3개까지(`QUALITY_MAX_FIXES`).
+- **서버 용량 경보**: 1분 점검(`scan`)이 최근 5분 요청의 30% 이상이 8초를 넘기거나 502·503·504면 `[용량]` 이슈(6시간에 한 번)를 연다. 코드로 못 고치는 일이라 자동 수정 대상이 아니며, Vercel Usage를 보고 플랜을 올릴지 사람이 정한다.
 - **배치(1일 1회, Vercel Cron → `/api/guardian/daily-digest`, `CRON_SECRET`으로 보호)**: 그동안 쌓인
   `incidents`를 한 번에 gpt-6-astra에 보내 "무슨 일이 있었는지 / 반복·증가 추세가 있는지 / 다음에
   뭐가 터질 수 있는지"를 진단하고, 긴급도가 medium/high면 GitHub 이슈를 자동으로 연다.
