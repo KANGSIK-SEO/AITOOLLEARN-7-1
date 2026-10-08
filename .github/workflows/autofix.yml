@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
-      issues: read
+      issues: write   # 시작하면서 '이 문제를 맡았다'는 기록을 남긴다 (같은 문제의 동시 실행 방지)
     outputs:
       go: ${{ steps.check.outputs.go }}
     steps:
@@ -67,7 +67,7 @@ jobs:
             gh api "repos/$GH_REPO/issues/$lessons/comments" --paginate \
               --jq ".[] | select(.user.login == \"github-actions[bot]\" and .created_at >= \"$day\") | {at: .created_at, body: .body}" > recent.jsonl
           fi
-          attempts=$(jq -s '[.[] | (.body | fromjson? // {}) | select(.outcome and .outcome != "deployed" and .outcome != "rolled_back" and .outcome != "ship_failed" and .outcome != "rejected_at_ship")] | length' recent.jsonl)
+          attempts=$(jq -s '[.[] | (.body | fromjson? // {}) | select(.outcome and .outcome != "started" and .outcome != "deployed" and .outcome != "rolled_back" and .outcome != "ship_failed" and .outcome != "rejected_at_ship")] | length' recent.jsonl)
           same=$(jq -s --arg k "$pkey" --arg since "$same_since" \
             "$KEY"' [.[] | select(.at >= $since) | (.body | fromjson? // {}) | select(.problem and (.problem | key) == $k)] | length' recent.jsonl)
           # 스스로 배우기: 같은 문제를 24시간 안에 '코드로 고칠 일 아님(no_change)'으로 끝냈으면 다시 Fable을 부르지 않는다
@@ -77,6 +77,13 @@ jobs:
           if [ "$same" -gt 0 ]; then echo "::notice::같은 문제를 최근에 이미 시도해 건너뜁니다: $problem"; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
           if [ "$learned" -gt 0 ]; then echo "::notice::같은 문제가 24시간 안에 '코드로 고칠 일 아님'으로 끝나 Fable을 다시 부르지 않습니다: $problem"; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
           if [ "$DAILY_MAX" -gt 0 ] && [ "$attempts" -ge "$DAILY_MAX" ]; then echo "::notice::오늘 자동 수정 상한(${DAILY_MAX}회)에 도달해 건너뜁니다."; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
+          # 맡았다는 기록을 바로 남긴다 — 1~2분 뒤 같은 문제로 열린 이슈의 실행은 위 '같은 문제 최근 10분' 검사에서 쉰다
+          # (2026-10-09 같은 장애 이슈 3개가 각각 Fable을 돌려 PR이 3개 생긴 일 이후)
+          if [ -n "$lessons" ]; then
+            jq -nc --arg date "$(date -u +%F)" --arg issue "$ISSUE" --arg problem "$problem" \
+              '{date:$date, issue:$issue, problem:$problem, outcome:"started", reason:"수정안 만들기 시작", files:""}' \
+              | gh issue comment "$lessons" --body-file - >/dev/null || echo "::warning::시작 기록을 남기지 못했습니다."
+          fi
           echo go=true >> "$GITHUB_OUTPUT"
 
   propose:

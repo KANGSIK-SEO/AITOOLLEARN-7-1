@@ -293,7 +293,8 @@ def guardian_scan(request: Request):
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
     checks = _dependency_checks()
     result = guardian.scan()
-    healthy = all(c["status"] == "ok" for c in checks.values()) and result["ai"]["status"] == "ok"
+    healthy = (all(c["status"] == "ok" for c in checks.values()) and result["ai"].get("status") == "ok"
+               and not result["failed_steps"])
     return JSONResponse({"status": "ok" if healthy else "degraded", "checks": checks, **result},
                         status_code=200 if healthy else 503, headers={"Cache-Control": "no-store"})
 
