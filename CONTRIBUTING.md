@@ -10,6 +10,8 @@
 3. 작은 단위로 커밋 (팀원별 **유의미한 커밋 10회 이상**이 과제 조건입니다). 커밋 메시지는 `feat:`, `fix:`, `docs:`, `test:` 로 시작.
 4. `git push -u origin <브랜치>` 후 GitHub에서 PR 생성 — **base가 `develop`인지 확인**.
 5. 유지관리자가 리뷰하고 머지합니다. `develop`/`main`에 직접 push하지 않습니다.
+   예외: 가디언 자동 수정(`autofix` 라벨 PR)은 장애 대응용 핫픽스라 `main`으로 바로 올라오고, 유지관리자가 **Approve**하면
+   워크플로가 합치고 배포합니다(배포 후 이상하면 워크플로가 `main`에 되돌리기 커밋을 바로 넣습니다). 합친 뒤 `main → develop` PR로 develop에도 반영됩니다.
    **머지 방식은 반드시 "Create a merge commit"입니다. "Squash and merge"는 쓰지 않습니다** — squash는 PR 안의 커밋 여러 개를 1개로 합쳐버려서, 팀원별 "유의미한 커밋 10회 이상" 요건이 develop 이력에서 사라집니다.
 
 ## 로컬 실행·테스트

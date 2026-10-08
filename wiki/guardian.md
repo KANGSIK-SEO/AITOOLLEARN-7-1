@@ -1,11 +1,49 @@
 ---
 title: 가디언 (장애·보안 감시)
-sources: [app/guardian.py, vercel.json, CONTRIBUTING.md]
-updated: 2026-10-07
+sources: [app/guardian.py, app/main.py, vercel.json, .github/workflows/monitor.yml, .github/workflows/autofix.yml, .github/workflows/autofix-ship.yml, scripts/autofix_guard.py, scripts/autofix_propose.py, CONTRIBUTING.md]
+updated: 2026-10-08
 ---
 # 가디언
 
-장애와 보안 위협을 함께 지키는 모듈 (`app/guardian.py`). **두 단계**로 나뉜다.
+장애와 보안 위협을 함께 지키는 모듈 (`app/guardian.py`). 2026-10-08부터 **실시간 감시**가 더해졌다.
+
+## 0) 실시간 감시 — 사건이 생기는 순간
+
+| 무엇을 보면 | 바로 하는 일 |
+|---|---|
+| 공격 도구가 찾는 경로(`/.env`, `/wp-admin` 등) 3번 (10분 안) | 그 IP **1시간 차단** (모든 요청 403) |
+| 악성 입력 3번 (10분 안) | 그 IP 1시간 차단 |
+| 한 IP에서 로그인 실패 10번 (여러 계정 돌려 보기) | 그 IP 1시간 차단 |
+| 장애 사건 5분에 10건, 또는 심각(high) 사건 | **즉시 AI 진단 + GitHub 이슈** (10분에 한 번) |
+| 서버가 통째로 안 뜸 | `monitor.yml`이 5분마다 확인 → `outage` 이슈, 회복되면 닫음 |
+
+- 차단은 시간이 지나면 저절로 풀린다. 회사처럼 여러 사람이 IP 하나를 쓰면 같이 막힐 수 있어서 1시간으로 짧게 잡았다.
+- 차단 목록은 서버마다 30초씩 기억해서, 요청마다 DB를 읽지 않는다 (`BLOCK_CACHE_SECONDS`).
+- 즉시 분석은 응답을 보낸 뒤에 돌아서 사용자를 기다리게 하지 않는다 (`app/main.py` 미들웨어).
+- AI가 장애 원인일 수도 있어서, AI 진단이 실패해도 사건 종류별 건수로 이슈를 연다.
+- IP는 Vercel이 직접 채우는 헤더(`x-vercel-forwarded-for`)를 먼저 본다. 사용자가 꾸민 헤더로 남의 IP를 차단시키지 못하게 하기 위해서다.
+
+## 0-1) 스스로 배우기와 자동 수정 (승인 한 번)
+
+```
+공격·장애 ─▶ 가디언: 즉시 차단 + 이슈 ─▶ autofix.yml: Claude가 수정안·테스트 작성
+                                              │ (비밀 값 없는 곳에서) 안전 검사 + 전체 테스트
+                                              ▼
+              휴대폰 알림 ◀─ PR (주인에게 리뷰 요청) ─▶ Approve
+                                              ▼
+              autofix-ship.yml: 다시 검사 → main 병합 → Vercel 배포 → /healthz 확인
+                                              │ 이상하면 되돌리기 + 재배포
+                                              ▼
+                              결과를 '학습 기록' 이슈에 남김 → 다음 수정안이 참고
+```
+
+- **데이터로 배우기 (승인 없음)**: 없는 주소를 15번 찾은 스캐너는 차단되고, 그 IP가 찾던 주소는 30일 동안 공격 경로로 기억한다 (`learn_paths_from`). `/api/`, `/static/` 같은 진짜 경로는 배우지 않는다.
+- **코드로 고치기 (승인 필요)**: AI는 파일 내용만 돌려주고, 허용된 파일과 새 테스트(`tests/test_autofix_*.py`)에만 써진다 (`scripts/autofix_propose.py`).
+- **사람 대신 기계가 먼저 거르는 것** (`scripts/autofix_guard.py`): 보호 파일(인증·비밀 키·DB·배포·검사 규칙 자신), 외부 통신, 명령 실행, 환경변수 읽기, eval/exec, 삭제, 기존 테스트 수정, 400줄 넘는 변경, 새 테스트 없음.
+- **왜 승인 한 번은 남겼나**: 로그에는 공격자가 쓴 글이 섞인다. AI가 속아도 마지막에 사람이 한 번 보게 하려는 것이다. 완전 자동은 이 작업 환경의 보안 장치도 막았다.
+- 학습 기록 이슈에는 워크플로가 정해진 칸(날짜·이슈·결과·이유·파일)만 남기고, AI는 봇이 쓴 댓글만 읽는다.
+
+이하 두 단계는 원래 있던 구조다.
 
 ## 1) 즉시 대응 — 매 요청, 규칙만 (AI 안 씀)
 

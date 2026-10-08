@@ -6,6 +6,12 @@ name: deploy
 on:
   push:
     branches: [main]
+  # 가디언 자동 수정(autofix-ship.yml)이 승인된 수정을 합친 뒤 부른다 — 봇이 합친 push는 위 push 이벤트를 깨우지 않는다
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: main
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -20,6 +26,8 @@ jobs:
       VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE || secrets.VERCEL_SCOPE }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - name: Check settings (값은 출력하지 않는다)
         run: |
           echo "VERCEL_TOKEN 시크릿: $([ -n "$VERCEL_TOKEN" ] && echo '있음' || echo '없음 — Repository secrets에 VERCEL_TOKEN 이름으로 넣어야 함')"

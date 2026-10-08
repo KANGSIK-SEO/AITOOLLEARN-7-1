@@ -34,7 +34,7 @@
 - `app/auth.py` — **문지기.** 비밀번호 해시(scrypt)와 로그인 쿠키(HMAC 서명) 검증. 초대코드(프리미엄) 여부도 이 쿠키에 담긴다. 서버에 세션을 저장하지 않음.
 - `app/chat.py` — **지휘자.** "질문 → 검색조건 추출 → 검색 → 답변 생성" 파이프라인을 순서대로 지휘.
 - `app/art.py` — **검색엔진.** `data/art.db`에서 SQLite FTS5로 작품을 찾음. AI 호출 없이 순수 DB 검색. 상위 2개(`GUARANTEED_TOP`)는 관련도순 고정, 나머지는 후보 풀에서 무작위로 섞어 같은 질문이라도 항상 똑같은 작품만 나오지 않게 한다.
-- `app/llm.py` — **AI 통신창구.** OpenAI `gpt-6-astra`를 실제로 호출하는 유일한 곳(429/401/403이면 Upstage `solar-pro4`로 비상 폴백). 타임아웃·에러를 통일된 형태로 반환.
+- `app/llm.py` — **AI 통신창구.** `ANTHROPIC_API_KEY`가 있으면 Claude(`app/claude_llm.py`, 기본 `claude-fable-5-1`)를 먼저 쓰고, 실패하면 OpenAI `gpt-6-astra` → Upstage `solar-pro4` 순서로 넘어간다. 답변을 조각조각 받는 스트리밍(`stream_completion`)도 여기서 고른다. 타임아웃·에러를 통일된 형태로 반환.
 - `app/db.py` — **저장소.** 사용자·대화 로그·가디언 사건 저장(로컬 SQLite 또는 Turso 자동 선택).
 - `app/config.py` — **규칙집.** 사용 모델(gpt-6-astra/폴백 solar-pro4)·초대코드·요금제 상한 등 설정을 고정.
 - `app/guardian.py` — **가디언.** 장애·보안 사건을 즉시 기록·대응(잠금, AI 백오프, 악성 입력 차단)하고, 1일 1회 gpt-6-astra로 일괄 분석·GitHub 이슈까지 생성.
@@ -82,6 +82,7 @@
 | POST | `/api/auth/logout` | 쿠키 삭제 → `{"ok": true}` |
 | GET | `/api/me` | **로그인 필요**. 현재 사용자 |
 | POST | `/api/chat` | **로그인 필요**. 질문 → 답변(한국어+영어) + 작품 카드 + 남은 무료 횟수 |
+| POST | `/api/chat/stream` | **로그인 필요**. 같은 일을 한 줄씩(NDJSON) 보낸다: `meta`(작품 카드·검색 조건, 검색이 끝나자마자) → `delta`(답변 글 조각) → `done`(저장 결과) 또는 `error`. 웹 화면은 이걸 쓰고, 안 되면 `/api/chat`으로 다시 시도 |
 | GET | `/api/me/chats?limit=20&offset=0` | **로그인 필요**. 내 대화 로그 (최신순, `limit` 1~100) |
 | POST | `/api/favorites` | **로그인 필요**. `{artwork_id}` 작품 즐겨찾기 저장 (상세: `docs/track-c.md`) |
 | DELETE | `/api/favorites/{artwork_id}` | **로그인 필요**. 즐겨찾기 해제 |
@@ -217,7 +218,9 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 
 | 이름 | 설명 |
 |---|---|
-| `GPT_ASTRA_API_KEY` | OpenAI gpt-6-astra 키 (주 모델) |
+| `ANTHROPIC_API_KEY` (선택) | Claude API 키. **있으면 Claude가 주 모델**이 되고, 한도·인증·통신 문제로 실패하면 GPT로 넘어간다 (`app/claude_llm.py`) |
+| `CLAUDE_MODEL`, `CLAUDE_INTENT_MODEL`, `CLAUDE_EFFORT` (선택) | 답변 모델(기본 `claude-fable-5-1`), 검색 조건 뽑기 모델(기본 같은 모델), 생각 깊이(기본 `low`) |
+| `GPT_ASTRA_API_KEY` | OpenAI gpt-6-astra 키 (Claude 키가 없을 때 주 모델, 있을 때는 대체 모델) |
 | `UPSTAGE_API_KEY` (선택) | Upstage solar-pro4 키. GPT 쪽이 429/401/403일 때만 비상 폴백으로 사용 |
 | `SECRET_KEY` | 세션 서명 키 (32자 이상 랜덤) |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | Turso DB. **없으면 로컬 `data/app.db` 사용** |
@@ -293,6 +296,18 @@ GitHub Actions 배포를 구현했다. 모든 변경은 PR로 리뷰 후 병합�
 - **즉시(매 요청, GPT 미사용)**: 로그인 5회 실패 시 15분 잠금, AI 429가 5분 내 3회면 5분 백오프,
   `<script>`/`UNION SELECT` 등 명백한 악성 입력 차단, 가입/로그인/이미지 프록시 IP 레이트리밋.
   요청마다 GPT를 부르면 공격자가 실패 요청을 반복시켜 AI 비용 자체를 디도스 벡터로 쓸 수 있어 피한다.
+- **실시간 감시(2026-10-08)**: 사건이 기록되는 순간 판단하고, 되돌리기 쉬운 조치는 바로 한다.
+  - 공격 도구가 찾는 경로(`/.env`, `/wp-admin` 등) 3회 / 악성 입력 3회 / 한 IP 로그인 실패 10회(10분 안) → **그 IP 1시간 차단**(403, 시간이 지나면 저절로 풀림)
+  - 장애 사건 5분에 10건, 또는 심각(high) 사건 → **즉시 AI 진단 + GitHub 이슈**(응답을 보낸 뒤 실행, 10분에 한 번). AI가 안 되면 사건 건수만이라도 이슈로 올린다
+  - 처리 못 한 서버 오류도 `SERVER_ERROR` 사건으로 남겨 감시에 걸린다
+  - 바깥 눈: `.github/workflows/monitor.yml`이 5분마다 `/healthz`를 확인해 두 번 연속 실패하면 `outage` 이슈를 열고, 회복되면 닫는다. `CRON_SECRET` 시크릿이 있으면 `/api/guardian/scan`으로 요청이 없을 때도 최근 사건을 훑는다
+- **스스로 배우기**: 없는 주소를 15번 찾다 차단된 스캐너가 두드린 주소는 30일 동안 공격 경로로 기억해, 다음 공격자는 처음부터 공격 경로 규칙에 걸린다 (코드 수정 없이 데이터로 진화, 최대 500개).
+- **자동 수정안 + 승인 한 번**: 가디언·`monitor.yml`이 연 이슈를 `autofix.yml`이 받아 Claude(기본 `claude-fable-5-1`)가 수정 코드와 새 테스트를 쓴다.
+  비밀 값이 없는 곳에서 안전 검사(`scripts/autofix_guard.py`: 보호 파일·외부 통신·명령 실행·비밀 값 읽기·기존 테스트 수정 금지)와
+  전체 테스트를 통과한 것만 PR로 올리고 저장소 주인에게 리뷰를 요청한다(GitHub 앱 푸시 알림).
+  **Approve**하면 `autofix-ship.yml`이 다시 검사 → main 병합 → Vercel 배포 → `/healthz` 확인, 이상하면 자동으로 되돌리고 재배포한다.
+  결과(배포·되돌림·검사 거부)는 "학습 기록" 이슈에 정해진 칸으로 남고, 다음 수정안을 만들 때 AI가 참고한다.
+  필요: GitHub secrets `ANTHROPIC_API_KEY`. 끄기: Repository variables `AUTOFIX_ENABLED=false`. 비용 보호: 자동 수정 PR은 6시간에 하나.
 - **배치(1일 1회, Vercel Cron → `/api/guardian/daily-digest`, `CRON_SECRET`으로 보호)**: 그동안 쌓인
   `incidents`를 한 번에 gpt-6-astra에 보내 "무슨 일이 있었는지 / 반복·증가 추세가 있는지 / 다음에
   뭐가 터질 수 있는지"를 진단하고, 긴급도가 medium/high면 GitHub 이슈를 자동으로 연다.

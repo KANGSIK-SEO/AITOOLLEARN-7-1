@@ -1,0 +1,227 @@
+# 가디언 자동 수정 ① — 수정안 만들기.
+# 가디언(서버)이나 monitor.yml이 장애·공격 이슈를 열면 Claude가 코드 수정안과 테스트를 쓰고,
+# 비밀 값이 없는 곳에서 안전 검사(scripts/autofix_guard.py)와 전체 테스트를 돌린 뒤 통과한 것만 PR로 올린다.
+# PR은 저장소 주인에게 리뷰를 요청한다 → GitHub 앱 푸시 알림 → 승인하면 autofix-ship.yml이 배포까지 한다.
+#
+# 필요: Repository secrets 의 ANTHROPIC_API_KEY. 끄기: Repository variables 에 AUTOFIX_ENABLED=false.
+# 비용 보호: 자동 수정 PR은 6시간에 하나까지.
+name: autofix
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "수정할 가디언 이슈 번호"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: autofix
+  cancel-in-progress: false
+
+env:
+  GH_REPO: ${{ github.repository }}
+  ISSUE: ${{ github.event.issue.number || inputs.issue }}
+
+jobs:
+  gate:
+    if: >-
+      vars.AUTOFIX_ENABLED != 'false' &&
+      (github.event_name == 'workflow_dispatch' ||
+       contains(github.event.issue.labels.*.name, 'guardian') ||
+       contains(github.event.issue.labels.*.name, 'outage'))
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          if [ "$HAS_KEY" != "true" ]; then echo "::warning::ANTHROPIC_API_KEY 시크릿이 없어 자동 수정을 건너뜁니다."; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
+          since=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          recent=$(gh pr list --label autofix --state all --search "created:>=$since" --json number --jq length)
+          if [ "${recent:-0}" -gt 0 ]; then echo "::notice::최근 6시간 안에 자동 수정 PR이 있어 건너뜁니다."; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo go=true >> "$GITHUB_OUTPUT"
+
+  propose:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false   # 이 단계에는 저장소에 쓸 권한을 남기지 않는다
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q -r requirements.txt
+      - name: Read the issue and past lessons
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue view "$ISSUE" --json title,body > "$RUNNER_TEMP/issue.json"
+          lessons=$(gh issue list --label guardian-lessons --state all --json number --jq '.[0].number')
+          : > "$RUNNER_TEMP/lessons.txt"
+          if [ -n "$lessons" ]; then
+            # 워크플로(봇)가 남긴 댓글만 읽는다 — 다른 사람이 쓴 글이 AI에게 들어가지 않게
+            gh api "repos/$GH_REPO/issues/$lessons/comments" --paginate \
+              --jq '.[] | select(.user.login == "github-actions[bot]") | .body' > "$RUNNER_TEMP/lessons.txt"
+          fi
+          python3 -c "import json,sys; rows=[]
+          for line in open(sys.argv[1], encoding='utf-8'):
+              try: rows.append(json.loads(line))
+              except ValueError: pass
+          json.dump(rows, open(sys.argv[2], 'w', encoding='utf-8'), ensure_ascii=False)" "$RUNNER_TEMP/lessons.txt" "$RUNNER_TEMP/lessons.json"
+      - name: Ask Claude for a fix
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AUTOFIX_MODEL: ${{ vars.AUTOFIX_MODEL }}
+          AUTOFIX_EFFORT: ${{ vars.AUTOFIX_EFFORT }}
+        run: python3 scripts/autofix_propose.py "$RUNNER_TEMP/issue.json" "$RUNNER_TEMP/lessons.json" summary.md
+      - name: Save the change as a patch
+        run: |
+          mkdir -p out
+          git add -A -- app tests
+          git diff --cached --binary main > out/autofix.patch || true
+          mv summary.md out/summary.md
+          echo "바뀐 줄: $(grep -c '^[+-]' out/autofix.patch || true)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: autofix
+          path: out/
+
+  verify:
+    needs: propose
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read   # 비밀 값 없음 — AI가 쓴 코드는 여기서만 실행된다
+    outputs:
+      empty: ${{ steps.apply.outputs.empty }}
+      guard: ${{ steps.guard.outcome }}
+      tests: ${{ steps.tests.outcome }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: autofix
+          path: ${{ runner.temp }}/autofix
+      - id: apply
+        run: |
+          if [ ! -s "$RUNNER_TEMP/autofix/autofix.patch" ]; then echo empty=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          git apply --index "$RUNNER_TEMP/autofix/autofix.patch"
+          echo empty=false >> "$GITHUB_OUTPUT"
+      - id: guard
+        if: steps.apply.outputs.empty == 'false'
+        continue-on-error: true
+        run: python3 scripts/autofix_guard.py HEAD | tee "$RUNNER_TEMP/autofix/guard.txt"; exit ${PIPESTATUS[0]}
+        shell: bash
+      - id: tests
+        if: steps.apply.outputs.empty == 'false'
+        continue-on-error: true
+        shell: bash
+        run: |
+          pip install -q -r requirements-dev.txt
+          python -m pytest -q tests 2>&1 | tail -30 | tee "$RUNNER_TEMP/autofix/tests.txt"; exit ${PIPESTATUS[0]}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: autofix-checked
+          path: ${{ runner.temp }}/autofix/
+
+  report:
+    needs: [propose, verify]
+    if: always() && needs.propose.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/download-artifact@v4
+        with:
+          name: autofix-checked
+          path: ${{ runner.temp }}/autofix
+      - name: Open the PR or record why not
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EMPTY: ${{ needs.verify.outputs.empty }}
+          GUARD: ${{ needs.verify.outputs.guard }}
+          TESTS: ${{ needs.verify.outputs.tests }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          D="$RUNNER_TEMP/autofix"
+          lesson() {   # 정해진 칸만 JSON 한 줄로 남긴다 → 다음 자동 수정이 참고한다
+            num=$(gh issue list --label guardian-lessons --state all --json number --jq '.[0].number')
+            if [ -z "$num" ]; then
+              gh label create guardian-lessons --color 5319E7 --force >/dev/null
+              num=$(gh issue create --label guardian-lessons --title "[가디언] 자동 수정 학습 기록" \
+                --body "자동 수정이 끝날 때마다 결과를 한 줄씩 남깁니다. 다음 수정안을 만들 때 AI가 참고합니다." | grep -o '[0-9]*$')
+            fi
+            jq -nc --arg date "$(date -u +%F)" --arg issue "$ISSUE" --arg outcome "$1" --arg reason "$2" --arg files "$3" \
+              '{date:$date, issue:$issue, outcome:$outcome, reason:$reason, files:$files}' | gh issue comment "$num" --body-file -
+          }
+          summary=$(cat "$D/summary.md" 2>/dev/null || echo "(요약 없음)")
+          if [ "$EMPTY" = "true" ]; then
+            gh issue comment "$ISSUE" --body "🤖 자동 수정: 코드로 고칠 일이 아니라고 판단했어요.
+
+          $summary"
+            lesson no_change "$(echo "$summary" | head -c 280)" ""
+            exit 0
+          fi
+          files=$(grep '^+++ b/' "$D/autofix.patch" | sed 's|^+++ b/||' | tr '\n' ' ')
+          if [ "$GUARD" != "success" ] || [ "$TESTS" != "success" ]; then
+            why=$([ "$GUARD" != "success" ] && echo "안전 검사 실패: $(grep '^✗' "$D/guard.txt" | head -5 | tr '\n' ' ')" || echo "테스트 실패")
+            gh issue comment "$ISSUE" --body "🤖 자동 수정안을 만들었지만 올리지 않았어요 — $why"
+            lesson "$([ "$GUARD" != "success" ] && echo rejected_by_guard || echo tests_failed)" "$(echo "$why" | head -c 280)" "$files"
+            exit 0
+          fi
+          branch="autofix/issue-$ISSUE-$GITHUB_RUN_ID"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git apply --index "$D/autofix.patch"
+          git commit -q -m "fix: 가디언 자동 수정안 (이슈 #$ISSUE)"
+          git push -q origin "$branch"
+          gh label create autofix --color FBCA04 --description "가디언 자동 수정안 — 승인하면 자동 배포" --force >/dev/null
+          body="## 🤖 가디언 자동 수정안 (이슈 #$ISSUE)
+
+          $summary
+
+          ## 기계 검사 결과
+          - 안전 검사 (\`scripts/autofix_guard.py\`): 통과
+          - 전체 테스트: 통과
+          \`\`\`
+          $(tail -3 "$D/tests.txt")
+          \`\`\`
+
+          ## 승인하면
+          **Approve**를 누르면 main에 합치고 Vercel에 배포한 뒤, 사이트 상태(/healthz)를 확인합니다.
+          문제가 생기면 자동으로 되돌리고 다시 배포합니다. 이상하면 승인하지 말고 PR을 닫으세요.
+
+          <!-- autofix-issue: $ISSUE -->"
+          gh pr create --base main --head "$branch" --label autofix --reviewer "$OWNER" \
+            --title "[자동 수정] 가디언 이슈 #$ISSUE" --body "$body"
+          lesson proposed "PR 생성, 승인 대기" "$files"

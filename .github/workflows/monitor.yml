@@ -1,0 +1,69 @@
+# 실시간 감시의 바깥 눈: 5분마다 운영 사이트를 확인한다 (서버가 통째로 죽으면 서버 안의 가디언은 알릴 수 없다).
+# 1) /healthz가 두 번 연속 실패하면 'outage' 이슈를 연다 (이미 열려 있으면 댓글). 회복되면 이슈를 닫는다.
+# 2) CRON_SECRET 시크릿이 있으면 /api/guardian/scan을 불러, 요청이 없을 때도 최근 사건을 훑게 한다.
+# 공개 저장소라 GitHub Actions 실행 시간은 무료다. 예약 실행은 GitHub 사정으로 몇 분 늦을 수 있다.
+name: monitor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  actions: write   # 장애 이슈를 열면 가디언 자동 수정(autofix.yml)을 깨운다
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SITE_URL: ${{ vars.SITE_URL || 'https://art-chatbot-eight.vercel.app' }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Health check
+        id: health
+        run: |
+          ok=false
+          for attempt in 1 2; do
+            code=$(curl -s -o body.json -w '%{http_code}' --max-time 20 "$SITE_URL/healthz" || echo 000)
+            echo "attempt $attempt: HTTP $code $(head -c 300 body.json 2>/dev/null)"
+            if [ "$code" = "200" ]; then ok=true; break; fi
+            sleep 30
+          done
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update outage issue
+        if: steps.health.outputs.ok != 'true'
+        run: |
+          gh label create outage --color B60205 --description "운영 사이트 장애 (monitor.yml)" --force >/dev/null
+          open=$(gh issue list --label outage --state open --json number --jq '.[0].number')
+          msg="$(date -u '+%Y-%m-%d %H:%M UTC') /healthz 응답 HTTP ${{ steps.health.outputs.code }} — 두 번 연속 실패"
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "$msg"
+          else
+            url=$(gh issue create --label outage --title "[감시] 운영 사이트 장애" \
+              --body "$msg. Vercel 대시보드의 Logs와 Deployments를 확인하세요. 회복되면 이 이슈는 자동으로 닫힙니다.")
+            # 이 워크플로가 연 이슈는 다른 워크플로를 깨우지 않아서, 자동 수정은 직접 부른다
+            gh workflow run autofix.yml -f issue="${url##*/}" || echo "::warning::자동 수정 워크플로를 부르지 못했습니다."
+          fi
+          exit 1
+
+      - name: Close outage issue after recovery
+        if: steps.health.outputs.ok == 'true'
+        run: |
+          for n in $(gh issue list --label outage --state open --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "$(date -u '+%Y-%m-%d %H:%M UTC') 회복 확인 (/healthz 200)"
+          done
+
+      - name: Guardian scan
+        if: steps.health.outputs.ok == 'true' && env.CRON_SECRET != ''
+        run: |
+          curl -sS --fail-with-body --max-time 50 -X POST -H "Authorization: Bearer $CRON_SECRET" "$SITE_URL/api/guardian/scan"
