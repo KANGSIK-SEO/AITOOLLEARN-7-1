@@ -64,12 +64,20 @@ def fake_claude(monkeypatch):
     return messages
 
 
-def test_default_is_fable_low_effort_with_server_fallback(fake_claude):
+def test_default_is_cheapest_haiku_without_effort(fake_claude):
     out = llm.chat_completion([{"role": "system", "content": "규칙"}, {"role": "user", "content": "질문"}])
     assert out == "[1] 봄 풍경"
     p = fake_claude.calls[0]
-    assert p["model"] == "claude-fable-5-1" and p["output_config"] == {"effort": "low"}
+    assert p["model"] == "claude-haiku-5-5" and "output_config" not in p
     assert p["system"] == "규칙" and p["messages"] == [{"role": "user", "content": "질문"}]
+    assert "fallbacks" not in p and "betas" not in p  # Haiku에는 서버 폴백이 없다
+
+
+def test_fable_gets_low_effort_with_server_fallback(fake_claude, monkeypatch):
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-fable-5-1")
+    llm.chat_completion([{"role": "user", "content": "질문"}])
+    p = fake_claude.calls[0]
+    assert p["model"] == "claude-fable-5-1" and p["output_config"] == {"effort": "low"}
     assert p["fallbacks"] == "default" and p["betas"] == ["server-side-fallback-2026-07-01"]
     assert "thinking" not in p and "temperature" not in p  # Fable: 생각은 항상 켜져 있고 샘플링 옵션은 400
 

@@ -1,8 +1,9 @@
 """Claude(Anthropic) 호출 — ANTHROPIC_API_KEY가 있으면 app/llm.py가 이쪽을 먼저 쓴다.
 
-- 모델: CLAUDE_MODEL(기본 claude-fable-5-1). 의도 추출만 다른 모델로 돌리려면 CLAUDE_INTENT_MODEL.
-- 속도: effort를 CLAUDE_EFFORT(기본 low)로 둔다. Fable은 생각(thinking)이 항상 켜져 있어 끌 수 없고,
-  effort가 생각의 깊이를 정한다. 검색어 뽑기·짧은 설명에는 low로 충분하다.
+- 모델: CLAUDE_MODEL(기본 claude-haiku-5-5 — 가장 저렴하고 빠른 Claude). 챗봇 답변·검색 조건 뽑기·가디언 진단·
+  접속 기록 감시가 모두 이 모델을 쓴다. Fable(claude-fable-5-1)은 자동 코드 수정(scripts/autofix_propose.py)에만 쓴다.
+  의도 추출만 다른 모델로 돌리려면 CLAUDE_INTENT_MODEL.
+- 속도: Fable·Opus·Sonnet으로 바꾸면 effort를 CLAUDE_EFFORT(기본 low)로 보낸다. Haiku에는 effort를 보내지 않는다.
 - 의도 추출은 structured outputs(JSON 스키마)로 받아 형식이 깨질 일이 없다.
 - 안전 분류기가 요청을 거절하면 서버 쪽 폴백(fallbacks="default")이 다른 모델로 다시 시도한다.
   Haiku는 서버 폴백이 없어 이 옵션을 보내지 않는다.
@@ -18,7 +19,7 @@ from .config import AIUnavailableError
 
 log = logging.getLogger("app.claude")
 
-DEFAULT_MODEL = "claude-fable-5-1"
+DEFAULT_MODEL = "claude-haiku-5-5"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 # 생각 토큰도 max_tokens 안에 들어가므로, 화면에 나갈 글 길이보다 넉넉히 잡는다 (글 길이는 프롬프트가 정한다)
@@ -55,11 +56,12 @@ def _params(messages: list[dict], purpose: str, json_schema: dict | None) -> dic
     system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
     turns = [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] != "system"]
     model = model_for(purpose)
-    output_config: dict = {"effort": effort()}
+    output_config: dict = {} if model.startswith("claude-haiku") else {"effort": effort()}
     if json_schema:
         output_config["format"] = {"type": "json_schema", "schema": json_schema}
-    params = {"model": model, "max_tokens": MAX_TOKENS, "system": system, "messages": turns,
-              "output_config": output_config}
+    params = {"model": model, "max_tokens": MAX_TOKENS, "system": system, "messages": turns}
+    if output_config:
+        params["output_config"] = output_config
     if not model.startswith("claude-haiku"):
         params.update(betas=[FALLBACK_BETA], fallbacks="default")
     return params

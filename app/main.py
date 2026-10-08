@@ -17,7 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.background import BackgroundTask
+from starlette.background import BackgroundTasks
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
@@ -55,7 +55,8 @@ app.add_middleware(
 async def request_context(request: Request, call_next):
     """요청마다 request_id를 정하고(app/reqctx.py), 가디언 실시간 감시를 거친다.
     - 차단된 IP는 바로 403, 공격 도구가 찾는 경로는 404로 끝내고 횟수를 센다 (app/guardian.py)
-    - 처리 중 생긴 즉시 분석 요청은 응답을 보낸 뒤에 실행해 사용자를 기다리게 하지 않는다"""
+    - 처리 중 생긴 즉시 분석 요청과 접속 기록(1분마다 AI가 읽음)은 응답을 보낸 뒤에 남겨 사용자를 기다리게 하지 않는다"""
+    started = time.monotonic()
     reqctx.set_request_id(reqctx.new_request_id())
     pending = reqctx.start_pending()
     ip = guardian.client_ip(request)
@@ -74,8 +75,16 @@ async def request_context(request: Request, call_next):
             response = error(500, "SERVER_ERROR", "서버에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.")
         if response.status_code == 404:
             await run_in_threadpool(guardian.note_not_found, ip, request.url.path)
-    if pending.get("triage") and response.background is None:
-        response.background = BackgroundTask(guardian.run_triage, pending["triage"])
+    tasks = BackgroundTasks()
+    if response.background is not None:
+        tasks.tasks.append(response.background)
+    tasks.add_task(guardian.log_access, ip, request.method,
+                   request.url.path + (f"?{request.url.query}" if request.url.query else ""),
+                   response.status_code, request.headers.get("user-agent", ""),
+                   int((time.monotonic() - started) * 1000))
+    if pending.get("triage"):
+        tasks.add_task(guardian.run_triage, pending["triage"])
+    response.background = tasks
     return response
 
 
@@ -233,7 +242,7 @@ def guardian_daily_digest(request: Request):
 
 @app.post("/api/guardian/scan")
 def guardian_scan(request: Request):
-    """실시간 감시 보조: 요청이 없을 때도 5분마다 최근 사건을 훑는다 (.github/workflows/monitor.yml, CRON_SECRET 필요)."""
+    """실시간 감시 보조: 1분마다 새 접속 기록을 AI가 훑고 최근 사건을 확인한다 (.github/workflows/monitor.yml, CRON_SECRET 필요)."""
     if not CRON_SECRET or request.headers.get("authorization") != f"Bearer {CRON_SECRET}":
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
     return guardian.scan()
