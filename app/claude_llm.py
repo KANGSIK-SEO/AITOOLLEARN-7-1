@@ -65,7 +65,14 @@ def _params(messages: list[dict], purpose: str, json_schema: dict | None) -> dic
     return params
 
 
+def _credit_exhausted(e: Exception) -> bool:
+    """크레딧을 다 쓰면 Anthropic은 429가 아니라 400(잔액 부족 안내)을 준다 — 이것도 '소진'으로 본다."""
+    return isinstance(e, anthropic.BadRequestError) and "credit balance" in str(e).lower()
+
+
 def _as_unavailable(e: Exception) -> AIUnavailableError:
+    if _credit_exhausted(e):
+        return AIUnavailableError("AI_KEY_MISSING", "AI 서비스 크레딧이 소진되었어요.")
     if isinstance(e, anthropic.APITimeoutError):
         return AIUnavailableError("AI_TIMEOUT", "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요.")
     if isinstance(e, anthropic.RateLimitError):
