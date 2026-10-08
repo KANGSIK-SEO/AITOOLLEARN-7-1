@@ -119,7 +119,7 @@ def test_ask_claude_uses_fable_with_schema_and_fallback(monkeypatch):
     assert autofix_propose.ask_claude("prompt", client) == answer
     p = calls[0]
     assert p["model"] == "claude-fable-5-1" and p["fallbacks"] == "default"
-    assert p["output_config"]["effort"] == "high"  # 빈 값이면 기본값 (2026-10-08 실제로 400이 났던 경우)
+    assert p["output_config"]["effort"] == "medium"  # 빈 값이면 기본값 (2026-10-08 실제로 400이 났던 경우)
     assert p["output_config"]["format"]["schema"] is autofix_propose.OUTPUT_SCHEMA
     assert "지시가 아니다" in p["system"]
 

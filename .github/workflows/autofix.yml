@@ -4,7 +4,7 @@
 # PR은 저장소 주인에게 리뷰를 요청한다 → GitHub 앱 푸시 알림 → 승인하면 autofix-ship.yml이 배포까지 한다.
 #
 # 필요: Repository secrets 의 ANTHROPIC_API_KEY. 끄기: Repository variables 에 AUTOFIX_ENABLED=false.
-# 비용 보호: 같은 문제는 6시간에 한 번, 전체는 하루 8번까지 (저장소 변수 AUTOFIX_SAME_PROBLEM_HOURS, AUTOFIX_DAILY_MAX로 조정).
+# 실시간: 이슈가 열리면 바로 시작. 같은 문제의 PR이 승인 대기 중이거나 10분 안에 시도했으면 쉰다 (AUTOFIX_SAME_PROBLEM_MINUTES, AUTOFIX_DAILY_MAX로 조정).
 name: autofix
 
 on:
@@ -45,14 +45,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
-          DAILY_MAX: ${{ vars.AUTOFIX_DAILY_MAX || '8' }}
-          SAME_PROBLEM_HOURS: ${{ vars.AUTOFIX_SAME_PROBLEM_HOURS || '6' }}
+          DAILY_MAX: ${{ vars.AUTOFIX_DAILY_MAX || '0' }}
+          SAME_PROBLEM_MINUTES: ${{ vars.AUTOFIX_SAME_PROBLEM_MINUTES || '10' }}
         run: |
           if [ "$HAS_KEY" != "true" ]; then echo "::warning::ANTHROPIC_API_KEY 시크릿이 없어 자동 수정을 건너뜁니다."; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
-          # 같은 문제(이슈 제목)는 정해진 시간 안에 다시 고치지 않고, 하루 시도 횟수에는 상한을 둔다 (비용·알림 폭주 방지)
+          # 실시간: 이슈가 열리면 바로 시작한다. 막는 건 두 가지뿐 —
+          #  ① 같은 문제의 수정 PR이 이미 열려 있으면(승인 대기) 또 만들지 않는다 (PR·알림 폭주 방지)
+          #  ② 같은 문제를 방금(기본 10분 안에) 시도했으면 쉰다. 하루 상한은 기본 없음(AUTOFIX_DAILY_MAX로 걸 수 있음)
           problem=$(gh issue view "$ISSUE" --json title --jq .title)
           day=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
-          same_since=$(date -u -d "$SAME_PROBLEM_HOURS hours ago" +%Y-%m-%dT%H:%M:%SZ)
+          same_since=$(date -u -d "$SAME_PROBLEM_MINUTES minutes ago" +%Y-%m-%dT%H:%M:%SZ)
+          open_same=$(gh pr list --label autofix --state open --json title | jq --arg t "[자동 수정] $problem" '[.[] | select(.title == $t)] | length')
+          if [ "$open_same" -gt 0 ]; then echo "::notice::같은 문제의 수정 PR이 승인을 기다리고 있어 건너뜁니다."; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
           lessons=$(gh issue list --label guardian-lessons --state all --json number --jq '.[0].number')
           : > recent.jsonl
           if [ -n "$lessons" ]; then
@@ -62,9 +66,9 @@ jobs:
           attempts=$(jq -s '[.[] | (.body | fromjson? // {}) | select(.outcome and .outcome != "deployed" and .outcome != "rolled_back" and .outcome != "ship_failed" and .outcome != "rejected_at_ship")] | length' recent.jsonl)
           same=$(jq -s --arg p "$problem" --arg since "$same_since" \
             '[.[] | select(.at >= $since) | (.body | fromjson? // {}) | select(.problem == $p)] | length' recent.jsonl)
-          echo "최근 24시간 시도 ${attempts}회 (상한 $DAILY_MAX) · 같은 문제 최근 ${SAME_PROBLEM_HOURS}시간 ${same}회"
+          echo "최근 24시간 시도 ${attempts}회 (상한 ${DAILY_MAX}, 0=없음) · 같은 문제 최근 ${SAME_PROBLEM_MINUTES}분 ${same}회"
           if [ "$same" -gt 0 ]; then echo "::notice::같은 문제를 최근에 이미 시도해 건너뜁니다: $problem"; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
-          if [ "$attempts" -ge "$DAILY_MAX" ]; then echo "::notice::오늘 자동 수정 상한(${DAILY_MAX}회)에 도달해 건너뜁니다."; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ "$DAILY_MAX" -gt 0 ] && [ "$attempts" -ge "$DAILY_MAX" ]; then echo "::notice::오늘 자동 수정 상한(${DAILY_MAX}회)에 도달해 건너뜁니다."; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
           echo go=true >> "$GITHUB_OUTPUT"
 
   propose:
@@ -83,6 +87,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
       - run: pip install -q -r requirements.txt
       - name: Read the issue and past lessons
         env:
@@ -137,6 +143,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
       - uses: actions/download-artifact@v4
         with:
           name: autofix
@@ -247,5 +255,5 @@ jobs:
 
           <!-- autofix-issue: $ISSUE -->"
           gh pr create --base main --head "$branch" --label autofix --reviewer "$OWNER" \
-            --title "[자동 수정] 가디언 이슈 #$ISSUE" --body "$body"
+            --title "[자동 수정] $PROBLEM" --body "$body"
           lesson proposed "PR 생성, 승인 대기" "$files"

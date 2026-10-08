@@ -212,8 +212,10 @@ LEARN_MAX = 500
 LEARN_DAYS = 30
 SAFE_PREFIXES = ("/api/", "/static/", "/records/", "/explain/", "/healthz", "/sw.js", "/favicon")
 ERROR_SPIKE = (10, 300)            # 장애 사건 10건 / 5분 → 즉시 분석
-TRIAGE_COOLDOWN_MINUTES = 30       # 같은 종류의 문제는 30분에 한 번만 진단 (AI 비용과 이슈 폭주 방지)
-TRIAGE_GAP_MINUTES = 2             # 서로 다른 문제라도 진단 사이에 최소 2분 (여러 문제가 한꺼번에 터질 때)
+TRIAGE_COOLDOWN_MINUTES = 1        # 같은 종류의 문제도 1분이 지나면 다시 진단한다 (실시간 대응)
+TRIAGE_DAILY_MAX = int(os.environ.get("GUARDIAN_TRIAGE_DAILY_MAX", "0") or 0)
+# ↑ 하루 AI 진단 상한 (0 = 제한 없음, 기본). 비용이 문제가 되면 Vercel 환경변수로 걸 수 있다 —
+#   상한에 닿으면 그날은 진단 없이 사건 건수만 이슈로 올린다.
 # 고객이 직접 겪는 오류 — 한 번만 나도 바로 Claude가 진단한다 (같은 종류는 위 30분 규칙)
 CUSTOMER_IMPACT_CODES = {"AI_TIMEOUT", "AI_ERROR", "AI_RATE_LIMITED", "AI_KEY_MISSING", "AI_BACKED_OFF",
                          "DB_ERROR", "ART_DB_ERROR", "SERVER_ERROR"}
@@ -344,15 +346,15 @@ def run_triage(reason: str) -> dict:
     now = datetime.now(timezone.utc)
     same_kind = f"triage_cooldown_until:{reason}"
     try:
-        if _flag_active_until(same_kind) or _flag_active_until("triage_cooldown_until"):
+        if _flag_active_until(same_kind):
             return {"skipped": "cooldown"}
         _set_flag(same_kind, (now + timedelta(minutes=TRIAGE_COOLDOWN_MINUTES)).isoformat())
-        _set_flag("triage_cooldown_until", (now + timedelta(minutes=TRIAGE_GAP_MINUTES)).isoformat())
+        with_ai = TRIAGE_DAILY_MAX <= 0 or check_rate("triage:daily", limit=TRIAGE_DAILY_MAX, window_seconds=86400)
     except db.DbError as e:
         log.error("triage_flag_failure detail=%s", e)
         return {"skipped": "db_error"}
-    log.warning("triage_start reason=%s", reason)
-    return _analyze(f"[가디언] 실시간 경보 — {reason}", always_report=True)
+    log.warning("triage_start reason=%s with_ai=%s", reason, with_ai)
+    return _analyze(f"[가디언] 실시간 경보 — {reason}", always_report=True, use_ai=with_ai)
 
 
 def scan() -> dict:
@@ -393,7 +395,7 @@ def run_daily_digest() -> dict:
     return _analyze("[가디언] 일일 점검", always_report=False)
 
 
-def _analyze(title: str, always_report: bool) -> dict:
+def _analyze(title: str, always_report: bool, use_ai: bool = True) -> dict:
     """분석 안 된 사건을 AI로 진단한다. 긴급도가 medium 이상이거나 always_report면 GitHub 이슈를 연다."""
     rows = db.execute(
         "SELECT id, category, code, message, context, severity, created_at FROM incidents "
@@ -401,6 +403,9 @@ def _analyze(title: str, always_report: bool) -> dict:
     if not rows:
         return {"analyzed": 0}
 
+    if not use_ai:   # 오늘 진단 상한에 닿음 — 알림은 보내되 AI 비용은 쓰지 않는다
+        open_github_issue(f"{title} (오늘 AI 진단 상한 도달, {len(rows)}건)", _plain_summary(rows))
+        return {"analyzed": 0, "skipped_ai": "daily_max"}
     payload = json.dumps(rows, ensure_ascii=False)
     try:
         diagnosis = llm.chat_completion(

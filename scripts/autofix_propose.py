@@ -2,7 +2,8 @@
 
 사용 (GitHub Actions autofix.yml 안에서):
     python3 scripts/autofix_propose.py <이슈 JSON 파일> <학습 기록 JSON 파일> <요약을 쓸 파일>
-필요: ANTHROPIC_API_KEY. 모델은 AUTOFIX_MODEL(기본 claude-fable-5-1), 깊이는 AUTOFIX_EFFORT(기본 high).
+필요: ANTHROPIC_API_KEY. 모델은 AUTOFIX_MODEL(기본 claude-fable-5-1), 깊이는 AUTOFIX_EFFORT(기본 medium —
+실시간 대응을 위해 high보다 빠르게. 더 꼼꼼한 수정이 필요하면 저장소 변수로 high).
 
 AI는 파일 내용만 돌려주고, 이 스크립트가 허용된 경로에만 써 넣는다. AI가 명령을 실행하거나
 인터넷에 접속할 수단은 없다. 써 넣은 결과는 다음 단계에서 비밀 값이 없는 곳에서
@@ -99,7 +100,7 @@ def ask_claude(prompt: str, client: anthropic.Anthropic | None = None) -> dict:
     params = {
         "model": model, "max_tokens": 64000, "system": SYSTEM,
         "messages": [{"role": "user", "content": prompt}],
-        "output_config": {"effort": os.environ.get("AUTOFIX_EFFORT", "").strip() or "high",
+        "output_config": {"effort": os.environ.get("AUTOFIX_EFFORT", "").strip() or "medium",
                           "format": {"type": "json_schema", "schema": OUTPUT_SCHEMA}},
     }
     if not model.startswith("claude-haiku"):
