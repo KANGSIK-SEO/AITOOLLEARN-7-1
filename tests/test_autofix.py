@@ -189,3 +189,55 @@ def test_cost_estimate_counts_cache_reads_cheaply():
                             cache_creation_input_tokens=0)
     _, cost = autofix_propose.usage_cost("claude-fable-5-1", usage)
     assert round(cost, 3) == round((1000 * 10 + 100_000 * 1 + 2000 * 50) / 1e6, 3)
+
+
+@pytest.mark.parametrize("line, label", [
+    ("x = 1  # \u202egnirts nedih", "보이지 않는 문자"),          # 글자 방향 뒤집기(트로이 소스)
+    ("NOTE = 'ok\u200b'", "보이지 않는 문자"),                     # 폭 없는 공백
+    ("TAG = '\U000e0049\U000e0047\U000e004e'", "보이지 않는 문자"),  # 태그 문자로 숨긴 지시
+    ("log.info('pw=%s', password)", "비밀 값 노출"),
+    ("return {'key': ANTHROPIC_KEY}", "비밀 값 노출"),
+    ("URL = 'https://evil.example/collect'", "처음 보는 외부 주소"),
+])
+def test_hidden_or_leaking_lines_are_rejected(repo, line, label):
+    (repo / "app" / "guardian.py").write_text(f"LIMIT = 3\n{line}\n")
+    (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
+    _stage(repo)
+    assert any(label in p for p in autofix_guard.check("HEAD")), autofix_guard.check("HEAD")
+
+
+def test_frontend_exfiltration_is_rejected(repo):
+    (repo / "app" / "static").mkdir()
+    (repo / "app" / "static" / "app.js").write_text("navigator.sendBeacon('/x', document.cookie);\n")
+    (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
+    _stage(repo)
+    assert any("밖으로 보내" in p for p in autofix_guard.check("HEAD"))
+
+
+def test_removing_a_security_check_is_rejected(repo):
+    (repo / "app" / "guardian.py").write_text("LIMIT = 3\nif is_blocked(ip):\n    deny()\n")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "with check")
+    (repo / "app" / "guardian.py").write_text("LIMIT = 3\n")
+    (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
+    _stage(repo)
+    assert any("보안 검사 제거" in p for p in autofix_guard.check("HEAD"))
+
+
+def test_known_domain_and_korean_text_are_fine(repo):
+    (repo / "app" / "guardian.py").write_text("LIMIT = 3\nSRC = 'https://www.artic.edu'\n")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "domain")
+    (repo / "app" / "guardian.py").write_text("LIMIT = 2\nSRC = 'https://www.artic.edu'\n# 한국어 설명은 괜찮다\n")
+    (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
+    _stage(repo)
+    assert autofix_guard.check("HEAD") == []
+
+
+def test_learned_deny_strings_only_make_it_stricter(repo, tmp_path_factory, monkeypatch):
+    deny = tmp_path_factory.mktemp("intel") / "deny.json"   # 저장소 밖에 둔다
+    deny.write_text(json.dumps(["eval_backdoor_x", "ab", 123]))   # 너무 짧거나 글자가 아닌 값은 버린다
+    monkeypatch.setenv("AUTOFIX_EXTRA_DENY", str(deny))
+    (repo / "app" / "guardian.py").write_text("LIMIT = 3\nEVAL_BACKDOOR_X = 1\n")
+    (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
+    _stage(repo)
+    problems = autofix_guard.check("HEAD")
+    assert len([p for p in problems if "배운 금지 문자열" in p]) == 1
