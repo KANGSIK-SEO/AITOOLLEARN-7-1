@@ -202,12 +202,17 @@ STRIKES = {  # 종류: (이 횟수에 도달하면 차단, 몇 초 안에)
     "probe": (3, 600),
     "malicious": (3, 600),
     "login_fail": (10, 600),
+    "not_found": (15, 600),   # 없는 주소를 계속 찾는 스캐너
 }
+# 자동 학습: 스캐너로 차단된 IP가 찾던 '없는 주소'는 다음부터 공격 경로로 바로 취급한다 (코드 수정 없이 데이터로 진화)
+LEARN_MAX = 500
+LEARN_DAYS = 30
+SAFE_PREFIXES = ("/api/", "/static/", "/records/", "/explain/", "/healthz", "/sw.js", "/favicon")
 ERROR_SPIKE = (10, 300)            # 장애 사건 10건 / 5분 → 즉시 분석
 TRIAGE_COOLDOWN_MINUTES = 10       # 즉시 분석은 10분에 한 번만 (AI 비용과 이슈 폭주 방지)
 BLOCK_CACHE_SECONDS = 30           # 차단 목록은 서버마다 30초씩 기억해 요청마다 DB를 읽지 않는다
 
-_blocks: dict = {"source": None, "loaded_at": 0.0, "until": {}}
+_blocks: dict = {"source": None, "loaded_at": 0.0, "until": {}, "learned": set()}
 
 
 def _db_source() -> str:
@@ -217,9 +222,14 @@ def _db_source() -> str:
 def _load_blocks() -> dict:
     now = time.monotonic()
     if _blocks["source"] != _db_source() or now - _blocks["loaded_at"] > BLOCK_CACHE_SECONDS:
-        rows = db.execute("SELECT key, value FROM runtime_flags WHERE key LIKE 'ip_block:%'")
-        _blocks.update(source=_db_source(), loaded_at=now,
-                       until={r["key"].split(":", 1)[1]: datetime.fromisoformat(r["value"]) for r in rows})
+        rows = db.execute("SELECT key, value FROM runtime_flags WHERE key LIKE 'ip_block:%' OR key LIKE 'probe_path:%'")
+        right_now = datetime.now(timezone.utc)
+        _blocks.update(
+            source=_db_source(), loaded_at=now,
+            until={r["key"].split(":", 1)[1]: datetime.fromisoformat(r["value"])
+                   for r in rows if r["key"].startswith("ip_block:")},
+            learned={r["key"].split(":", 1)[1] for r in rows
+                     if r["key"].startswith("probe_path:") and datetime.fromisoformat(r["value"]) > right_now})
     return _blocks["until"]
 
 
@@ -254,6 +264,49 @@ def strike(kind: str, ip: str) -> bool:
         return False
     block_ip(ip, kind)
     return True
+
+
+def is_probe_path(path: str) -> bool:
+    if PROBE_PATH_RE.search(path):
+        return True
+    try:
+        _load_blocks()
+    except db.DbError:
+        return False
+    return path.rstrip("/").lower() in _blocks["learned"]
+
+
+def _learnable(path: str) -> bool:
+    return 1 < len(path) <= 200 and not path.startswith(SAFE_PREFIXES)
+
+
+def note_not_found(ip: str, path: str) -> None:
+    """없는 주소 요청을 센다. 스캐너처럼 계속 찾으면 차단하고, 그 IP가 찾던 주소들을 배운다."""
+    if not _learnable(path):
+        return
+    record_incident("security", "NOT_FOUND", "없는 주소 요청", {"ip": ip, "path": path[:200]}, "low")
+    if strike("not_found", ip):
+        learn_paths_from(ip)
+
+
+def learn_paths_from(ip: str) -> int:
+    since = (datetime.now(timezone.utc) - timedelta(seconds=STRIKES["not_found"][1])).isoformat(timespec="seconds")
+    rows = db.execute("SELECT context FROM incidents WHERE code = 'NOT_FOUND' AND created_at > ? AND context LIKE ?",
+                      (since, f'%"ip": {json.dumps(ip)}%'))
+    paths = {json.loads(r["context"]).get("path", "").rstrip("/").lower() for r in rows}
+    paths = {p for p in paths if _learnable(p)}
+    known = db.execute("SELECT COUNT(*) AS n FROM runtime_flags WHERE key LIKE 'probe_path:%'")[0]["n"]
+    expires = (datetime.now(timezone.utc) + timedelta(days=LEARN_DAYS)).isoformat()
+    learned = 0
+    for path in sorted(paths)[: max(0, LEARN_MAX - known)]:
+        _set_flag(f"probe_path:{path}", expires)
+        _blocks["learned"].add(path)
+        learned += 1
+    if learned:
+        log.warning("probe_paths_learned ip=%s count=%s", ip, learned)
+        record_incident("security", "PROBE_PATHS_LEARNED", f"새 공격 주소 {learned}개 학습",
+                        {"ip": ip, "paths": sorted(paths)[:20]}, "medium", "learn_probe_paths")
+    return learned
 
 
 def note_probe(ip: str, path: str) -> None:
@@ -315,7 +368,7 @@ def open_github_issue(title: str, body: str) -> None:
         return
     req = urllib.request.Request(
         f"https://api.github.com/repos/{GITHUB_REPO}/issues",
-        data=json.dumps({"title": title, "body": body}).encode(),
+        data=json.dumps({"title": title, "body": body, "labels": ["guardian"]}).encode(),
         headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                 "Content-Type": "application/json", "User-Agent": "guardian-agent"},
         method="POST",

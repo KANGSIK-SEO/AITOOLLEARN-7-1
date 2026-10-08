@@ -301,6 +301,13 @@ GitHub Actions 배포를 구현했다. 모든 변경은 PR로 리뷰 후 병합�
   - 장애 사건 5분에 10건, 또는 심각(high) 사건 → **즉시 AI 진단 + GitHub 이슈**(응답을 보낸 뒤 실행, 10분에 한 번). AI가 안 되면 사건 건수만이라도 이슈로 올린다
   - 처리 못 한 서버 오류도 `SERVER_ERROR` 사건으로 남겨 감시에 걸린다
   - 바깥 눈: `.github/workflows/monitor.yml`이 5분마다 `/healthz`를 확인해 두 번 연속 실패하면 `outage` 이슈를 열고, 회복되면 닫는다. `CRON_SECRET` 시크릿이 있으면 `/api/guardian/scan`으로 요청이 없을 때도 최근 사건을 훑는다
+- **스스로 배우기**: 없는 주소를 15번 찾다 차단된 스캐너가 두드린 주소는 30일 동안 공격 경로로 기억해, 다음 공격자는 처음부터 공격 경로 규칙에 걸린다 (코드 수정 없이 데이터로 진화, 최대 500개).
+- **자동 수정안 + 승인 한 번**: 가디언·`monitor.yml`이 연 이슈를 `autofix.yml`이 받아 Claude(기본 `claude-fable-5-1`)가 수정 코드와 새 테스트를 쓴다.
+  비밀 값이 없는 곳에서 안전 검사(`scripts/autofix_guard.py`: 보호 파일·외부 통신·명령 실행·비밀 값 읽기·기존 테스트 수정 금지)와
+  전체 테스트를 통과한 것만 PR로 올리고 저장소 주인에게 리뷰를 요청한다(GitHub 앱 푸시 알림).
+  **Approve**하면 `autofix-ship.yml`이 다시 검사 → main 병합 → Vercel 배포 → `/healthz` 확인, 이상하면 자동으로 되돌리고 재배포한다.
+  결과(배포·되돌림·검사 거부)는 "학습 기록" 이슈에 정해진 칸으로 남고, 다음 수정안을 만들 때 AI가 참고한다.
+  필요: GitHub secrets `ANTHROPIC_API_KEY`. 끄기: Repository variables `AUTOFIX_ENABLED=false`. 비용 보호: 자동 수정 PR은 6시간에 하나.
 - **배치(1일 1회, Vercel Cron → `/api/guardian/daily-digest`, `CRON_SECRET`으로 보호)**: 그동안 쌓인
   `incidents`를 한 번에 gpt-6-astra에 보내 "무슨 일이 있었는지 / 반복·증가 추세가 있는지 / 다음에
   뭐가 터질 수 있는지"를 진단하고, 긴급도가 medium/high면 GitHub 이슈를 자동으로 연다.

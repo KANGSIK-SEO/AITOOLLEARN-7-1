@@ -1,0 +1,162 @@
+# 가디언 자동 수정 ② — 승인되면 배포하고, 문제가 생기면 되돌린다.
+# 저장소 주인(또는 쓰기 권한이 있는 팀원)이 [자동 수정] PR을 Approve하면:
+#   다시 검사(안전 검사 + 전체 테스트) → main에 합침 → Vercel 배포 → /healthz 확인
+#   → 실패하면 합친 것을 되돌리고 다시 배포 → 결과를 학습 기록에 남김 → main을 develop에도 반영(PR)
+name: autofix-ship
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions: {}
+
+concurrency:
+  group: autofix-ship
+  cancel-in-progress: false
+
+env:
+  GH_REPO: ${{ github.repository }}
+  PR: ${{ github.event.pull_request.number }}
+  SITE_URL: ${{ vars.SITE_URL || 'https://art-chatbot-eight.vercel.app' }}
+
+jobs:
+  check:
+    # 승인한 사람이 쓰기 권한자이고, 승인한 커밋이 PR의 최신 커밋일 때만 (승인 뒤 몰래 더한 커밋은 배포하지 않는다)
+    if: >-
+      github.event.review.state == 'approved' &&
+      contains(github.event.pull_request.labels.*.name, 'autofix') &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.review.commit_id == github.event.pull_request.head.sha &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Guard again
+        run: python3 scripts/autofix_guard.py origin/main
+      - name: Tests again
+        run: |
+          pip install -q -r requirements-dev.txt
+          python -m pytest -q tests
+
+  merge:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      sha: ${{ steps.merge.outputs.sha }}
+    steps:
+      - id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh pr merge "$PR" --merge --match-head-commit "$HEAD_SHA"
+          echo "sha=$(gh pr view "$PR" --json mergeCommit --jq .mergeCommit.oid)" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: merge
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      ref: main
+    secrets: inherit
+
+  health:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the live site
+        run: |
+          sleep 20
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$SITE_URL/healthz" || echo 000)
+            home=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$SITE_URL/" || echo 000)
+            echo "attempt $attempt: /healthz $code, / $home"
+            if [ "$code" = "200" ] && [ "$home" = "200" ]; then exit 0; fi
+            sleep 20
+          done
+          exit 1
+
+  rollback:
+    needs: [merge, deploy, health]
+    if: always() && needs.merge.result == 'success' && (needs.deploy.result == 'failure' || needs.health.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Revert the merge on main
+        env:
+          SHA: ${{ needs.merge.outputs.sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git revert -m 1 --no-edit "$SHA"
+          git push origin main
+
+  redeploy:
+    needs: rollback
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      ref: main
+    secrets: inherit
+
+  record:
+    needs: [check, merge, deploy, health, rollback, redeploy]
+    if: always() && needs.check.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Record the outcome and sync develop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECK: ${{ needs.check.result }}
+          HEALTH: ${{ needs.health.result }}
+          ROLLBACK: ${{ needs.rollback.result }}
+          REDEPLOY: ${{ needs.redeploy.result }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          issue=$(printf '%s' "$PR_BODY" | grep -o 'autofix-issue: [0-9]*' | grep -o '[0-9]*$' || true)
+          files=$(gh pr view "$PR" --json files --jq '[.files[].path] | join(" ")')
+          if [ "$CHECK" != "success" ]; then outcome=rejected_at_ship; reason="승인 뒤 다시 검사에서 실패"
+          elif [ "$HEALTH" = "success" ]; then outcome=deployed; reason="배포 후 /healthz 정상"
+          elif [ "$ROLLBACK" = "success" ]; then outcome=rolled_back; reason="배포 후 사이트 이상 → 되돌림 (재배포: $REDEPLOY)"
+          else outcome=ship_failed; reason="배포 또는 되돌리기 실패 — 사람 확인 필요"; fi
+          num=$(gh issue list --label guardian-lessons --state all --json number --jq '.[0].number')
+          if [ -n "$num" ]; then
+            jq -nc --arg date "$(date -u +%F)" --arg issue "$issue" --arg outcome "$outcome" --arg reason "$reason" --arg files "$files" \
+              '{date:$date, issue:$issue, outcome:$outcome, reason:$reason, files:$files}' | gh issue comment "$num" --body-file -
+          fi
+          msg="🤖 자동 수정 결과: **$outcome** — $reason (PR #$PR)"
+          gh pr comment "$PR" --body "$msg"
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "$msg"
+            [ "$outcome" = "deployed" ] && gh issue close "$issue" || true
+          fi
+          if [ "$outcome" = "deployed" ]; then   # main에 들어간 수정을 develop에도 반영한다 (충돌하면 PR만 열어 둔다)
+            sync=$(gh pr create --base develop --head main --title "chore: 자동 수정 반영 (main → develop)" \
+              --body "가디언 자동 수정 PR #$PR을 develop에도 반영합니다." 2>/dev/null | grep -o '[0-9]*$' || true)
+            [ -n "$sync" ] && gh pr merge "$sync" --merge || true
+          fi
+          [ "$outcome" = "ship_failed" ] && exit 1 || true

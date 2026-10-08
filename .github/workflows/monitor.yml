@@ -11,6 +11,7 @@ on:
 
 permissions:
   issues: write
+  actions: write   # 장애 이슈를 열면 가디언 자동 수정(autofix.yml)을 깨운다
 
 concurrency:
   group: monitor
@@ -48,8 +49,10 @@ jobs:
           if [ -n "$open" ]; then
             gh issue comment "$open" --body "$msg"
           else
-            gh issue create --label outage --title "[감시] 운영 사이트 장애" \
-              --body "$msg. Vercel 대시보드의 Logs와 Deployments를 확인하세요. 회복되면 이 이슈는 자동으로 닫힙니다."
+            url=$(gh issue create --label outage --title "[감시] 운영 사이트 장애" \
+              --body "$msg. Vercel 대시보드의 Logs와 Deployments를 확인하세요. 회복되면 이 이슈는 자동으로 닫힙니다.")
+            # 이 워크플로가 연 이슈는 다른 워크플로를 깨우지 않아서, 자동 수정은 직접 부른다
+            gh workflow run autofix.yml -f issue="${url##*/}" || echo "::warning::자동 수정 워크플로를 부르지 못했습니다."
           fi
           exit 1
 

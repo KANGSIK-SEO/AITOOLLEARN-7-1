@@ -61,7 +61,7 @@ async def request_context(request: Request, call_next):
     ip = guardian.client_ip(request)
     if await run_in_threadpool(guardian.is_blocked, ip):
         return error(403, "BLOCKED", "의심스러운 요청이 반복되어 잠시 접속이 제한되었어요. 잠시 후 다시 시도해 주세요.")
-    if guardian.PROBE_PATH_RE.search(request.url.path):
+    if await run_in_threadpool(guardian.is_probe_path, request.url.path):
         await run_in_threadpool(guardian.note_probe, ip, request.url.path)
         response = error(404, "NOT_FOUND", "찾을 수 없습니다.")
     else:
@@ -72,6 +72,8 @@ async def request_context(request: Request, call_next):
             await run_in_threadpool(guardian.record_incident, "reliability", "SERVER_ERROR",
                                     f"{request.method} {request.url.path} 처리 중 오류", {"path": request.url.path}, "high")
             response = error(500, "SERVER_ERROR", "서버에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.")
+        if response.status_code == 404:
+            await run_in_threadpool(guardian.note_not_found, ip, request.url.path)
     if pending.get("triage") and response.background is None:
         response.background = BackgroundTask(guardian.run_triage, pending["triage"])
     return response

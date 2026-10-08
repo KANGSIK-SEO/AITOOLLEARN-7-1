@@ -1,6 +1,6 @@
 ---
 title: 가디언 (장애·보안 감시)
-sources: [app/guardian.py, app/main.py, vercel.json, .github/workflows/monitor.yml, CONTRIBUTING.md]
+sources: [app/guardian.py, app/main.py, vercel.json, .github/workflows/monitor.yml, .github/workflows/autofix.yml, .github/workflows/autofix-ship.yml, scripts/autofix_guard.py, scripts/autofix_propose.py, CONTRIBUTING.md]
 updated: 2026-10-08
 ---
 # 가디언
@@ -22,6 +22,26 @@ updated: 2026-10-08
 - 즉시 분석은 응답을 보낸 뒤에 돌아서 사용자를 기다리게 하지 않는다 (`app/main.py` 미들웨어).
 - AI가 장애 원인일 수도 있어서, AI 진단이 실패해도 사건 종류별 건수로 이슈를 연다.
 - IP는 Vercel이 직접 채우는 헤더(`x-vercel-forwarded-for`)를 먼저 본다. 사용자가 꾸민 헤더로 남의 IP를 차단시키지 못하게 하기 위해서다.
+
+## 0-1) 스스로 배우기와 자동 수정 (승인 한 번)
+
+```
+공격·장애 ─▶ 가디언: 즉시 차단 + 이슈 ─▶ autofix.yml: Claude가 수정안·테스트 작성
+                                              │ (비밀 값 없는 곳에서) 안전 검사 + 전체 테스트
+                                              ▼
+              휴대폰 알림 ◀─ PR (주인에게 리뷰 요청) ─▶ Approve
+                                              ▼
+              autofix-ship.yml: 다시 검사 → main 병합 → Vercel 배포 → /healthz 확인
+                                              │ 이상하면 되돌리기 + 재배포
+                                              ▼
+                              결과를 '학습 기록' 이슈에 남김 → 다음 수정안이 참고
+```
+
+- **데이터로 배우기 (승인 없음)**: 없는 주소를 15번 찾은 스캐너는 차단되고, 그 IP가 찾던 주소는 30일 동안 공격 경로로 기억한다 (`learn_paths_from`). `/api/`, `/static/` 같은 진짜 경로는 배우지 않는다.
+- **코드로 고치기 (승인 필요)**: AI는 파일 내용만 돌려주고, 허용된 파일과 새 테스트(`tests/test_autofix_*.py`)에만 써진다 (`scripts/autofix_propose.py`).
+- **사람 대신 기계가 먼저 거르는 것** (`scripts/autofix_guard.py`): 보호 파일(인증·비밀 키·DB·배포·검사 규칙 자신), 외부 통신, 명령 실행, 환경변수 읽기, eval/exec, 삭제, 기존 테스트 수정, 400줄 넘는 변경, 새 테스트 없음.
+- **왜 승인 한 번은 남겼나**: 로그에는 공격자가 쓴 글이 섞인다. AI가 속아도 마지막에 사람이 한 번 보게 하려는 것이다. 완전 자동은 이 작업 환경의 보안 장치도 막았다.
+- 학습 기록 이슈에는 워크플로가 정해진 칸(날짜·이슈·결과·이유·파일)만 남기고, AI는 봇이 쓴 댓글만 읽는다.
 
 이하 두 단계는 원래 있던 구조다.
 

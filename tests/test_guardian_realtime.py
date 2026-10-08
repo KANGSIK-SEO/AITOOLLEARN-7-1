@@ -102,3 +102,26 @@ def test_client_ip_prefers_vercel_header():
     req = SimpleNamespace(headers={"x-vercel-forwarded-for": "198.51.100.1",
                                    "x-forwarded-for": "1.2.3.4"}, client=None)
     assert guardian.client_ip(req) == "198.51.100.1"
+
+
+def test_scanner_is_blocked_and_its_paths_are_learned(issues):
+    scanner = TestClient(app, headers={"x-vercel-forwarded-for": "203.0.113.50"})
+    paths = [f"/old-backup-{i}" for i in range(15)]
+    for path in paths:
+        scanner.get(path)
+    assert scanner.get("/").status_code == 403  # 없는 주소 15번 → 차단
+    assert "PROBE_PATHS_LEARNED" in _codes()
+
+    # 다른 IP가 배운 주소를 두드리면 처음부터 공격 경로로 취급된다
+    other = TestClient(app, headers={"x-vercel-forwarded-for": "198.51.100.77"})
+    for path in paths[:3]:
+        assert other.get(path).status_code == 404
+    assert other.get("/").status_code == 403
+
+
+def test_real_routes_are_never_learned(issues):
+    client = TestClient(app, headers={"x-vercel-forwarded-for": "203.0.113.60"})
+    for i in range(20):
+        client.get(f"/records/PD-0000-0000-{i:04d}")   # 앱이 404를 주는 진짜 경로
+    assert "PROBE_PATHS_LEARNED" not in _codes()
+    assert client.get("/").status_code == 200
