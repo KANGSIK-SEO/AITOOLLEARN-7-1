@@ -17,6 +17,7 @@ const ERROR_MESSAGES = {
     INTERNAL_ERROR: "예상치 못한 오류가 발생했어요. 잠시 후 다시 시도해 주세요. / An unexpected error occurred. Please try again shortly.",
     ART_DB_ERROR: "작품 데이터베이스를 읽지 못했어요. / Couldn't read the artwork database.",
     AI_TIMEOUT: "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요. / The response is taking too long. Please try again shortly.",
+    AI_REFUSED: "이 질문에는 답할 수 없어요. 질문을 바꿔 다시 시도해 주세요. / I can't answer this question. Please rephrase and try again.",
     AI_RATE_LIMITED: "AI 서비스 요청이 많아 잠시 제한되었어요. 잠시 후 다시 시도해 주세요. / The AI service is rate-limited right now. Please try again shortly.",
     AI_KEY_MISSING: "AI 서비스 인증에 실패했어요. / AI service authentication failed.",
     AI_ERROR: "AI 서버와 통신하지 못했어요. 잠시 후 다시 시도해 주세요. / Couldn't reach the AI server. Please try again shortly.",
@@ -185,7 +186,7 @@ async function download(w, btn) {
 async function issueRecord(w, btn) {
     // 서버 응답을 기다린 뒤 새 탭을 열면 팝업 차단에 걸려서, 탭을 먼저 열어두고 주소만 나중에 넣는다
     const tab = window.open("", "_blank");
-    if (tab) tab.document.write("<p style='font-family:sans-serif;padding:24px'>권리 근거 기록을 만들고 인터넷 아카이브에 보관하는 중… (최대 30초)</p>");
+    if (tab) tab.document.write("<p style='font-family:sans-serif;padding:24px'>권리 근거 기록을 만들고 인터넷 아카이브에 보관을 요청하는 중… (10초 정도)</p>");
     btn.disabled = true;
     const original = btn.textContent;
     btn.textContent = "발급 중…";
@@ -388,26 +389,101 @@ function addCards(works) {   // 온디바이스 추천처럼 검색 조건 없�
     addResultGroup(works, null);
 }
 
+function showLimitWarning(data) {
+    if (!data.show_limit_warning) return;
+    addStatusMessage("warning",
+        `무료 질문이 ${data.remaining_free}개 남았어요. 초대코드가 있다면 입력해 보세요. / ` +
+        `${data.remaining_free} free questions left. Enter an invite code if you have one.`);
+}
+
+function showChatError(status, error) {
+    const msg = errorMessage(error, GENERIC_CHAT_ERROR);
+    addStatusMessage("error", `${msg} (${error?.code || status})`);
+}
+
+// 답을 한 번에 받는 방식 — 스트리밍을 못 쓰는 브라우저·연결에서 쓴다
+async function sendMessageOnce(message, pending) {
+    const { ok, status, data } = await api("/api/chat", { method: "POST", body: JSON.stringify({ message }) });
+    pending.remove();
+    if (status === 401) { show(false); return; }
+    if (!ok) { showChatError(status, data.error); return; }
+    addMessage("bot", data.reply);
+    if (data.artworks.length) addResultGroup(data.artworks, data.search);
+    showLimitWarning(data);
+}
+
+// 스트리밍: 검색이 끝나면 작품 카드부터 보여주고, 답변 글은 만들어지는 대로 이어 붙인다
+async function sendMessageStream(message, pending) {
+    let res;
+    try {
+        res = await fetch("/api/chat/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ message }),
+        });
+    } catch (_) {
+        return sendMessageOnce(message, pending);   // 연결 자체가 안 되면 한 번에 받기로 다시 시도
+    }
+    if (res.status === 401) { pending.remove(); show(false); return; }
+    if (!res.ok || !res.body) {
+        let data = {};
+        try { data = await res.json(); } catch (_) { /* 본문 없음 */ }
+        pending.remove();
+        showChatError(res.status, data.error);
+        return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let text = null;   // 답변 글이 들어갈 자리 (meta를 받으면 만든다)
+    let meta = null;
+    const handle = (event) => {
+        if (event.type === "meta") {
+            meta = event;
+            pending.remove();
+            const bubble = addMessage("bot", "");
+            text = bubble.querySelector("span");
+            text.textContent = "답변을 쓰는 중… / Writing…";
+            text.dataset.empty = "1";
+            if (event.artworks.length) addResultGroup(event.artworks, event.search);
+        } else if (event.type === "delta" && text) {
+            if (text.dataset.empty) { text.textContent = ""; delete text.dataset.empty; }
+            text.textContent += event.text;   // textContent로만 넣어 XSS를 막는다
+        } else if (event.type === "error") {
+            if (text && text.dataset.empty) text.closest(".message").remove();
+            showChatError(500, { code: event.code, message: event.message });
+        }
+    };
+    try {
+        for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let nl;
+            while ((nl = buffer.indexOf("\n")) >= 0) {
+                const line = buffer.slice(0, nl).trim();
+                buffer = buffer.slice(nl + 1);
+                if (line) handle(JSON.parse(line));
+            }
+        }
+    } catch (_) {
+        pending.remove();
+        addStatusMessage("error", "답변을 받는 중 연결이 끊겼어요. 다시 시도해 주세요. / The connection dropped. Please try again.");
+        return;
+    }
+    if (meta) showLimitWarning(meta); else pending.remove();
+}
+
 async function sendMessage(message) {
     $("examples")?.remove();
     addMessage("user", message);
     const pending = addTypingIndicator();
     $("send-btn").disabled = true;
-    const { ok, status, data } = await api("/api/chat", { method: "POST", body: JSON.stringify({ message }) });
-    pending.remove();
-    $("send-btn").disabled = false;
-    if (status === 401) { show(false); return; }
-    if (!ok) {
-        const msg = errorMessage(data.error, GENERIC_CHAT_ERROR);
-        addStatusMessage("error", `${msg} (${data.error?.code || status})`);
-        return;
-    }
-    addMessage("bot", data.reply);
-    if (data.artworks.length) addResultGroup(data.artworks, data.search);
-    if (data.show_limit_warning) {
-        addStatusMessage("warning",
-            `무료 질문이 ${data.remaining_free}개 남았어요. 초대코드가 있다면 입력해 보세요. / ` +
-            `${data.remaining_free} free questions left. Enter an invite code if you have one.`);
+    try {
+        await sendMessageStream(message, pending);
+    } finally {
+        $("send-btn").disabled = false;
     }
 }
 

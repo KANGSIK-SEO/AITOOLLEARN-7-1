@@ -9,6 +9,8 @@ import logging
 import uuid
 
 _request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+# 응답을 보낸 뒤에 할 일(가디언 즉시 분석 등). 요청마다 새 dict — 스레드풀로 넘어가도 같은 dict를 가리킨다
+_pending: contextvars.ContextVar[dict | None] = contextvars.ContextVar("pending", default=None)
 LOG_FORMAT = "%(levelname)s %(message)s request_id=%(request_id)s"
 
 
@@ -22,6 +24,16 @@ def set_request_id(value: str) -> None:
 
 def get_request_id() -> str:
     return _request_id.get()
+
+
+def start_pending() -> dict:
+    value: dict = {}
+    _pending.set(value)
+    return value
+
+
+def pending() -> dict | None:
+    return _pending.get()
 
 
 def install() -> None:

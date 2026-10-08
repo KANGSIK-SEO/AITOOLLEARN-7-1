@@ -30,6 +30,24 @@ def test_check_rate_blocks_after_limit(fresh_db):
     assert not guardian.check_rate("bucket:x", limit=3, window_seconds=60)
 
 
+def test_check_rate_single_upsert_statement(fresh_db, monkeypatch):
+    """check_rate가 SELECT 후 별도 UPDATE를 보내는 두 단계가 아니라, DB 왕복 한 번(원자적
+    INSERT ... ON CONFLICT ... RETURNING)으로 판정하는지 확인한다. 예전 SELECT→UPDATE 방식은
+    두 왕복 사이에 다른 요청이 끼어들면(동시 요청, 특히 Turso처럼 왕복에 네트워크 지연이 있는
+    백엔드에서) 레이트리밋이 새는 레이스가 있었다 — 호출 한 번으로 묶으면 그 틈이 없어진다."""
+    calls = []
+    real_execute = db.execute
+
+    def spy(sql, params=()):
+        calls.append(sql)
+        return real_execute(sql, params)
+
+    monkeypatch.setattr(db, "execute", spy)
+    assert guardian.check_rate("bucket:spy", limit=3, window_seconds=60)
+    assert len(calls) == 1
+    assert "insert" in calls[0].lower() and "on conflict" in calls[0].lower()
+
+
 def test_login_lockout_after_repeated_failures(fresh_db):
     assert not guardian.check_login_lockout("a@b.com")
     for _ in range(5):

@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 
 from . import art, llm
@@ -44,7 +45,7 @@ ANSWER_SYSTEM = (
     "규칙:\n"
     "1. 아래 [검색 결과]에 있는 작품만 언급한다. 없는 작품·작가·연도를 지어내지 않는다.\n"
     "2. 작품은 [1], [2] 번호로 인용하고, 각 작품이 왜 요청에 맞는지 한 줄씩 설명한다.\n"
-    "3. 검색 결과는 MET·Art Institute of Chicago가 CC0(퍼블릭 도메인)로 공개한 것이다. "
+    "3. 검색 결과는 MET·Art Institute of Chicago·Cleveland Museum of Art가 CC0(퍼블릭 도메인)로 공개한 것이다. "
     "상업적 이용이 가능하지만 사용 전 '출처 페이지'에서 조건을 확인하도록 한 줄 안내한다.\n"
     "4. 검색 결과가 비어 있으면 없다고 말하고 더 구체적인 조건(작가, 시대, 주제)을 제안한다.\n"
     "5. 직전 대화를 묻는 질문이면 [이전 대화]를 근거로 답한다.\n"
@@ -55,6 +56,27 @@ ANSWER_SYSTEM = (
     "8. 상업적으로 쓰기 전에 카드의 '근거 기록'을 발급해 보관해 두라고 마지막에 한 줄 안내한다 "
     "('보증'이나 '인증'이라는 말은 쓰지 않는다 — 기관이 공개한 근거를 기록해 주는 것이다)."
 )
+
+
+def _nullable(schema: dict) -> dict:
+    return {"anyOf": [schema, {"type": "null"}]}
+
+
+# Claude는 이 스키마대로만 답한다 (structured outputs) — 형식이 깨질 일이 없다. GPT 경로에는 쓰이지 않는다.
+INTENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "chitchat": {"type": "boolean"},
+        "keywords": {"type": "array", "items": {"type": "string"}},
+        "artist": _nullable({"type": "string"}),
+        "year_from": _nullable({"type": "integer"}),
+        "year_to": _nullable({"type": "integer"}),
+        "orientation": _nullable({"type": "string", "enum": ["landscape", "portrait", "square"]}),
+        "purpose": _nullable({"type": "string"}),
+    },
+    "required": ["chitchat", "keywords", "artist", "year_from", "year_to", "orientation", "purpose"],
+    "additionalProperties": False,
+}
 
 
 def _as_year(v) -> int | None:
@@ -100,7 +122,7 @@ def extract_intent(question: str, request_id: str | None = None) -> dict:
     with _stage("intent", request_id):
         raw = llm.chat_completion(
             [{"role": "system", "content": INTENT_SYSTEM}, {"role": "user", "content": question}],
-            max_tokens=200,
+            max_tokens=200, purpose="intent", json_schema=INTENT_SCHEMA,
         )
     return _parse_intent(raw)
 
@@ -128,6 +150,23 @@ def _format_results(works: list[dict]) -> str:
     )
 
 
+def _answer_messages(question: str, works: list[dict], history: list[dict], relaxed: bool,
+                     purpose: str | None) -> tuple[list[dict], int]:
+    narrated = works[:ANSWER_NARRATION_LIMIT]
+    past = "\n".join(f"Q: {h['question']}\nA: {(h['answer'] or '')[:300]}" for h in history) or "(없음)"
+    relax_note = "작가/연도 조건에는 맞는 작품이 없어 그 조건을 빼고 키워드만으로 찾은 결과입니다." if relaxed else "(없음)"
+    user = (f"[이전 대화]\n{past}\n\n[완화 안내]\n{relax_note}\n\n[용도]\n{purpose or '(없음)'}\n\n"
+           f"[검색 결과]\n{_format_results(narrated)}\n\n[질문]\n{question}")
+    return [{"role": "system", "content": ANSWER_SYSTEM}, {"role": "user", "content": user}], len(works) - len(narrated)
+
+
+def _extra_note(extra: int) -> str:
+    if extra <= 0:
+        return ""
+    return (f"\n\n그 외에도 관련 작품 {extra}개를 더 찾았어요. 아래 카드에서 확인해 보세요. / "
+            f"Found {extra} more related works — check the cards below.")
+
+
 def compose_answer(question: str, works: list[dict], history: list[dict], relaxed: bool = False,
                    purpose: str | None = None, request_id: str | None = None) -> str:
     """works가 ANSWER_NARRATION_LIMIT보다 많아도(예: 프리미엄 100개) 모델에는 그 안에서만 넘긴다.
@@ -138,18 +177,18 @@ def compose_answer(question: str, works: list[dict], history: list[dict], relaxe
     규칙 6에 따라 모델이 이를 먼저 알려주게 한다(사용자의 '사전 판단 비용'을 줄이기 위함).
 
     서비스가 한/영 상시 병기라 ANSWER_SYSTEM이 늘 한국어+영어 답변을 함께 생성한다(토글 없음)."""
-    narrated = works[:ANSWER_NARRATION_LIMIT]
-    past = "\n".join(f"Q: {h['question']}\nA: {(h['answer'] or '')[:300]}" for h in history) or "(없음)"
-    relax_note = "작가/연도 조건에는 맞는 작품이 없어 그 조건을 빼고 키워드만으로 찾은 결과입니다." if relaxed else "(없음)"
-    user = (f"[이전 대화]\n{past}\n\n[완화 안내]\n{relax_note}\n\n[용도]\n{purpose or '(없음)'}\n\n"
-           f"[검색 결과]\n{_format_results(narrated)}\n\n[질문]\n{question}")
+    messages, extra = _answer_messages(question, works, history, relaxed, purpose)
     with _stage("answer", request_id):
-        answer = llm.chat_completion(
-            [{"role": "system", "content": ANSWER_SYSTEM}, {"role": "user", "content": user}],
-            max_tokens=900,
-        )
-    extra = len(works) - len(narrated)
-    if extra > 0:
-        answer += (f"\n\n그 외에도 관련 작품 {extra}개를 더 찾았어요. 아래 카드에서 확인해 보세요. / "
-                   f"Found {extra} more related works — check the cards below.")
-    return answer
+        answer = llm.chat_completion(messages, max_tokens=900)
+    return answer + _extra_note(extra)
+
+
+def compose_answer_stream(question: str, works: list[dict], history: list[dict], relaxed: bool = False,
+                          purpose: str | None = None, request_id: str | None = None) -> Iterator[str]:
+    """compose_answer와 같은 답을, 만들어지는 대로 조각조각 내보낸다 (/api/chat/stream)."""
+    messages, extra = _answer_messages(question, works, history, relaxed, purpose)
+    with _stage("answer", request_id):
+        yield from llm.stream_completion(messages, max_tokens=900)
+    note = _extra_note(extra)
+    if note:
+        yield note

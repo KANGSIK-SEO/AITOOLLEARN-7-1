@@ -24,7 +24,7 @@ def client(tmp_path, monkeypatch):
 
 
 def fake_llm(calls):
-    def _fake(messages, max_tokens=700, temperature=0.3):
+    def _fake(messages, max_tokens=700, temperature=0.3, **kwargs):
         calls.append(messages)
         if "검색 의도 추출기" in messages[0]["content"]:
             return '{"chitchat": false, "keywords": ["landscape", "spring"], "artist": null, "year_from": null, "year_to": null}'
