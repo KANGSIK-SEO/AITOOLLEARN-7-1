@@ -4,6 +4,7 @@ TURSO_DATABASE_URL이 있으면 Turso(HTTP API), 없으면 로컬 SQLite 파일(
 두 백엔드 모두 execute(sql, params) -> list[dict] 로 동일하게 사용한다. (INSERT는 RETURNING 사용)
 """
 import json
+import socket
 import logging
 import os
 import re
@@ -12,7 +13,7 @@ import time
 import urllib.error
 import urllib.request
 
-from .config import ROOT
+from .config import ROOT, TIMEOUT_SECONDS
 
 log = logging.getLogger("app.db")
 
@@ -111,6 +112,10 @@ class DbError(RuntimeError):
     pass
 
 
+class DbTimeout(DbError):
+    """Turso가 25초(TIMEOUT_SECONDS) 안에 답하지 않음 — 화면에는 '접속자가 많습니다'로 안내한다."""
+
+
 def _turso_url() -> str | None:
     url = os.environ.get("TURSO_DATABASE_URL", "").strip()
     return url.replace("libsql://", "https://", 1) if url else None
@@ -156,9 +161,13 @@ def _turso_pipeline(base: str, stmts: list[tuple[str, tuple]]) -> list[list[dict
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
             data = json.load(resp)
-    except (urllib.error.URLError, TimeoutError) as e:
+    except (TimeoutError, socket.timeout) as e:
+        raise DbTimeout(f"Turso 응답 시간 초과({TIMEOUT_SECONDS:g}s)") from e
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, (TimeoutError, socket.timeout)):
+            raise DbTimeout(f"Turso 응답 시간 초과({TIMEOUT_SECONDS:g}s)") from e
         raise DbError(f"Turso 연결 실패: {e}") from e
     out = []
     for item in data["results"][:len(stmts)]:
