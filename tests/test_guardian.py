@@ -88,7 +88,7 @@ def test_daily_digest_opens_issue_on_high_urgency(fresh_db, monkeypatch):
 
     opened = {}
     monkeypatch.setattr("app.llm.chat_completion", fake_chat_completion)
-    monkeypatch.setattr(guardian, "open_github_issue", lambda title, body: opened.update(title=title, body=body))
+    monkeypatch.setattr(guardian, "open_github_issue", lambda title, body, labels=None: opened.update(title=title, body=body))
     result = guardian.run_daily_digest()
     assert result["urgency"] == "high"
     assert "high" in opened["title"]

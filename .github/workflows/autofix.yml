@@ -19,8 +19,8 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: autofix
+concurrency:   # 이슈마다 따로 — 여러 문제가 동시에 와도 앞의 것이 취소되지 않는다
+  group: autofix-${{ github.event.issue.number || inputs.issue }}
   cancel-in-progress: false
 
 env:

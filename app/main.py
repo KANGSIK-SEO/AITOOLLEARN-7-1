@@ -248,6 +248,14 @@ def guardian_scan(request: Request):
     return guardian.scan()
 
 
+@app.get("/api/guardian/summary")
+def guardian_summary(request: Request):
+    """품질 점검용 운영 요약 (.github/workflows/quality-review.yml, CRON_SECRET 필요)."""
+    if not CRON_SECRET or request.headers.get("authorization") != f"Bearer {CRON_SECRET}":
+        raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
+    return guardian.summary()
+
+
 @app.post("/api/auth/signup")
 def signup(body: Credentials, request: Request):
     ip = guardian.client_ip(request)

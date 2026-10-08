@@ -16,4 +16,4 @@ _REAL_KEYS = ("GITHUB_TOKEN", "ANTHROPIC_API_KEY", "GPT_ASTRA_API_KEY", "UPSTAGE
 def no_real_outside_calls(monkeypatch):
     for key in _REAL_KEYS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(guardian, "open_github_issue", lambda title, body: None)
+    monkeypatch.setattr(guardian, "open_github_issue", lambda title, body, labels=None: None)
