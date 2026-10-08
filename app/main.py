@@ -239,6 +239,14 @@ def health():
     return {"status": "ok"}
 
 
+def _cron_authorized(request: Request) -> bool:
+    """크론 전용 주소 확인. 값을 복사할 때 딸려 온 앞뒤 공백·줄바꿈과 'bearer' 대소문자는 무시하고,
+    비교는 걸리는 시간으로 값을 추측할 수 없게 compare_digest로 한다."""
+    secret = CRON_SECRET.strip()
+    scheme, _, token = request.headers.get("authorization", "").strip().partition(" ")
+    return bool(secret) and scheme.lower() == "bearer" and hmac.compare_digest(token.strip(), secret)
+
+
 def _dependency_checks() -> dict:
     checks = {}
     for name, probe, errors in (("db", lambda: db.execute("SELECT 1 AS ok"), db.DbError),
@@ -271,7 +279,7 @@ def healthz():
 @app.get("/api/guardian/daily-digest")
 def guardian_daily_digest(request: Request):
     """가디언의 일일 점검 (Vercel Cron 전용, CRON_SECRET으로 보호)."""
-    if not CRON_SECRET or request.headers.get("authorization") != f"Bearer {CRON_SECRET}":
+    if not _cron_authorized(request):
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
     return guardian.run_daily_digest()
 
@@ -281,7 +289,7 @@ def guardian_scan(request: Request):
     """1분 실시간 점검 (cron-job.org가 1분마다 GET, monitor.yml이 POST — CRON_SECRET 필요).
     DB·작품 DB·챗봇 AI가 실제로 답하는지 확인하고 가디언 점검(접속 감시·부하·사건)을 돌린다.
     하나라도 고장이면 503 — 바깥 점검 서비스가 실패로 보고 알림을 보낸다."""
-    if not CRON_SECRET or request.headers.get("authorization") != f"Bearer {CRON_SECRET}":
+    if not _cron_authorized(request):
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
     checks = _dependency_checks()
     result = guardian.scan()
@@ -293,7 +301,7 @@ def guardian_scan(request: Request):
 @app.get("/api/guardian/summary")
 def guardian_summary(request: Request):
     """품질 점검용 운영 요약 (.github/workflows/quality-review.yml, CRON_SECRET 필요)."""
-    if not CRON_SECRET or request.headers.get("authorization") != f"Bearer {CRON_SECRET}":
+    if not _cron_authorized(request):
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
     return guardian.summary()
 
