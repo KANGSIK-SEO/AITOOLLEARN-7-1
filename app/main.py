@@ -56,7 +56,8 @@ app.add_middleware(
 async def request_context(request: Request, call_next):
     """요청마다 request_id를 정하고(app/reqctx.py), 가디언 실시간 감시를 거친다.
     - 차단된 IP는 바로 403, 공격 도구가 찾는 경로는 404로 끝내고 횟수를 센다 (app/guardian.py)
-    - 처리 중 생긴 즉시 분석 요청과 접속 기록(1분마다 AI가 읽음)은 응답을 보낸 뒤에 남겨 사용자를 기다리게 하지 않는다"""
+    - 처리 중 생긴 즉시 분석 요청과 접속 기록(1분마다 AI가 읽음)은 응답을 보낸 뒤에 남겨 사용자를 기다리게 하지 않는다
+    - 버전(?v=)이 붙은 정적 파일 응답에는 장기 캐시 헤더를 붙인다 (_static_cache_headers)"""
     started = time.monotonic()
     reqctx.set_request_id(reqctx.new_request_id())
     reqctx.start_deadline(TIMEOUT_SECONDS)   # 이 요청은 25초 안에 끝낸다 — 바깥 호출은 남은 시간만큼만 기다린다
@@ -77,6 +78,7 @@ async def request_context(request: Request, call_next):
             response = error(500, "SERVER_ERROR", "서버에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.")
         if response.status_code == 404:
             await run_in_threadpool(guardian.note_not_found, ip, request.url.path)
+    _static_cache_headers(request, response)
     tasks = BackgroundTasks()
     if response.background is not None:
         tasks.tasks.append(response.background)
@@ -190,6 +192,22 @@ ASSET_VERSION = hashlib.sha256(b"".join(
     (STATIC_DIR / name).read_bytes() for name in (*VERSIONED_ASSETS, "index.html", "sw.js")
 )).hexdigest()[:10]
 NO_CACHE = {"Cache-Control": "no-cache"}  # 매번 서버에 새 버전이 있는지 확인 (내용이 같으면 304로 가볍게)
+# 버전(?v=현재 버전)이 붙은 정적 파일은 내용이 바뀌면 주소도 바뀌므로 1년 동안 재확인 없이 캐시해도 안전하다.
+# 버전이 없거나 다른 버전의 요청은 StaticFiles 기본값(매번 재확인)을 그대로 둔다.
+IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
+
+
+def _static_cache_headers(request: Request, response: Response) -> None:
+    """/static/<VERSIONED_ASSETS>?v=<ASSET_VERSION> 의 정상 응답(200/304)에만 장기 캐시 헤더를 붙인다.
+    쿼리는 FastAPI가 이미 해석해 둔 request.query_params를 쓴다 (별도 해석 모듈 불필요)."""
+    path = request.url.path
+    if request.method != "GET" or not path.startswith("/static/") or response.status_code not in (200, 304):
+        return
+    if path[len("/static/"):] not in VERSIONED_ASSETS:
+        return
+    if request.query_params.get("v") != ASSET_VERSION:
+        return
+    response.headers["Cache-Control"] = IMMUTABLE_CACHE
 
 
 def _versioned(text: str) -> str:
