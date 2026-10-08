@@ -221,7 +221,7 @@ TRIAGE_DAILY_MAX = int(os.environ.get("GUARDIAN_TRIAGE_DAILY_MAX", "0") or 0)
 CUSTOMER_IMPACT_CODES = {"AI_TIMEOUT", "AI_ERROR", "AI_RATE_LIMITED", "AI_KEY_MISSING", "AI_BACKED_OFF",
                          "DB_ERROR", "ART_DB_ERROR", "SERVER_ERROR"}
 # 접속 기록 AI 감시: 1분마다 새로 쌓인 접속 기록을 읽고 규칙에 없는 수상한 움직임을 찾는다
-ACCESS_LOG_SKIP = ("/static/", "/healthz", "/sw.js", "/favicon", "/api/guardian/scan")
+ACCESS_LOG_SKIP = ("/static/", "/healthz", "/sw.js", "/favicon", "/api/guardian/scan", "/api/guardian/summary")
 WATCH_BATCH = 500                  # 한 번에 AI에게 보여 주는 접속 기록 줄 수
 WATCH_MAX_IPS = 10                 # 한 번에 수상하다고 표시할 수 있는 IP 수
 ACCESS_LOG_KEEP_DAYS = 2
@@ -248,6 +248,12 @@ WATCH_SCHEMA = {
     "required": ["suspicious", "severity", "ips", "reason"],
     "additionalProperties": False,
 }
+# 서버 부하 감시: 최근 5분 접속 기록이 느리거나 시간 초과가 몰리면 'Vercel 플랜 확인' 이슈를 연다 (코드로 못 고치는 일)
+CAPACITY_WINDOW = 300
+CAPACITY_SLOW_MS = 8000            # 느린 요청 기준 (AI 답변 포함, 응답 완료까지)
+CAPACITY_SLOW_RATIO = 0.3          # 최근 5분 요청의 30% 이상이 느리면
+CAPACITY_MIN_REQUESTS = 20         # 요청이 이보다 적으면 판단하지 않는다
+CAPACITY_ALERT_HOURS = 6           # 같은 경보는 6시간에 한 번
 BLOCK_CACHE_SECONDS = 30           # 차단 목록은 서버마다 30초씩 기억해 요청마다 DB를 읽지 않는다
 
 _blocks: dict = {"source": None, "loaded_at": 0.0, "until": {}, "learned": set()}
@@ -439,6 +445,50 @@ def watch_traffic() -> dict:
     return result
 
 
+def check_capacity() -> dict:
+    """최근 5분 접속 기록으로 서버가 버거운지 본다. 버거우면 'capacity' 이슈(자동 수정 대상 아님)를 연다."""
+    since = (datetime.now(timezone.utc) - timedelta(seconds=CAPACITY_WINDOW)).isoformat(timespec="seconds")
+    row = db.execute(
+        "SELECT COUNT(*) AS total, "
+        "SUM(CASE WHEN ms >= ? THEN 1 ELSE 0 END) AS slow, "
+        "SUM(CASE WHEN status IN (502, 503, 504) THEN 1 ELSE 0 END) AS unavailable "
+        "FROM access_log WHERE created_at > ?", (CAPACITY_SLOW_MS, since))[0]
+    total, slow, unavailable = row["total"] or 0, row["slow"] or 0, row["unavailable"] or 0
+    result = {"requests_5m": total, "slow_5m": slow, "unavailable_5m": unavailable}
+    strained = total >= CAPACITY_MIN_REQUESTS and (slow + unavailable) / total >= CAPACITY_SLOW_RATIO
+    if not strained or _flag_active_until("capacity_alert_until"):
+        return result
+    _set_flag("capacity_alert_until",
+              (datetime.now(timezone.utc) + timedelta(hours=CAPACITY_ALERT_HOURS)).isoformat())
+    record_incident("reliability", "CAPACITY_STRAIN", "최근 5분 요청 다수가 느리거나 실패", result, "medium")
+    open_github_issue(
+        "[용량] 서버가 버거워요 — Vercel 플랜 확인 필요",
+        f"최근 5분 요청 {total}건 중 {slow}건이 {CAPACITY_SLOW_MS // 1000}초 넘게 걸렸고 {unavailable}건이 502·503·504였습니다.\n\n"
+        "확인할 곳: Vercel → art-chatbot → Usage(함수 실행 시간·동시 실행 한도)와 Logs.\n"
+        "- 사용량이 플랜 한도에 닿았다면 Pro 이상으로 올리면 동시 실행·실행 시간 한도가 늘어납니다.\n"
+        "- 한도에 닿지 않았는데 느리다면 AI 응답 지연일 수 있습니다 (Vercel Logs에서 `claude_call_failed`, `llm_fallback` 검색).\n"
+        "이 이슈는 코드 자동 수정 대상이 아닙니다(라벨 capacity). 같은 경보는 6시간에 한 번만 열립니다.",
+        labels=["capacity"])
+    result["alert"] = True
+    return result
+
+
+def summary(hours: int = 24) -> dict:
+    """품질 점검(.github/workflows/quality-review.yml)이 읽는 운영 요약: 사건 종류별 건수와 응답 시간."""
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
+    incidents = db.execute(
+        "SELECT category, code, COUNT(*) AS n FROM incidents WHERE created_at > ? GROUP BY category, code ORDER BY n DESC",
+        (since,))
+    ms = [r["ms"] for r in db.execute(
+        "SELECT ms FROM access_log WHERE created_at > ? AND ms IS NOT NULL AND path LIKE '/api/%' ORDER BY ms", (since,))]
+    status = db.execute(
+        "SELECT status, COUNT(*) AS n FROM access_log WHERE created_at > ? GROUP BY status ORDER BY n DESC", (since,))
+    def pct(p: float) -> int | None:
+        return ms[min(len(ms) - 1, int(len(ms) * p))] if ms else None
+    return {"hours": hours, "incidents": incidents, "api_requests": len(ms),
+            "api_ms": {"p50": pct(0.5), "p95": pct(0.95), "max": ms[-1] if ms else None}, "status": status}
+
+
 def scan() -> dict:
     """요청이 없어도 감시하도록 1분마다 밖에서 부른다 (.github/workflows/monitor.yml → /api/guardian/scan).
     새 접속 기록을 AI가 훑고(watch_traffic), 최근 5분 사건이 몰렸으면 즉시 진단한다."""
@@ -447,12 +497,17 @@ def scan() -> dict:
     except db.DbError as e:
         log.error("traffic_watch_db_failure detail=%s", e)
         traffic = {"error": "db"}
+    try:
+        capacity = check_capacity()
+    except db.DbError as e:
+        log.error("capacity_check_db_failure detail=%s", e)
+        capacity = {"error": "db"}
     since = (datetime.now(timezone.utc) - timedelta(seconds=ERROR_SPIKE[1])).isoformat(timespec="seconds")
     rows = db.execute(
         "SELECT SUM(CASE WHEN category = 'reliability' THEN 1 ELSE 0 END) AS errors, "
         "SUM(CASE WHEN severity = 'high' THEN 1 ELSE 0 END) AS high FROM incidents WHERE created_at > ?", (since,))
     errors, high = rows[0]["errors"] or 0, rows[0]["high"] or 0
-    result = {"errors_5m": errors, "high_5m": high, "traffic": traffic}
+    result = {"errors_5m": errors, "high_5m": high, "traffic": traffic, "capacity": capacity}
     if errors >= ERROR_SPIKE[0] or high:
         result["triage"] = run_triage("scan")
     return result
@@ -460,14 +515,15 @@ def scan() -> dict:
 
 # ---- Tier 2: 배치 분석 (1일 1회, Vercel Cron) ----
 
-def open_github_issue(title: str, body: str) -> None:
+def open_github_issue(title: str, body: str, labels: list[str] | None = None) -> None:
+    """기본 라벨 guardian은 자동 수정(autofix.yml)을 깨운다. 코드로 못 고치는 알림은 다른 라벨을 준다."""
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         log.warning("github_issue_skipped reason=no_token title=%s", title)
         return
     req = urllib.request.Request(
         f"https://api.github.com/repos/{GITHUB_REPO}/issues",
-        data=json.dumps({"title": title, "body": body, "labels": ["guardian"]}).encode(),
+        data=json.dumps({"title": title, "body": body, "labels": labels or ["guardian"]}).encode(),
         headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                 "Content-Type": "application/json", "User-Agent": "guardian-agent"},
         method="POST",

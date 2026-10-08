@@ -21,7 +21,7 @@ def issues(tmp_path, monkeypatch):
     monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
     db.reset_for_tests()
     opened = []
-    monkeypatch.setattr(guardian, "open_github_issue", lambda title, body: opened.append((title, body)))
+    monkeypatch.setattr(guardian, "open_github_issue", lambda title, body, labels=None: opened.append((title, body, labels)))
     monkeypatch.setattr(llm, "chat_completion", lambda *a, **k: "요약: 공격 의심\nURGENCY: high")
     return opened
 
@@ -201,3 +201,35 @@ def test_ai_watch_survives_ai_failure(issues, monkeypatch):
     monkeypatch.setattr(llm, "chat_completion", down)
     TestClient(app).get("/")
     assert guardian.watch_traffic()["error"] == "ai"
+
+
+def _fill_access_log(n: int, ms: int, status: int = 200):
+    for _ in range(n):
+        guardian.log_access("198.51.100.7", "POST", "/api/chat", status, "ua", ms)
+
+
+def test_capacity_alert_when_most_requests_are_slow(issues):
+    _fill_access_log(15, ms=12000)
+    _fill_access_log(5, ms=300, status=504)
+    result = guardian.check_capacity()
+    assert result["alert"] and result["slow_5m"] == 15 and result["unavailable_5m"] == 5
+    title, body, labels = issues[-1]
+    assert title.startswith("[용량]") and "Vercel" in body and labels == ["capacity"]  # 자동 수정 대상 아님
+    assert "alert" not in guardian.check_capacity()  # 같은 경보는 6시간에 한 번
+
+
+def test_capacity_quiet_when_fast_or_too_few_requests(issues):
+    _fill_access_log(5, ms=20000)
+    assert "alert" not in guardian.check_capacity()  # 요청이 너무 적으면 판단하지 않는다
+    _fill_access_log(40, ms=500)
+    assert "alert" not in guardian.check_capacity()
+
+
+def test_summary_endpoint_needs_secret_and_reports_latency(issues, monkeypatch):
+    client = TestClient(app)
+    assert client.get("/api/guardian/summary").status_code == 401
+    _fill_access_log(10, ms=1000)
+    guardian.record_incident("reliability", "AI_TIMEOUT", "x")
+    s = guardian.summary()
+    assert s["api_requests"] == 10 and s["api_ms"]["p95"] == 1000
+    assert {"category": "reliability", "code": "AI_TIMEOUT", "n": 1} in s["incidents"]
