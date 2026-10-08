@@ -239,15 +239,7 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/healthz")
-def healthz():
-    """의존성까지 확인하는 상태 점검 (업타임 모니터·배포 후 확인용).
-
-    /api/health는 프로세스가 떠 있는지만 본다(항상 200). /healthz는 사용자 DB(Turso/로컬)와
-    미술 DB(data/art.db)에 실제로 쿼리를 보내, 하나라도 실패하면 503을 돌려준다.
-    AI는 호출마다 비용이 들고 외부 장애가 곧 우리 장애는 아니므로 확인하지 않는다.
-    오류 상세(접속 주소·경로)는 응답에 넣지 않고 로그에만 남긴다.
-    """
+def _dependency_checks() -> dict:
     checks = {}
     for name, probe, errors in (("db", lambda: db.execute("SELECT 1 AS ok"), db.DbError),
                                 ("art_db", art.ping, sqlite3.Error)):
@@ -258,6 +250,19 @@ def healthz():
         except errors as e:
             log.error("healthz_check_failed check=%s detail=%s", name, e)
             checks[name] = {"status": "error"}
+    return checks
+
+
+@app.get("/healthz")
+def healthz():
+    """의존성까지 확인하는 상태 점검 (업타임 모니터·배포 후 확인용).
+
+    /api/health는 프로세스가 떠 있는지만 본다(항상 200). /healthz는 사용자 DB(Turso/로컬)와
+    미술 DB(data/art.db)에 실제로 쿼리를 보내, 하나라도 실패하면 503을 돌려준다.
+    AI는 호출마다 비용이 들고 외부 장애가 곧 우리 장애는 아니므로 확인하지 않는다.
+    오류 상세(접속 주소·경로)는 응답에 넣지 않고 로그에만 남긴다.
+    """
+    checks = _dependency_checks()
     healthy = all(c["status"] == "ok" for c in checks.values())
     return JSONResponse({"status": "ok" if healthy else "degraded", "checks": checks},
                         status_code=200 if healthy else 503, headers={"Cache-Control": "no-store"})
@@ -271,12 +276,18 @@ def guardian_daily_digest(request: Request):
     return guardian.run_daily_digest()
 
 
-@app.post("/api/guardian/scan")
+@app.api_route("/api/guardian/scan", methods=["GET", "POST"])
 def guardian_scan(request: Request):
-    """실시간 감시 보조: 1분마다 새 접속 기록을 AI가 훑고 최근 사건을 확인한다 (.github/workflows/monitor.yml, CRON_SECRET 필요)."""
+    """1분 실시간 점검 (cron-job.org가 1분마다 GET, monitor.yml이 POST — CRON_SECRET 필요).
+    DB·작품 DB·챗봇 AI가 실제로 답하는지 확인하고 가디언 점검(접속 감시·부하·사건)을 돌린다.
+    하나라도 고장이면 503 — 바깥 점검 서비스가 실패로 보고 알림을 보낸다."""
     if not CRON_SECRET or request.headers.get("authorization") != f"Bearer {CRON_SECRET}":
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
-    return guardian.scan()
+    checks = _dependency_checks()
+    result = guardian.scan()
+    healthy = all(c["status"] == "ok" for c in checks.values()) and result["ai"]["status"] == "ok"
+    return JSONResponse({"status": "ok" if healthy else "degraded", "checks": checks, **result},
+                        status_code=200 if healthy else 503, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/guardian/summary")

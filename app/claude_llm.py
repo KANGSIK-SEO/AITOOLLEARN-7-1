@@ -32,7 +32,7 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 # 생각 토큰도 max_tokens 안에 들어가므로, 화면에 나갈 글 길이보다 넉넉히 잡는다 (글 길이는 프롬프트가 정한다)
 MAX_TOKENS = 8000
-NO_THINKING_PURPOSES = {"intent", "watch"}   # 형식만 맞추면 되는 일 — 생각 없이도 결과가 같다
+NO_THINKING_PURPOSES = {"intent", "watch", "probe"}   # 형식만 맞추면 되는 일 — 생각 없이도 결과가 같다
 CACHE_MIN_CHARS = 2000   # 이보다 짧은 지시문은 캐시 최소 길이(512토큰)에 못 미칠 수 있어 그냥 보낸다
 
 _client: anthropic.Anthropic | None = None
