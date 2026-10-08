@@ -8,3 +8,4 @@
 ## [2026-10-08] ingest | 가디언 실시간 감시(IP 자동 차단, 즉시 분석, monitor.yml) — guardian 갱신
 ## [2026-10-08] ingest | 공격 주소 자동 학습, 가디언 자동 수정(autofix.yml·autofix-ship.yml, 승인 한 번) — guardian 갱신
 ## [2026-10-08] ingest | Claude 소진 시 solar-pro4가 바로 이어받도록 변경 — ai-llm 갱신
+## [2026-10-09] ingest | 프론트엔드 개편 반영 — frontend.md 다시 작성(화면 구성·코드 구조·다국어·테마), search.md 비율 필터 설명 수정
