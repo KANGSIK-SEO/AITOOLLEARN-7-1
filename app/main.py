@@ -291,12 +291,18 @@ def guardian_scan(request: Request):
     하나라도 고장이면 503 — 바깥 점검 서비스가 실패로 보고 알림을 보낸다."""
     if not _cron_authorized(request):
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
-    checks = _dependency_checks()
-    result = guardian.scan()
-    healthy = (all(c["status"] == "ok" for c in checks.values()) and result["ai"].get("status") == "ok"
-               and not result["failed_steps"])
-    return JSONResponse({"status": "ok" if healthy else "degraded", "checks": checks, **result},
-                        status_code=200 if healthy else 503, headers={"Cache-Control": "no-store"})
+    try:
+        checks = _dependency_checks()
+        result = guardian.scan()
+        healthy = (all(c["status"] == "ok" for c in checks.values()) and result["ai"].get("status") == "ok"
+                   and not result["failed_steps"])
+        body = json.loads(json.dumps({"status": "ok" if healthy else "degraded", "checks": checks, **result},
+                                     default=str))   # 응답으로 못 바꾸는 값이 섞여도 500이 나지 않게
+    except Exception as e:  # noqa: BLE001 — 원인 모를 500 대신 위치를 남기고 503 (2026-10-09)
+        failure = guardian.report_scan_failure("scan", e)
+        return JSONResponse({"status": "degraded", "failed_steps": ["scan"], "scan": failure},
+                            status_code=503, headers={"Cache-Control": "no-store"})
+    return JSONResponse(body, status_code=200 if healthy else 503, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/guardian/summary")

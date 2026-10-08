@@ -330,3 +330,16 @@ def test_one_broken_scan_step_does_not_crash_the_whole_check(issues, monkeypatch
     assert len(alert) == 1 and "KeyError" in alert[0][1] and "sk-ant" not in alert[0][1]   # 비밀처럼 보이는 값은 가린다
     TestClient(app).get("/api/guardian/scan", headers={"Authorization": "Bearer s3cret"})
     assert len([i for i in issues if "'traffic' 단계 오류" in i[0]]) == 1   # 같은 단계 알림은 30분에 한 번
+
+
+def test_scan_route_failure_outside_steps_is_reported_not_500(issues, monkeypatch):
+    from app import main
+    monkeypatch.setattr(main, "CRON_SECRET", "s3cret")
+
+    def boom():
+        raise TypeError("unexpected")
+    monkeypatch.setattr(main, "_dependency_checks", boom)
+    r = TestClient(app).get("/api/guardian/scan", headers={"Authorization": "Bearer s3cret"})
+    assert r.status_code == 503 and r.json()["failed_steps"] == ["scan"]
+    alert = [i for i in issues if "'scan' 단계 오류" in i[0]]
+    assert alert and "TypeError" in alert[0][1] and "boom" in alert[0][1]
