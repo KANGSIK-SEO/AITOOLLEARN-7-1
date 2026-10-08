@@ -288,12 +288,16 @@ def guardian_daily_digest(request: Request):
 def guardian_scan(request: Request):
     """1분 실시간 점검 (cron-job.org가 1분마다 GET, monitor.yml이 POST — CRON_SECRET 필요).
     DB·작품 DB·챗봇 AI가 실제로 답하는지 확인하고 가디언 점검(접속 감시·부하·사건)을 돌린다.
-    하나라도 고장이면 503 — 바깥 점검 서비스가 실패로 보고 알림을 보낸다."""
+    하나라도 고장이면 503 — 바깥 점검 서비스가 실패로 보고 알림을 보낸다.
+    점검 단계 하나가 예상 못 한 오류로 실패해도(guardian._scan_step) 500이 아니라 503 degraded로 답하고,
+    실패한 단계는 응답에 {"error": 예외종류}로 표시된다."""
     if not _cron_authorized(request):
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
     checks = _dependency_checks()
     result = guardian.scan()
-    healthy = all(c["status"] == "ok" for c in checks.values()) and result["ai"]["status"] == "ok"
+    step_failed = any("error" in result.get(step, {}) for step in ("ai", "traffic", "capacity"))
+    healthy = (all(c["status"] == "ok" for c in checks.values())
+               and result["ai"].get("status") == "ok" and not step_failed)
     return JSONResponse({"status": "ok" if healthy else "degraded", "checks": checks, **result},
                         status_code=200 if healthy else 503, headers={"Cache-Control": "no-store"})
 

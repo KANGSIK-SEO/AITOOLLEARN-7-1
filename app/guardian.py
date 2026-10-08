@@ -621,20 +621,32 @@ def probe_ai() -> dict:
     return {"status": "ok", "latency_ms": int((time.monotonic() - started) * 1000)}
 
 
+def _scan_step(name: str, fn, db_log: str) -> dict:
+    """1분 점검의 단계 하나를 돌린다. 어떤 예외가 나도 다른 단계와 점검 자체는 계속되게 하고,
+    원인(단계 이름·예외 종류·메시지)을 로그(스택트레이스 포함)와 사건에 남긴다.
+
+    예전에는 한 단계에서 DB·AI 오류가 아닌 예상 못 한 예외가 나면 /api/guardian/scan 전체가 500(SERVER_ERROR)으로
+    끝났고, 사건에는 경로만 남아 '어느 단계가 왜' 실패했는지 알 수 없었다 (2026-10-08 23:13 경보)."""
+    try:
+        return fn()
+    except db.DbError as e:
+        log.error("%s detail=%s", db_log, e)
+        return {"error": "db"}
+    except Exception as e:  # 예상 못 한 오류 — 숨기지 않고 단계·종류를 남긴 뒤 다음 단계로 간다
+        kind = type(e).__name__
+        log.exception("scan_step_failure step=%s error=%s", name, kind)
+        record_incident("reliability", "SCAN_STEP_FAILED", f"가디언 점검 단계 '{name}' 처리 중 오류 ({kind})",
+                        {"step": name, "error": kind, "detail": str(e)[:200]}, "high")
+        return {"error": kind}
+
+
 def scan() -> dict:
     """요청이 없어도 감시하도록 1분마다 밖에서 부른다 (cron-job.org·monitor.yml → /api/guardian/scan).
-    챗봇 AI가 답하는지 확인하고(probe_ai), 새 접속 기록을 훑고(watch_traffic), 최근 5분 사건이 몰렸으면 즉시 진단한다."""
-    ai = probe_ai()
-    try:
-        traffic = watch_traffic()
-    except db.DbError as e:
-        log.error("traffic_watch_db_failure detail=%s", e)
-        traffic = {"error": "db"}
-    try:
-        capacity = check_capacity()
-    except db.DbError as e:
-        log.error("capacity_check_db_failure detail=%s", e)
-        capacity = {"error": "db"}
+    챗봇 AI가 답하는지 확인하고(probe_ai), 새 접속 기록을 훑고(watch_traffic), 최근 5분 사건이 몰렸으면 즉시 진단한다.
+    각 단계는 _scan_step으로 따로 보호한다 — 한 단계가 실패해도 나머지 단계는 돌고, 실패한 단계는 {"error": ...}로 표시된다."""
+    ai = _scan_step("ai", probe_ai, "ai_probe_db_failure")
+    traffic = _scan_step("traffic", watch_traffic, "traffic_watch_db_failure")
+    capacity = _scan_step("capacity", check_capacity, "capacity_check_db_failure")
     since = (datetime.now(timezone.utc) - timedelta(seconds=ERROR_SPIKE[1])).isoformat(timespec="seconds")
     rows = db.execute(
         "SELECT SUM(CASE WHEN category = 'reliability' THEN 1 ELSE 0 END) AS errors, "
@@ -642,7 +654,7 @@ def scan() -> dict:
     errors, high = rows[0]["errors"] or 0, rows[0]["high"] or 0
     result = {"ai": ai, "errors_5m": errors, "high_5m": high, "traffic": traffic, "capacity": capacity}
     if errors >= ERROR_SPIKE[0] or high:
-        result["triage"] = run_triage("scan")
+        result["triage"] = _scan_step("triage", lambda: run_triage("scan"), "triage_db_failure")
     return result
 
 
