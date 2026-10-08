@@ -17,6 +17,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from . import art, auth, chat, db, explain, guardian, records, reqctx
@@ -51,9 +53,28 @@ app.add_middleware(
 
 @app.middleware("http")
 async def request_context(request: Request, call_next):
-    """요청마다 request_id를 정해, 그 요청에서 남는 모든 로그 줄에 같은 값이 붙게 한다 (app/reqctx.py)."""
+    """요청마다 request_id를 정하고(app/reqctx.py), 가디언 실시간 감시를 거친다.
+    - 차단된 IP는 바로 403, 공격 도구가 찾는 경로는 404로 끝내고 횟수를 센다 (app/guardian.py)
+    - 처리 중 생긴 즉시 분석 요청은 응답을 보낸 뒤에 실행해 사용자를 기다리게 하지 않는다"""
     reqctx.set_request_id(reqctx.new_request_id())
-    return await call_next(request)
+    pending = reqctx.start_pending()
+    ip = guardian.client_ip(request)
+    if await run_in_threadpool(guardian.is_blocked, ip):
+        return error(403, "BLOCKED", "의심스러운 요청이 반복되어 잠시 접속이 제한되었어요. 잠시 후 다시 시도해 주세요.")
+    if guardian.PROBE_PATH_RE.search(request.url.path):
+        await run_in_threadpool(guardian.note_probe, ip, request.url.path)
+        response = error(404, "NOT_FOUND", "찾을 수 없습니다.")
+    else:
+        try:
+            response = await call_next(request)
+        except Exception:  # 처리 못 한 오류도 사건으로 남겨 실시간 감시가 알게 한다
+            log.exception("unhandled_error path=%s", request.url.path)
+            await run_in_threadpool(guardian.record_incident, "reliability", "SERVER_ERROR",
+                                    f"{request.method} {request.url.path} 처리 중 오류", {"path": request.url.path}, "high")
+            response = error(500, "SERVER_ERROR", "서버에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.")
+    if pending.get("triage") and response.background is None:
+        response.background = BackgroundTask(guardian.run_triage, pending["triage"])
+    return response
 
 
 STATUS_BY_CODE = {"AI_TIMEOUT": 504, "AI_ERROR": 502, "AI_RATE_LIMITED": 429,
@@ -208,6 +229,14 @@ def guardian_daily_digest(request: Request):
     return guardian.run_daily_digest()
 
 
+@app.post("/api/guardian/scan")
+def guardian_scan(request: Request):
+    """실시간 감시 보조: 요청이 없을 때도 5분마다 최근 사건을 훑는다 (.github/workflows/monitor.yml, CRON_SECRET 필요)."""
+    if not CRON_SECRET or request.headers.get("authorization") != f"Bearer {CRON_SECRET}":
+        raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
+    return guardian.scan()
+
+
 @app.post("/api/auth/signup")
 def signup(body: Credentials, request: Request):
     ip = guardian.client_ip(request)
@@ -245,7 +274,7 @@ def login(body: Credentials, request: Request):
     rows = db.execute("SELECT id, password_hash, is_premium FROM users WHERE email = ?", (email,))
     if not rows or not auth.verify_password(body.password, rows[0]["password_hash"]):
         log.info("login_failed")
-        guardian.note_login_failure(email)
+        guardian.note_login_failure(email, ip)
         return error(401, "INVALID_CREDENTIALS", "이메일 또는 비밀번호가 올바르지 않습니다.")
     is_premium = bool(rows[0]["is_premium"])
     log.info("login_success user_id=%s is_premium=%s", rows[0]["id"], is_premium)
@@ -285,11 +314,11 @@ def _save_chat(user_id, question, answer, status, error_code, latency_ms, artwor
         return None
 
 
-def _chat_context(body: ChatRequest, session_data: dict, path: str) -> dict | JSONResponse:
+def _chat_context(body: ChatRequest, session_data: dict, request: Request) -> dict | JSONResponse:
     """질문 전 검사(입력·사용량·AI 쉼)를 하고, 통과하면 답변에 필요한 값을 돌려준다. 막히면 오류 응답."""
     user_id, is_premium = session_data["uid"], session_data["premium"]
     request_id = reqctx.get_request_id()
-    log.info("request_received user_id=%s path=%s", user_id, path)
+    log.info("request_received user_id=%s path=%s", user_id, request.url.path)
 
     question = body.message.strip()
     if not question:
@@ -297,8 +326,10 @@ def _chat_context(body: ChatRequest, session_data: dict, path: str) -> dict | JS
     if len(question) > CHAT_MAX_LENGTH:
         return error(400, "MESSAGE_TOO_LONG", f"질문은 {CHAT_MAX_LENGTH}자 이하로 입력해 주세요.")
     if guardian.looks_malicious(question):
+        ip = guardian.client_ip(request)
         guardian.record_incident("security", "MALICIOUS_INPUT_BLOCKED", "의심스러운 입력 패턴 차단",
-                                 {"user_id": user_id, "request_id": request_id}, "medium")
+                                 {"user_id": user_id, "ip": ip, "request_id": request_id}, "medium")
+        guardian.strike("malicious", ip)
         return error(400, "INVALID_INPUT", "허용되지 않는 입력입니다.")
     # 질문 전 확인 4가지(AI 쉬는 중인지·이번 시간 사용량·누적 사용량·최근 대화)를 DB 왕복 한 번으로 읽는다
     hour_limit = CHAT_LIMIT_PER_HOUR_PREMIUM if is_premium else CHAT_LIMIT_PER_HOUR
@@ -358,8 +389,8 @@ def _search_conditions(intent: dict, relaxed: bool) -> dict | None:
 
 
 @app.post("/api/chat")
-def chat_endpoint(body: ChatRequest, session_data: dict = Depends(current_session)):
-    ctx = _chat_context(body, session_data, "/api/chat")
+def chat_endpoint(body: ChatRequest, request: Request, session_data: dict = Depends(current_session)):
+    ctx = _chat_context(body, session_data, request)
     if isinstance(ctx, JSONResponse):
         return ctx
     request_id = ctx["request_id"]
@@ -389,13 +420,13 @@ def _ndjson(event: dict) -> str:
 
 
 @app.post("/api/chat/stream")
-def chat_stream(body: ChatRequest, session_data: dict = Depends(current_session)):
+def chat_stream(body: ChatRequest, request: Request, session_data: dict = Depends(current_session)):
     """/api/chat과 같은 일을 하되, 결과를 도착하는 대로 한 줄씩(NDJSON) 보낸다.
     1) meta: 검색이 끝나자마자 작품 카드와 검색 조건 → 화면이 카드부터 그린다
     2) delta: 답변 글 조각 (Claude는 만들어지는 대로, GPT 경로는 한 번에)
     3) done: 대화 저장 결과 / error: 답변 도중 실패
     답변 전에 실패하면(검색 조건 추출·DB) 스트림을 열지 않고 /api/chat과 같은 오류 응답을 준다."""
-    ctx = _chat_context(body, session_data, "/api/chat/stream")
+    ctx = _chat_context(body, session_data, request)
     if isinstance(ctx, JSONResponse):
         return ctx
     request_id = ctx["request_id"]
