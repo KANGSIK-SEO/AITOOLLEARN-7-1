@@ -598,15 +598,28 @@ AI_PROBE_ALERT_MINUTES = 30
 AI_PROBE_SYSTEM = "상태 확인용 요청이다. 'ok' 한 단어만 답한다."
 
 
+def _probe_call() -> AIUnavailableError | None:
+    """상태 확인 질문을 한 번 보낸다. 성공하면 None, 실패하면 AIUnavailableError.
+    AI 호출 경로가 '알려진 AI 오류'로 바꾸지 못한 예외(예: 응답 도중 연결이 끊김)도 점검 전체를 죽이지 않도록
+    AI_ERROR로 분류한다 — 원인은 스택과 함께 로그에 남긴다."""
+    try:
+        llm.chat_completion([{"role": "system", "content": AI_PROBE_SYSTEM}, {"role": "user", "content": "ping"}],
+                            max_tokens=20, purpose="probe")
+        return None
+    except AIUnavailableError as e:
+        return e
+    except Exception as e:  # noqa: BLE001 — 분류되지 않은 실패도 'AI가 답하지 못함'으로 보고 알린다
+        log.exception("ai_probe_unexpected_error error=%s", type(e).__name__)
+        return AIUnavailableError("AI_ERROR", f"AI 호출 중 예상 못 한 오류 ({type(e).__name__})")
+
+
 def probe_ai() -> dict:
     """고객과 같은 길(Claude → 대체 AI)로 짧은 질문을 보낸다. 모두 실패하면 고객도 답을 못 받는 상태다."""
     if not check_rate("probe:ai", limit=1, window_seconds=AI_PROBE_SECONDS):
         return {"status": "error" if _flag_active_until("ai_probe_down_until") else "ok", "checked": "recently"}
     started = time.monotonic()
-    try:
-        llm.chat_completion([{"role": "system", "content": AI_PROBE_SYSTEM}, {"role": "user", "content": "ping"}],
-                            max_tokens=20, purpose="probe")
-    except AIUnavailableError as e:
+    e = _probe_call()
+    if e is not None:
         now = datetime.now(timezone.utc)
         _set_flag("ai_probe_down_until", (now + timedelta(seconds=AI_PROBE_SECONDS + 10)).isoformat())
         record_incident("reliability", "AI_PROBE_FAILED", f"챗봇 AI 답변 확인 실패 ({e.code})", {"code": e.code}, "medium")
@@ -621,20 +634,30 @@ def probe_ai() -> dict:
     return {"status": "ok", "latency_ms": int((time.monotonic() - started) * 1000)}
 
 
+def _scan_step(name: str, fn, fallback: dict) -> dict:
+    """점검 한 단계를 실행한다. 한 단계가 예상 못 한 오류로 죽어도 /api/guardian/scan 전체가 500(SERVER_ERROR)이
+    되지 않게 그 단계만 실패로 표시하고 나머지 점검을 계속한다. 원인은 숨기지 않는다 — 스택을 로그에 남기고
+    SCAN_STEP_FAILED 사건(high)으로 기록해 기존처럼 즉시 진단·알림이 이어지게 한다."""
+    try:
+        return fn()
+    except db.DbError as e:
+        log.error("scan_step_db_failure step=%s detail=%s", name, e)
+        return {**fallback, "error": "db"}
+    except Exception as e:  # noqa: BLE001 — 분류되지 않은 실패: 기록하고 점검은 계속한다
+        log.exception("scan_step_failure step=%s error=%s", name, type(e).__name__)
+        record_incident("reliability", "SCAN_STEP_FAILED",
+                        f"가디언 점검 단계 {name} 처리 중 오류 ({type(e).__name__})",
+                        {"step": name, "error": type(e).__name__}, "high")
+        return {**fallback, "error": type(e).__name__}
+
+
 def scan() -> dict:
     """요청이 없어도 감시하도록 1분마다 밖에서 부른다 (cron-job.org·monitor.yml → /api/guardian/scan).
-    챗봇 AI가 답하는지 확인하고(probe_ai), 새 접속 기록을 훑고(watch_traffic), 최근 5분 사건이 몰렸으면 즉시 진단한다."""
-    ai = probe_ai()
-    try:
-        traffic = watch_traffic()
-    except db.DbError as e:
-        log.error("traffic_watch_db_failure detail=%s", e)
-        traffic = {"error": "db"}
-    try:
-        capacity = check_capacity()
-    except db.DbError as e:
-        log.error("capacity_check_db_failure detail=%s", e)
-        capacity = {"error": "db"}
+    챗봇 AI가 답하는지 확인하고(probe_ai), 새 접속 기록을 훑고(watch_traffic), 최근 5분 사건이 몰렸으면 즉시 진단한다.
+    각 단계는 _scan_step으로 감싸 한 단계의 실패가 점검 전체를 무너뜨리지 않게 한다."""
+    ai = _scan_step("ai", probe_ai, {"status": "error"})
+    traffic = _scan_step("traffic", watch_traffic, {})
+    capacity = _scan_step("capacity", check_capacity, {})
     since = (datetime.now(timezone.utc) - timedelta(seconds=ERROR_SPIKE[1])).isoformat(timespec="seconds")
     rows = db.execute(
         "SELECT SUM(CASE WHEN category = 'reliability' THEN 1 ELSE 0 END) AS errors, "
