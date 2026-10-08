@@ -300,3 +300,15 @@ def test_scan_endpoint_get_reports_503_when_ai_is_down(issues, monkeypatch):
     r = client.get("/api/guardian/scan", headers=headers)
     assert r.status_code == 503 and r.json()["ai"]["status"] == "error"
     assert client.get("/api/guardian/scan").status_code == 401
+
+
+def test_cron_secret_tolerates_copied_whitespace_but_not_wrong_values(issues, monkeypatch):
+    from app import main
+    monkeypatch.setattr(main, "CRON_SECRET", "s3cret\n")   # Vercel에 값을 넣을 때 줄바꿈이 딸려 온 경우
+    client = TestClient(app)
+    assert client.get("/api/guardian/scan", headers={"Authorization": "Bearer s3cret "}).status_code in (200, 503)
+    assert client.get("/api/guardian/scan", headers={"Authorization": "bearer s3cret"}).status_code in (200, 503)
+    assert client.get("/api/guardian/scan", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert client.get("/api/guardian/scan", headers={"Authorization": "s3cret"}).status_code == 401
+    monkeypatch.setattr(main, "CRON_SECRET", "  ")
+    assert client.get("/api/guardian/scan", headers={"Authorization": "Bearer "}).status_code == 401
