@@ -57,7 +57,7 @@ async def request_context(request: Request, call_next):
     """요청마다 request_id를 정하고(app/reqctx.py), 가디언 실시간 감시를 거친다.
     - 차단된 IP는 바로 403, 공격 도구가 찾는 경로는 404로 끝내고 횟수를 센다 (app/guardian.py)
     - 처리 중 생긴 즉시 분석 요청과 접속 기록(1분마다 AI가 읽음)은 응답을 보낸 뒤에 남겨 사용자를 기다리게 하지 않는다
-    - 버전(?v=)이 붙은 정적 파일 응답에는 장기 캐시 헤더를 붙인다 (_static_cache_headers)"""
+    - 정적 파일 응답에는 캐시 헤더를 일관되게 붙인다 (_static_cache_headers)"""
     started = time.monotonic()
     reqctx.set_request_id(reqctx.new_request_id())
     reqctx.start_deadline(TIMEOUT_SECONDS)   # 이 요청은 25초 안에 끝낸다 — 바깥 호출은 남은 시간만큼만 기다린다
@@ -195,21 +195,24 @@ ASSET_VERSION = hashlib.sha256(b"".join(
 )).hexdigest()[:10]
 NO_CACHE = {"Cache-Control": "no-cache"}  # 매번 서버에 새 버전이 있는지 확인 (내용이 같으면 304로 가볍게)
 # 버전(?v=현재 버전)이 붙은 정적 파일은 내용이 바뀌면 주소도 바뀌므로 1년 동안 재확인 없이 캐시해도 안전하다.
-# 버전이 없거나 다른 버전의 요청은 StaticFiles 기본값(매번 재확인)을 그대로 둔다.
+# 버전이 없거나 다른 버전의 요청, 그리고 manifest·아이콘 같은 나머지 정적 파일은 no-cache로 통일한다 —
+# 배포 환경이 붙이는 'max-age=0, must-revalidate' 대신 우리가 정책을 명시해 어디서나 같은 동작을 보장한다.
 IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
 
 
 def _static_cache_headers(request: Request, response: Response) -> None:
-    """/static/<VERSIONED_ASSETS>?v=<ASSET_VERSION> 의 정상 응답(200/304)에만 장기 캐시 헤더를 붙인다.
+    """/static/ 아래 정상 응답(200/304)에 Cache-Control을 일관되게 붙인다.
+    - /static/<VERSIONED_ASSETS>?v=<ASSET_VERSION> → 장기 immutable 캐시
+    - 그 외(버전 없음·다른 버전·manifest·아이콘 등) → no-cache (매번 재확인, 같으면 304)
     쿼리는 FastAPI가 이미 해석해 둔 request.query_params를 쓴다 (별도 해석 모듈 불필요)."""
     path = request.url.path
     if request.method != "GET" or not path.startswith("/static/") or response.status_code not in (200, 304):
         return
-    if path[len("/static/"):] not in VERSIONED_ASSETS:
-        return
-    if request.query_params.get("v") != ASSET_VERSION:
-        return
-    response.headers["Cache-Control"] = IMMUTABLE_CACHE
+    name = path[len("/static/"):]
+    if name in VERSIONED_ASSETS and request.query_params.get("v") == ASSET_VERSION:
+        response.headers["Cache-Control"] = IMMUTABLE_CACHE
+    else:
+        response.headers["Cache-Control"] = NO_CACHE["Cache-Control"]
 
 
 def _versioned(text: str) -> str:
