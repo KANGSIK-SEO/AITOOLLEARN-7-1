@@ -1,6 +1,6 @@
 """AI 호출 (서버 측에서만 수행, 키는 응답에 노출하지 않는다).
 
-ANTHROPIC_API_KEY가 있으면 Claude(app/claude_llm.py, 기본 claude-fable-5-1)를 먼저 쓴다.
+ANTHROPIC_API_KEY가 있으면 Claude(app/claude_llm.py, 기본 claude-haiku-5-5)를 먼저 쓴다.
 Claude가 크레딧 소진·한도·인증 문제로 실패하면 Upstage solar-pro4가 바로 이어받는다
 (UPSTAGE_API_KEY가 없으면 GPT로). Claude 키가 없으면 GPT를 쓰고, GPT가 소진되면 solar-pro4가 이어받는다.
 거절(AI_REFUSED)은 다른 회사 모델로 넘기지 않는다.
@@ -51,7 +51,7 @@ def _after_claude(messages: list[dict], max_tokens: int, reason: str) -> str:
 
 def chat_completion(messages: list[dict], max_tokens: int = 700, purpose: str = "answer",
                     json_schema: dict | None = None) -> str:
-    """purpose: "intent"(검색 조건 뽑기) | "answer"(답변 쓰기). json_schema는 Claude에서만 쓰인다
+    """purpose: "intent"(검색 조건 뽑기) | "answer"(답변 쓰기) | "watch"(가디언 접속 기록 감시). json_schema는 Claude에서만 쓰인다
     (다른 모델은 프롬프트의 JSON 형식 안내와 chat._parse_intent의 정리로 같은 결과를 낸다)."""
     if claude_llm.enabled():
         try:
