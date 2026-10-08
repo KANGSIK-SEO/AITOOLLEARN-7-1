@@ -2,7 +2,8 @@
 
 사용 (GitHub Actions autofix.yml 안에서):
     python3 scripts/autofix_propose.py <이슈 JSON 파일> <학습 기록 JSON 파일> <요약을 쓸 파일>
-필요: ANTHROPIC_API_KEY. 모델은 AUTOFIX_MODEL(기본 claude-fable-5-1), 깊이는 AUTOFIX_EFFORT(기본 high).
+필요: ANTHROPIC_API_KEY. 모델은 AUTOFIX_MODEL(기본 claude-fable-5-1), 깊이는 AUTOFIX_EFFORT(기본 medium —
+실시간 대응을 위해 high보다 빠르게. 더 꼼꼼한 수정이 필요하면 저장소 변수로 high).
 
 AI는 파일 내용만 돌려주고, 이 스크립트가 허용된 경로에만 써 넣는다. AI가 명령을 실행하거나
 인터넷에 접속할 수단은 없다. 써 넣은 결과는 다음 단계에서 비밀 값이 없는 곳에서
@@ -25,7 +26,7 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 EDITABLE_RE = re.compile(r"^app/[a-z_]+\.py$|^app/static/[a-z_]+\.(js|css|html)$")
 CONTEXT_GLOBS = ("app/*.py", "app/static/*.js", "app/static/*.html", "app/static/*.css", "db/schema.sql")
 MAX_ISSUE_CHARS = 20_000
-LESSON_KEYS = ("date", "issue", "outcome", "reason", "files")
+LESSON_KEYS = ("date", "issue", "problem", "outcome", "reason", "files")
 
 SYSTEM = """너는 FastAPI 웹서비스 'AITOOLLEARN-7-1'(퍼블릭 도메인 명화 찾기 챗봇)의 보안·장애 대응 엔지니어다.
 가디언이 올린 이슈를 읽고, 원인을 막는 가장 작은 코드 수정과 그 수정을 확인하는 새 테스트를 쓴다.
@@ -99,7 +100,7 @@ def ask_claude(prompt: str, client: anthropic.Anthropic | None = None) -> dict:
     params = {
         "model": model, "max_tokens": 64000, "system": SYSTEM,
         "messages": [{"role": "user", "content": prompt}],
-        "output_config": {"effort": os.environ.get("AUTOFIX_EFFORT", "").strip() or "high",
+        "output_config": {"effort": os.environ.get("AUTOFIX_EFFORT", "").strip() or "medium",
                           "format": {"type": "json_schema", "schema": OUTPUT_SCHEMA}},
     }
     if not model.startswith("claude-haiku"):
