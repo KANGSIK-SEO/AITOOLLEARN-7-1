@@ -76,6 +76,18 @@ SCHEMA = [
         created_at  TEXT NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_access_log_time ON access_log (created_at)",
+    # Claude 토큰 사용량: 목적(answer·intent·watch·triage …)별로 얼마나 쓰는지 보고 줄인다 (30일 보관)
+    """CREATE TABLE IF NOT EXISTS ai_usage (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        purpose       TEXT NOT NULL,
+        model         TEXT NOT NULL,
+        input_tokens  INTEGER NOT NULL,
+        output_tokens INTEGER NOT NULL,
+        cache_read    INTEGER NOT NULL DEFAULT 0,
+        cache_write   INTEGER NOT NULL DEFAULT 0,
+        created_at    TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_ai_usage_time ON ai_usage (created_at)",
     """CREATE TABLE IF NOT EXISTS runtime_flags (
         key         TEXT PRIMARY KEY,
         value       TEXT NOT NULL,

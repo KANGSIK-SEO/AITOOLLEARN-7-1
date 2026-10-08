@@ -162,33 +162,61 @@ def test_requests_are_logged_for_the_ai_watch(issues):
     assert [(r["method"], r["path"], r["status"]) for r in rows] == [("GET", "/?q=%EB%B4%84", 200)]
 
 
+ODD = "/?q=%27%20or%20%271%27=%271"   # 쿼리에 숨긴 SQL 공격 문자열 — 규칙이 신호로 잡는다
+
+
 def test_ai_watch_reads_only_new_logs_and_blocks_after_two_flags(issues, monkeypatch):
     client = TestClient(app)
     seen = []
     _verdict(monkeypatch, '{"suspicious": true, "severity": "medium", "ips": ["testclient", "6.6.6.6"], '
-                          '"reason": "같은 API를 기계적으로 반복"}', seen)
-    client.get("/")
+                          '"reason": "쿼리에 SQL 공격 문자열"}', seen)
+    client.get(ODD)
     first = guardian.watch_traffic()
-    assert first["ips"] == ["testclient"]  # 기록에 없는 IP(6.6.6.6)는 AI가 말해도 무시한다
+    assert first["ips"] == ["testclient"]  # 규칙에 걸리지 않은 IP(6.6.6.6)는 AI가 말해도 무시한다
     assert seen[0][1]["purpose"] == "watch" and seen[0][1]["json_schema"] is guardian.WATCH_SCHEMA
+    sent = seen[0][0][1]["content"]
+    assert "testclient" in sent and "signals" in sent  # 원본 줄 대신 IP별 요약만 보낸다
     assert guardian.watch_traffic() == {"watched": 0}  # 이미 본 기록은 다시 보내지 않는다
     assert not guardian.is_blocked("testclient")  # AI 한 번의 판단으로는 막지 않는다
-    client.get("/")
+    client.get(ODD)
     guardian.watch_traffic()
     guardian._blocks["loaded_at"] = 0
     assert guardian.is_blocked("testclient")
     assert _codes().count("AI_SUSPICIOUS_TRAFFIC") == 2
 
 
+def test_ai_watch_skips_ai_when_rules_see_nothing(issues, monkeypatch):
+    seen = []
+    _verdict(monkeypatch, '{"suspicious": true, "severity": "high", "ips": ["testclient"], "reason": "x"}', seen)
+    client = TestClient(app)
+    for _ in range(5):
+        client.get("/?q=봄 풍경")
+    assert guardian.watch_traffic() == {"watched": 5, "suspicious": False, "ai": "skipped"}
+    assert not seen and "AI_SUSPICIOUS_TRAFFIC" not in _codes()  # 평범한 접속에는 AI 비용 0
+
+
+def test_traffic_signals_catch_rule_dodging_patterns():
+    def row(path, status=200, ua="Mozilla", ip="9.9.9.9"):
+        return {"ip": ip, "path": path, "status": status, "user_agent": ua, "created_at": "t"}
+    burst = [row("/api/artworks") for _ in range(60)]
+    peeking = [row(f"/api/me/favorites/{i}", ip="8.8.8.8") for i in range(12)]
+    scanner = [row("/", ua="sqlmap/1.7", ip="7.7.7.7")]
+    normal = [row("/api/chat", ip="1.2.3.4") for _ in range(5)]
+    flagged = guardian.traffic_signals(burst + peeking + scanner + normal)
+    assert set(flagged) == {"9.9.9.9", "8.8.8.8", "7.7.7.7"}
+    assert "요청 60건" in flagged["9.9.9.9"]["signals"]
+    assert len(flagged["9.9.9.9"]["sample_paths"]) <= 12
+
+
 def test_ai_watch_normal_traffic_records_nothing(issues, monkeypatch):
     _verdict(monkeypatch, '{"suspicious": false, "severity": "low", "ips": [], "reason": ""}')
-    TestClient(app).get("/")
+    TestClient(app).get(ODD)
     assert guardian.watch_traffic() == {"watched": 1, "suspicious": False}
     assert "AI_SUSPICIOUS_TRAFFIC" not in _codes()
 
 
 def test_ai_watch_high_severity_alerts_now(issues, monkeypatch):
-    TestClient(app).get("/")
+    TestClient(app).get(ODD)
     issues.clear()
     _verdict(monkeypatch, '{"suspicious": true, "severity": "high", "ips": ["testclient"], "reason": "계정 돌려 막기"}')
     guardian.scan()
@@ -199,7 +227,7 @@ def test_ai_watch_survives_ai_failure(issues, monkeypatch):
     def down(*a, **k):
         raise AIUnavailableError("AI_ERROR", "down")
     monkeypatch.setattr(llm, "chat_completion", down)
-    TestClient(app).get("/")
+    TestClient(app).get(ODD)
     assert guardian.watch_traffic()["error"] == "ai"
 
 

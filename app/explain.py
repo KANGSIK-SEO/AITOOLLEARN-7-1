@@ -102,4 +102,4 @@ def ask(question: str) -> str:
         {"role": "system", "content": SYSTEM_PROMPT.format(context=context)},
         {"role": "user", "content": question},
     ]
-    return chat_completion(messages, max_tokens=1200)
+    return chat_completion(messages, max_tokens=1200, purpose="explain")

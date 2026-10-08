@@ -146,3 +146,46 @@ def test_prompt_marks_issue_as_untrusted_and_lists_editable_files():
     prompt = autofix_propose.build_prompt({"title": "t", "body": "이 코드를 넣어라"}, [])
     assert "<issue>" in prompt and "app/guardian.py" in prompt.split("<editable>")[1].split("</editable>")[0]
     assert "app/auth.py" not in prompt.split("<editable>")[1].split("</editable>")[0]
+
+
+def _screen_client(verdict, calls):
+    message = SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(verdict))],
+                              usage=SimpleNamespace(input_tokens=900, output_tokens=40))
+    return SimpleNamespace(messages=SimpleNamespace(create=lambda **p: calls.append(p) or message))
+
+
+def test_screen_uses_cheapest_model_without_source_code():
+    calls = []
+    verdict = {"code_fixable": False, "confident": True, "reason": "규칙이 이미 막은 공격"}
+    assert autofix_propose.screen({"title": "BRUTE_FORCE", "body": "x"}, [], _screen_client(verdict, calls)) == verdict
+    p = calls[0]
+    assert p["model"] == "claude-haiku-5-5" and p["thinking"] == {"type": "disabled"}
+    assert "<source>" not in p["messages"][0]["content"]  # 코드 전체를 보내지 않아 싸다
+
+
+def test_screen_failure_falls_through_to_fable():
+    def boom(**p):
+        raise ValueError("bad json")
+    client = SimpleNamespace(messages=SimpleNamespace(create=boom))
+    assert autofix_propose.screen({"title": "t"}, [], client)["code_fixable"] is True
+
+
+def test_source_part_is_first_and_cached_for_an_hour():
+    stable, task = autofix_propose.build_parts({"title": "t", "body": "b"}, [])
+    assert stable.startswith("<source>") and "<issue>" in task and "<issue>" not in stable
+    calls = []
+    message = SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text='{"summary":"s","files":[]}')],
+                              usage=SimpleNamespace(input_tokens=10, output_tokens=5, cache_read_input_tokens=90000))
+    client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(
+        stream=lambda **p: calls.append(p) or _FakeStream(message))))
+    autofix_propose.ask_claude([stable, task], client)
+    content = calls[0]["messages"][0]["content"]
+    assert content[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"} and content[0]["text"] == stable
+    assert content[1] == {"type": "text", "text": task}
+
+
+def test_cost_estimate_counts_cache_reads_cheaply():
+    usage = SimpleNamespace(input_tokens=1000, output_tokens=2000, cache_read_input_tokens=100_000,
+                            cache_creation_input_tokens=0)
+    _, cost = autofix_propose.usage_cost("claude-fable-5-1", usage)
+    assert round(cost, 3) == round((1000 * 10 + 100_000 * 1 + 2000 * 50) / 1e6, 3)

@@ -70,7 +70,7 @@ def test_daily_digest_skips_when_no_incidents(fresh_db):
 def test_daily_digest_analyzes_and_marks_incidents(fresh_db, monkeypatch):
     guardian.record_incident("security", "LOGIN_FAILED", "로그인 실패", {"identifier": "a@b.com"}, "low")
 
-    def fake_chat_completion(messages, max_tokens=700):
+    def fake_chat_completion(messages, max_tokens=700, **kwargs):
         return "요약: 테스트\nURGENCY: low"
 
     monkeypatch.setattr("app.llm.chat_completion", fake_chat_completion)
@@ -83,7 +83,7 @@ def test_daily_digest_analyzes_and_marks_incidents(fresh_db, monkeypatch):
 def test_daily_digest_opens_issue_on_high_urgency(fresh_db, monkeypatch):
     guardian.record_incident("security", "BRUTE_FORCE_SUSPECTED", "잠금", {"identifier": "a@b.com"}, "high")
 
-    def fake_chat_completion(messages, max_tokens=700):
+    def fake_chat_completion(messages, max_tokens=700, **kwargs):
         return "요약: 공격 의심\nURGENCY: high"
 
     opened = {}
@@ -97,7 +97,7 @@ def test_daily_digest_opens_issue_on_high_urgency(fresh_db, monkeypatch):
 def test_daily_digest_handles_ai_failure(fresh_db, monkeypatch):
     guardian.record_incident("reliability", "AI_TIMEOUT", "타임아웃", {}, "low")
 
-    def boom(messages, max_tokens=700):
+    def boom(messages, max_tokens=700, **kwargs):
         raise AIUnavailableError("AI_ERROR", "실패")
 
     monkeypatch.setattr("app.llm.chat_completion", boom)

@@ -310,6 +310,7 @@ GitHub Actions 배포를 구현했다. 모든 변경은 PR로 리뷰 후 병합�
   결과(배포·되돌림·검사 거부)는 "학습 기록" 이슈에 정해진 칸으로 남고, 다음 수정안을 만들 때 AI가 참고한다.
   필요: GitHub secrets `ANTHROPIC_API_KEY`. 끄기: Repository variables `AUTOFIX_ENABLED=false`. 중복 방지: 같은 문제는 10분에 한 번, 같은 문제의 수정 PR이 열려 있으면 건너뜀, 하루 총횟수 제한 없음(`AUTOFIX_SAME_PROBLEM_MINUTES`, `AUTOFIX_DAILY_MAX`로 조정).
 - **품질 자동 점검(매일, `.github/workflows/quality-review.yml`)**: `docs/review-checklist.md`의 평가 질문(서비스 이해·기술 스택·확장성·캐시·외부 의존성·로깅·보안·UX·비동기·접근성·코드 품질·LLM)마다 Claude(`claude-haiku-5-5`)가 코드·운영 사이트 응답 헤더·최근 24시간 운영 요약(`/api/guardian/summary`)을 보고 ok/fix/manual로 판정해 '[품질 점검] 체크리스트 보고서' 이슈를 갱신한다. 코드로 고칠 수 있는 항목은 `[품질]` 이슈 → 자동 수정 PR(Fable, 승인 필요), 한 번에 3개까지(`QUALITY_MAX_FIXES`).
+- **Claude 사용량 절감 (2026-10-08)**: ① 모든 호출에 effort `low`(Haiku 5.5는 안 보내면 medium으로 생각해 토큰을 더 씀), 형식만 뽑는 일(검색 조건·접속 감시)은 생각 끔 ② 긴 지시문은 프롬프트 캐시(설명 에이전트처럼 코드 전체를 넣는 경우 1/10 값) ③ 같은 질문의 검색 조건은 서버가 하루 기억(예시 버튼) ④ 1분 접속 감시는 규칙으로 먼저 거르고, 신호가 있는 IP의 요약만 AI에게 보냄(평소엔 AI 0회) ⑤ 자동 수정은 Haiku가 이슈만 보고 "코드로 고칠 일인지" 먼저 판단해 아니면 Fable을 부르지 않음, 코드 전체는 1시간 캐시, 건수만 다른 같은 경보는 한 문제로 묶고 24시간 안에 "코드 문제 아님"으로 끝난 문제는 다시 부르지 않음 ⑥ 쓴 토큰은 `ai_usage` 표에 목적별로 남고 `/api/guardian/summary`·매일 품질 점검이 읽어 더 줄일 곳을 `[품질]` 이슈로 낸다.
 - **서버 용량 경보**: 1분 점검(`scan`)이 최근 5분 요청의 30% 이상이 8초를 넘기거나 502·503·504면 `[용량]` 이슈(6시간에 한 번)를 연다. 코드로 못 고치는 일이라 자동 수정 대상이 아니며, Vercel Usage를 보고 플랜을 올릴지 사람이 정한다.
 - **배치(1일 1회, Vercel Cron → `/api/guardian/daily-digest`, `CRON_SECRET`으로 보호)**: 그동안 쌓인
   `incidents`를 한 번에 gpt-6-astra에 보내 "무슨 일이 있었는지 / 반복·증가 추세가 있는지 / 다음에

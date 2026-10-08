@@ -53,9 +53,13 @@ jobs:
           #  ① 같은 문제의 수정 PR이 이미 열려 있으면(승인 대기) 또 만들지 않는다 (PR·알림 폭주 방지)
           #  ② 같은 문제를 방금(기본 10분 안에) 시도했으면 쉰다. 하루 상한은 기본 없음(AUTOFIX_DAILY_MAX로 걸 수 있음)
           problem=$(gh issue view "$ISSUE" --json title --jq .title)
+          # 같은 문제인지는 제목에서 건수·긴급도·숫자를 뺀 '문제 열쇠'로 본다
+          # (예: '… BRUTE_FORCE (6건)'과 '… BRUTE_FORCE (9건)'은 같은 문제 — 숫자가 달라 Fable이 두 번 돌던 낭비를 막는다)
+          KEY='def key: gsub("\\s*—\\s*긴급도 \\S+"; "") | gsub("\\s*\\([^()]*[0-9]+건\\)"; "") | gsub("[0-9]+"; "#");'
+          pkey=$(jq -rn --arg t "$problem" "$KEY \$t | key")
           day=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
           same_since=$(date -u -d "$SAME_PROBLEM_MINUTES minutes ago" +%Y-%m-%dT%H:%M:%SZ)
-          open_same=$(gh pr list --label autofix --state open --json title | jq --arg t "[자동 수정] $problem" '[.[] | select(.title == $t)] | length')
+          open_same=$(gh pr list --label autofix --state open --json title | jq --arg k "$pkey" "$KEY"' [.[] | select((.title | sub("^\\[자동 수정\\] "; "") | key) == $k)] | length')
           if [ "$open_same" -gt 0 ]; then echo "::notice::같은 문제의 수정 PR이 승인을 기다리고 있어 건너뜁니다."; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
           lessons=$(gh issue list --label guardian-lessons --state all --json number --jq '.[0].number')
           : > recent.jsonl
@@ -64,10 +68,14 @@ jobs:
               --jq ".[] | select(.user.login == \"github-actions[bot]\" and .created_at >= \"$day\") | {at: .created_at, body: .body}" > recent.jsonl
           fi
           attempts=$(jq -s '[.[] | (.body | fromjson? // {}) | select(.outcome and .outcome != "deployed" and .outcome != "rolled_back" and .outcome != "ship_failed" and .outcome != "rejected_at_ship")] | length' recent.jsonl)
-          same=$(jq -s --arg p "$problem" --arg since "$same_since" \
-            '[.[] | select(.at >= $since) | (.body | fromjson? // {}) | select(.problem == $p)] | length' recent.jsonl)
-          echo "최근 24시간 시도 ${attempts}회 (상한 ${DAILY_MAX}, 0=없음) · 같은 문제 최근 ${SAME_PROBLEM_MINUTES}분 ${same}회"
+          same=$(jq -s --arg k "$pkey" --arg since "$same_since" \
+            "$KEY"' [.[] | select(.at >= $since) | (.body | fromjson? // {}) | select(.problem and (.problem | key) == $k)] | length' recent.jsonl)
+          # 스스로 배우기: 같은 문제를 24시간 안에 '코드로 고칠 일 아님(no_change)'으로 끝냈으면 다시 Fable을 부르지 않는다
+          learned=$(jq -s --arg k "$pkey" \
+            "$KEY"' [.[] | (.body | fromjson? // {}) | select(.outcome == "no_change" and .problem and (.problem | key) == $k)] | length' recent.jsonl)
+          echo "문제 열쇠: $pkey · 최근 24시간 시도 ${attempts}회 (상한 ${DAILY_MAX}, 0=없음) · 같은 문제 최근 ${SAME_PROBLEM_MINUTES}분 ${same}회 · 24시간 안 '코드 문제 아님' ${learned}회"
           if [ "$same" -gt 0 ]; then echo "::notice::같은 문제를 최근에 이미 시도해 건너뜁니다: $problem"; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ "$learned" -gt 0 ]; then echo "::notice::같은 문제가 24시간 안에 '코드로 고칠 일 아님'으로 끝나 Fable을 다시 부르지 않습니다: $problem"; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
           if [ "$DAILY_MAX" -gt 0 ] && [ "$attempts" -ge "$DAILY_MAX" ]; then echo "::notice::오늘 자동 수정 상한(${DAILY_MAX}회)에 도달해 건너뜁니다."; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
           echo go=true >> "$GITHUB_OUTPUT"
 
