@@ -1,0 +1,98 @@
+# 보안 동향 학습 — 매시간 세계 보안 뉴스와 우리 라이브러리 취약점을 읽고(scripts/security_intel.py),
+# 1) 관련 있는 소식을 '[보안 동향] 실시간 요약' 이슈에 댓글로 남기고
+# 2) 자동 수정 코드에 들어가면 안 되는 문자열을 '[보안 동향] 배운 금지 문자열' 이슈에 더한다
+#    → 자동 수정(autofix.yml)의 기계 검사가 이 목록도 막는다. 더할 수만 있고 기준을 낮출 수는 없다.
+# 3) 설치되는 라이브러리에 알려진 취약점이 있으면 '[보안] 라이브러리 취약점' 이슈를 연다 (requirements는 보호 파일이라 사람이 고친다)
+# 필요: Repository secrets ANTHROPIC_API_KEY (없으면 AI 요약 없이 목록만). 끄기: Repository variables INTEL_ENABLED=false
+name: security-intel
+
+on:
+  schedule:
+    - cron: "17 * * * *"   # 매시간
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: security-intel
+  cancel-in-progress: false
+
+jobs:
+  learn:
+    if: vars.INTEL_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/cache/restore@v4
+        with:
+          path: intel-seen.json
+          key: intel-seen-${{ github.run_id }}
+          restore-keys: intel-seen-
+      - name: Read news and vulnerabilities
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INTEL_MODEL: ${{ vars.INTEL_MODEL }}
+          INTEL_FEEDS: ${{ vars.INTEL_FEEDS }}
+        run: |
+          pip install -q -r requirements.txt
+          pip freeze > freeze.txt
+          python3 scripts/security_intel.py freeze.txt intel-seen.json intel
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: intel-seen.json
+          key: intel-seen-${{ github.run_id }}
+
+      - name: Post digest
+        run: |
+          [ -s intel/digest.md ] || { echo "새 소식 없음"; exit 0; }
+          gh label create security-intel --color B60205 --description "보안 동향 학습 (security-intel.yml)" --force >/dev/null
+          num=$(gh issue list --label security-intel --state open --search "in:title 실시간 요약" --json number --jq '.[0].number')
+          if [ -z "$num" ]; then
+            num=$(gh issue create --label security-intel --title "[보안 동향] 실시간 요약" \
+              --body "매시간 세계 보안 뉴스와 우리 라이브러리 취약점 중 우리 서비스와 관련 있는 것만 댓글로 남깁니다 (.github/workflows/security-intel.yml)." | grep -o '[0-9]*$')
+          fi
+          { echo "### $(date -u '+%Y-%m-%d %H:%M UTC') 새 보안 소식"; echo; cat intel/digest.md; } | gh issue comment "$num" --body-file -
+
+      - name: Learn deny strings
+        run: |
+          [ "$(jq length intel/deny_new.json)" -gt 0 ] || { echo "새 금지 문자열 없음"; exit 0; }
+          gh label create security-intel-rules --color 5319E7 --description "자동 수정 검사가 읽는 금지 문자열 (봇만 고침)" --force >/dev/null
+          num=$(gh issue list --label security-intel-rules --state open --json number,author \
+            --jq '[.[] | select(.author.login == "app/github-actions" or .author.login == "github-actions")][0].number // empty')
+          echo '[]' > old.json
+          if [ -n "$num" ]; then
+            gh issue view "$num" --json body --jq .body | sed -n '/^```json$/,/^```$/p' | sed '1d;$d' > got.json || true
+            jq -e 'type == "array"' got.json >/dev/null 2>&1 && cp got.json old.json
+          fi
+          jq -s '(.[0] + .[1]) | map(select(type == "string")) | unique | .[-500:]' old.json intel/deny_new.json > merged.json
+          { echo "보안 동향 학습(security-intel.yml)이 모은 금지 문자열입니다. 자동 수정 코드에 이 글자가 들어가면 PR을 열지 않습니다."
+            echo "더할 수만 있고(검사를 엄격하게만 만듦), 잘못 들어간 항목은 저장소 주인이 이 목록에서 지우면 됩니다."
+            echo; echo '```json'; jq . merged.json; echo '```'; } > rules.md
+          if [ -n "$num" ]; then gh issue edit "$num" --body-file rules.md
+          else gh issue create --label security-intel-rules --title "[보안 동향] 배운 금지 문자열" --body-file rules.md; fi
+          echo "금지 문자열 $(jq length old.json)개 → $(jq length merged.json)개"
+
+      - name: Library vulnerabilities
+        run: |
+          [ "$(jq length intel/vulns.json)" -gt 0 ] || { echo "알려진 취약점 없음"; exit 0; }
+          gh label create security-intel --color B60205 --force >/dev/null
+          jq -c '.[]' intel/vulns.json | while IFS= read -r v; do
+            title="[보안] 라이브러리 취약점 $(jq -r '.package + " " + .version + " — " + .id' <<<"$v")"
+            if gh issue list --label security-intel --state open --search "in:title $(jq -r .id <<<"$v")" --json number --jq 'length' | grep -qx 0; then
+              gh issue create --label security-intel --title "$title" \
+                --body "설치되는 버전에 알려진 취약점이 있습니다: $(jq -r .url <<<"$v")
+          requirements.txt는 보호 파일이라 자동 수정 대상이 아닙니다. 고친 버전으로 올리는 PR을 사람이 만들어 주세요."
+            fi
+          done

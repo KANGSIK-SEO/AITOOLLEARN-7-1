@@ -6,7 +6,7 @@ AI 키가 있으면 진짜 GitHub 이슈가 열리고(→ 자동 수정 워크�
 """
 import pytest
 
-from app import guardian
+from app import chat, guardian
 
 _REAL_KEYS = ("GITHUB_TOKEN", "ANTHROPIC_API_KEY", "GPT_ASTRA_API_KEY", "UPSTAGE_API_KEY",
               "IA_ACCESS_KEY", "IA_SECRET_KEY")
@@ -17,3 +17,4 @@ def no_real_outside_calls(monkeypatch):
     for key in _REAL_KEYS:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(guardian, "open_github_issue", lambda title, body, labels=None: None)
+    chat.clear_intent_cache()   # 테스트마다 가짜 AI가 다르므로 기억해 둔 검색 조건을 비운다

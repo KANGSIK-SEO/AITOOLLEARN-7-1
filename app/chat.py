@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import time
+from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -118,13 +119,37 @@ def _parse_intent(text: str) -> dict:
     }
 
 
+# 같은 질문의 검색 조건은 같다 — 예시 버튼처럼 자주 오는 질문은 AI를 다시 부르지 않는다 (서버마다 기억, 하루)
+INTENT_CACHE_SIZE = 1000
+INTENT_CACHE_SECONDS = 86400
+_intent_cache: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
+
+
+def _intent_key(question: str) -> str:
+    return " ".join(question.lower().split())
+
+
+def clear_intent_cache() -> None:
+    _intent_cache.clear()
+
+
 def extract_intent(question: str, request_id: str | None = None) -> dict:
+    key = _intent_key(question)
+    hit = _intent_cache.get(key)
+    if hit and time.monotonic() - hit[0] < INTENT_CACHE_SECONDS:
+        _intent_cache.move_to_end(key)
+        log.info("intent_cache_hit request_id=%s", request_id or "-")
+        return json.loads(json.dumps(hit[1]))   # 호출부가 고쳐도 기억해 둔 값은 그대로
     with _stage("intent", request_id):
         raw = llm.chat_completion(
             [{"role": "system", "content": INTENT_SYSTEM}, {"role": "user", "content": question}],
             max_tokens=200, purpose="intent", json_schema=INTENT_SCHEMA,
         )
-    return _parse_intent(raw)
+    intent = _parse_intent(raw)
+    _intent_cache[key] = (time.monotonic(), json.loads(json.dumps(intent)))
+    while len(_intent_cache) > INTENT_CACHE_SIZE:
+        _intent_cache.popitem(last=False)
+    return intent
 
 
 def find_artworks(intent: dict, limit: int = 6, request_id: str | None = None) -> tuple[list[dict], bool]:

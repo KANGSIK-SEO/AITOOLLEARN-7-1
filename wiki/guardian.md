@@ -1,6 +1,6 @@
 ---
 title: 가디언 (장애·보안 감시)
-sources: [app/guardian.py, app/main.py, vercel.json, .github/workflows/monitor.yml, .github/workflows/autofix.yml, .github/workflows/autofix-ship.yml, scripts/autofix_guard.py, scripts/autofix_propose.py, CONTRIBUTING.md]
+sources: [scripts/autofix_review.py, scripts/security_intel.py, .github/workflows/security-intel.yml, app/guardian.py, app/main.py, vercel.json, .github/workflows/monitor.yml, .github/workflows/autofix.yml, .github/workflows/autofix-ship.yml, scripts/autofix_guard.py, scripts/autofix_propose.py, CONTRIBUTING.md]
 updated: 2026-10-08
 ---
 # 가디언
@@ -46,6 +46,8 @@ updated: 2026-10-08
 - **횟수 제한**: 하루 총횟수 제한 없음(organization 지원으로 비용 무관). 같은 문제는 10분에 한 번, 같은 문제의 수정 PR이 이미 열려 있으면 새로 만들지 않는다 — 같은 장애로 PR이 쏟아지는 것만 막는다. (`AUTOFIX_DAILY_MAX`, `AUTOFIX_SAME_PROBLEM_MINUTES`로 조정)
 - **코드로 고치기 (승인 필요)**: AI는 파일 내용만 돌려주고, 허용된 파일과 새 테스트(`tests/test_autofix_*.py`)에만 써진다 (`scripts/autofix_propose.py`).
 - **사람 대신 기계가 먼저 거르는 것** (`scripts/autofix_guard.py`): 보호 파일(인증·비밀 키·DB·배포·검사 규칙 자신), 외부 통신, 명령 실행, 환경변수 읽기, eval/exec, 삭제, 기존 테스트 수정, 400줄 넘는 변경, 새 테스트 없음.
+- **해커의 숨은 지시 막기**: 기계 검사가 보이지 않는 문자·비밀 값 노출·외부 전송·처음 보는 주소·보안 검사 제거를 막고, 다른 AI(Haiku)가 공격자의 눈으로 한 번 더 검토해 수상하면 PR을 열지 않는다. PR 본문의 "🔒 보안 점검" 칸에 결과가 보인다. PR은 AI 코드가 실행되기 전의 원본 patch로만 만든다.
+- **보안 동향 학습 (매시간)**: `security-intel.yml`이 보안 뉴스 RSS·라이브러리 취약점(OSV)을 읽어 요약 이슈에 남기고, 자동 수정 코드에 들어가면 안 되는 문자열을 배운다(더할 수만 있음).
 - **왜 승인 한 번은 남겼나**: 로그에는 공격자가 쓴 글이 섞인다. AI가 속아도 마지막에 사람이 한 번 보게 하려는 것이다. 완전 자동은 이 작업 환경의 보안 장치도 막았다.
 - 학습 기록 이슈에는 워크플로가 정해진 칸(날짜·이슈·결과·이유·파일)만 남기고, AI는 봇이 쓴 댓글만 읽는다.
 
