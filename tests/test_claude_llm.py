@@ -174,3 +174,33 @@ def test_chat_stream_intent_failure_returns_plain_error(client, monkeypatch):
     monkeypatch.setattr(llm, "chat_completion", boom)
     resp = client.post("/api/chat/stream", json={"message": "봄 풍경"})
     assert resp.status_code == 429 and resp.json()["error"]["code"] == "AI_RATE_LIMITED"
+
+
+def _credit_error():
+    import httpx
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    resp = httpx.Response(400, request=req)
+    return anthropic.BadRequestError("Your credit balance is too low to access the Anthropic API.",
+                                     response=resp, body=None)
+
+
+def test_claude_credit_exhausted_goes_straight_to_solar(fake_claude, monkeypatch):
+    fake_claude.error = _credit_error()
+    monkeypatch.setenv("GPT_ASTRA_API_KEY", "gpt")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "solar")
+    monkeypatch.setattr(llm, "_gpt_chain", lambda *a: pytest.fail("Claude가 소진되면 GPT가 아니라 solar가 받는다"))
+    monkeypatch.setattr(llm, "_upstage_chat_completion", lambda messages, max_tokens, deadline: "solar 답")
+    assert llm.chat_completion([{"role": "user", "content": "x"}]) == "solar 답"
+    assert list(llm.stream_completion([{"role": "user", "content": "x"}])) == ["solar 답"]
+
+
+def test_claude_rate_limit_without_solar_key_uses_gpt(fake_claude, monkeypatch):
+    fake_claude.error = anthropic.APIConnectionError(request=None)
+    monkeypatch.setenv("GPT_ASTRA_API_KEY", "gpt")
+    monkeypatch.delenv("UPSTAGE_API_KEY", raising=False)
+    monkeypatch.setattr(llm, "_gpt_chain", lambda messages, max_tokens: "GPT 답")
+    assert llm.chat_completion([{"role": "user", "content": "x"}]) == "GPT 답"
+
+
+def test_credit_error_is_reported_as_exhausted():
+    assert claude_llm._as_unavailable(_credit_error()).code == "AI_KEY_MISSING"

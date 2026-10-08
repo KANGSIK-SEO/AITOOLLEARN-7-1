@@ -99,7 +99,7 @@ def ask_claude(prompt: str, client: anthropic.Anthropic | None = None) -> dict:
     params = {
         "model": model, "max_tokens": 64000, "system": SYSTEM,
         "messages": [{"role": "user", "content": prompt}],
-        "output_config": {"effort": os.environ.get("AUTOFIX_EFFORT", "high"),
+        "output_config": {"effort": os.environ.get("AUTOFIX_EFFORT", "").strip() or "high",
                           "format": {"type": "json_schema", "schema": OUTPUT_SCHEMA}},
     }
     if not model.startswith("claude-haiku"):

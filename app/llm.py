@@ -1,7 +1,9 @@
 """AI 호출 (서버 측에서만 수행, 키는 응답에 노출하지 않는다).
 
-ANTHROPIC_API_KEY가 있으면 Claude(app/claude_llm.py, 기본 claude-fable-5-1)를 먼저 쓰고,
-Claude가 한도·인증·통신 문제로 실패하면 아래 GPT → Upstage 순서로 넘어간다 (거절(AI_REFUSED)은 넘기지 않는다).
+ANTHROPIC_API_KEY가 있으면 Claude(app/claude_llm.py, 기본 claude-fable-5-1)를 먼저 쓴다.
+Claude가 크레딧 소진·한도·인증 문제로 실패하면 Upstage solar-pro4가 바로 이어받는다
+(UPSTAGE_API_KEY가 없으면 GPT로). Claude 키가 없으면 GPT를 쓰고, GPT가 소진되면 solar-pro4가 이어받는다.
+거절(AI_REFUSED)은 다른 회사 모델로 넘기지 않는다.
 
 GPT 경로의 주 모델: OpenAI gpt-6-astra. 429/401/403(=키 소진·장애)일 때만 Upstage solar-pro4로
 한 번 더 시도한다 (UPSTAGE_API_KEY가 없으면 폴백 없이 원래 에러를 그대로 던진다).
@@ -38,23 +40,32 @@ def _gpt_available() -> bool:
     return bool(os.environ.get("GPT_ASTRA_API_KEY", "") or get_fallback_api_key())
 
 
+def _after_claude(messages: list[dict], max_tokens: int, reason: str) -> str:
+    """Claude가 안 될 때: solar-pro4가 먼저 이어받고, solar 키가 없으면 GPT(→ solar) 순서로 간다."""
+    if get_fallback_api_key():
+        log.warning("llm_fallback_to_upstage from=claude reason=%s", reason)
+        return _upstage_chat_completion(messages, max_tokens, time.monotonic() + LLM_CALL_BUDGET_SECONDS)
+    log.warning("llm_fallback_to_gpt from=claude reason=%s", reason)
+    return _gpt_chain(messages, max_tokens)
+
+
 def chat_completion(messages: list[dict], max_tokens: int = 700, purpose: str = "answer",
                     json_schema: dict | None = None) -> str:
     """purpose: "intent"(검색 조건 뽑기) | "answer"(답변 쓰기). json_schema는 Claude에서만 쓰인다
-    (GPT 경로는 프롬프트의 JSON 형식 안내와 chat._parse_intent의 정리로 같은 결과를 낸다)."""
+    (다른 모델은 프롬프트의 JSON 형식 안내와 chat._parse_intent의 정리로 같은 결과를 낸다)."""
     if claude_llm.enabled():
         try:
             return claude_llm.complete(messages, purpose=purpose, json_schema=json_schema)
         except AIUnavailableError as e:
             if e.code == "AI_REFUSED" or not _gpt_available():
                 raise
-            log.warning("llm_fallback_to_gpt reason=%s", e.code)
+            return _after_claude(messages, max_tokens, e.code)
     return _gpt_chain(messages, max_tokens)
 
 
 def stream_completion(messages: list[dict], max_tokens: int = 700, purpose: str = "answer") -> Iterator[str]:
-    """답변을 만들어지는 대로 조각조각 돌려준다. Claude가 첫 조각 전에 실패하면 GPT로 넘어가고,
-    GPT 경로는 스트리밍이 없어 완성된 답을 한 조각으로 돌려준다."""
+    """답변을 만들어지는 대로 조각조각 돌려준다. Claude가 첫 조각 전에 실패하면 solar-pro4(없으면 GPT)가
+    이어받고, 그 모델들은 스트리밍이 없어 완성된 답을 한 조각으로 돌려준다."""
     if claude_llm.enabled():
         sent = False
         try:
@@ -65,7 +76,8 @@ def stream_completion(messages: list[dict], max_tokens: int = 700, purpose: str 
         except AIUnavailableError as e:
             if sent or e.code == "AI_REFUSED" or not _gpt_available():
                 raise
-            log.warning("llm_stream_fallback_to_gpt reason=%s", e.code)
+            yield _after_claude(messages, max_tokens, e.code)
+            return
     yield _gpt_chain(messages, max_tokens)
 
 

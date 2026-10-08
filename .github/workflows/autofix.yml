@@ -37,6 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
+      issues: read
     outputs:
       go: ${{ steps.check.outputs.go }}
     steps:
@@ -48,7 +49,16 @@ jobs:
           if [ "$HAS_KEY" != "true" ]; then echo "::warning::ANTHROPIC_API_KEY 시크릿이 없어 자동 수정을 건너뜁니다."; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
           since=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)
           recent=$(gh pr list --label autofix --state all --search "created:>=$since" --json number --jq length)
-          if [ "${recent:-0}" -gt 0 ]; then echo "::notice::최근 6시간 안에 자동 수정 PR이 있어 건너뜁니다."; echo go=false >> "$GITHUB_OUTPUT"; exit 0; fi
+          # 수정안을 만들러 간 시도는 결과(PR·거부·실패)와 상관없이 학습 기록에 한 줄씩 남는다 → 그것도 센다
+          lessons=$(gh issue list --label guardian-lessons --state all --json number --jq '.[0].number')
+          tried=0
+          if [ -n "$lessons" ]; then
+            tried=$(gh api "repos/$GH_REPO/issues/$lessons/comments" --paginate \
+              --jq "[.[] | select(.user.login == \"github-actions[bot]\" and .created_at >= \"$since\")] | length" | awk '{s+=$1} END {print s+0}')
+          fi
+          if [ "${recent:-0}" -gt 0 ] || [ "${tried:-0}" -gt 0 ]; then
+            echo "::notice::최근 6시간 안에 자동 수정 시도가 있어 건너뜁니다 (비용·이슈 폭주 방지)."; echo go=false >> "$GITHUB_OUTPUT"; exit 0
+          fi
           echo go=true >> "$GITHUB_OUTPUT"
 
   propose:
@@ -149,8 +159,8 @@ jobs:
           path: ${{ runner.temp }}/autofix/
 
   report:
-    needs: [propose, verify]
-    if: always() && needs.propose.result == 'success'
+    needs: [gate, propose, verify]
+    if: always() && needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -161,12 +171,14 @@ jobs:
         with:
           ref: main
       - uses: actions/download-artifact@v4
+        if: needs.propose.result == 'success'
         with:
           name: autofix-checked
           path: ${{ runner.temp }}/autofix
       - name: Open the PR or record why not
         env:
           GH_TOKEN: ${{ github.token }}
+          PROPOSE: ${{ needs.propose.result }}
           EMPTY: ${{ needs.verify.outputs.empty }}
           GUARD: ${{ needs.verify.outputs.guard }}
           TESTS: ${{ needs.verify.outputs.tests }}
@@ -183,6 +195,10 @@ jobs:
             jq -nc --arg date "$(date -u +%F)" --arg issue "$ISSUE" --arg outcome "$1" --arg reason "$2" --arg files "$3" \
               '{date:$date, issue:$issue, outcome:$outcome, reason:$reason, files:$files}' | gh issue comment "$num" --body-file -
           }
+          if [ "$PROPOSE" != "success" ]; then   # AI 호출 자체가 실패 — 기록해 두면 6시간 동안 다시 시도하지 않는다
+            lesson propose_failed "수정안 만들기 실패 (Actions 로그 확인)" ""
+            exit 0
+          fi
           summary=$(cat "$D/summary.md" 2>/dev/null || echo "(요약 없음)")
           if [ "$EMPTY" = "true" ]; then
             gh issue comment "$ISSUE" --body "🤖 자동 수정: 코드로 고칠 일이 아니라고 판단했어요.

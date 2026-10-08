@@ -7,11 +7,13 @@ updated: 2026-10-08
 
 ## 모델
 
-| 순서 | 모델 | 언제 | 키 이름 |
-|---|---|---|---|
-| 1 | Claude `claude-fable-5-1` (`CLAUDE_MODEL`로 바꿀 수 있음) | `ANTHROPIC_API_KEY`가 있으면 항상 먼저 | `ANTHROPIC_API_KEY` |
-| 2 | OpenAI `gpt-6-astra` | Claude 키가 없거나, Claude가 한도·인증·통신 문제로 실패할 때 | `GPT_ASTRA_API_KEY` |
-| 3 | Upstage `solar-pro4` | GPT가 **429/401/403**(한도·키 문제)일 때만 | `UPSTAGE_API_KEY` (없으면 폴백 없음) |
+| 상황 | 쓰는 순서 |
+|---|---|
+| `ANTHROPIC_API_KEY` 있음 | Claude `claude-fable-5-1` → (크레딧 소진·한도·인증·통신 문제) **Upstage `solar-pro4`** → (solar 키 없으면) OpenAI `gpt-6-astra` |
+| Claude 키 없음 | OpenAI `gpt-6-astra` → (**429/401/403**, 한도 소진·키 문제) Upstage `solar-pro4` |
+
+Anthropic은 크레딧을 다 쓰면 429가 아니라 400("credit balance is too low")을 준다. 이것도 소진으로 보고 solar로 넘긴다 (`claude_llm._credit_exhausted`).
+OpenAI의 한도 소진은 429(`insufficient_quota`)로 와서 solar로 넘어간다. solar-pro4는 **2027-04-01부터 유료 전환** 예정이다.
 
 Claude가 안전 규칙으로 답을 **거절**하면(`AI_REFUSED`) 다른 회사 모델로 우회하지 않는다. 대신 Claude 서버가 같은 회사의
 다른 모델로 다시 시도하게 한다(`fallbacks="default"`, `app/claude_llm.py`).

@@ -7,3 +7,4 @@
 ## [2026-10-08] ingest | Claude Fable 연결(app/claude_llm.py)과 답변 스트리밍(/api/chat/stream) — ai-llm, request-flow 갱신
 ## [2026-10-08] ingest | 가디언 실시간 감시(IP 자동 차단, 즉시 분석, monitor.yml) — guardian 갱신
 ## [2026-10-08] ingest | 공격 주소 자동 학습, 가디언 자동 수정(autofix.yml·autofix-ship.yml, 승인 한 번) — guardian 갱신
+## [2026-10-08] ingest | Claude 소진 시 solar-pro4가 바로 이어받도록 변경 — ai-llm 갱신
