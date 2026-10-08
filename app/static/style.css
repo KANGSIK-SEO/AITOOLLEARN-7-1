@@ -320,6 +320,8 @@ body.signed-in .topbar-inner { max-width: none; }   /* 로그인 후에는 전�
 .notice-code { font-family: var(--font-mono); font-size: 0.75rem; opacity: 0.75; }
 .notice.error { background: var(--danger-soft); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 25%, transparent); }
 .notice.warning { background: var(--warning-soft); color: var(--warning); border-color: color-mix(in srgb, var(--warning) 25%, transparent); }
+.notice .btn { align-self: flex-start; min-height: 34px; padding: 0 14px; font-size: 0.85rem;
+    background: var(--surface); color: var(--text); border-color: var(--line); }
 
 /* 응답 대기: 단계 문구 + 스켈레톤 */
 .pending-label { display: inline-flex; align-items: center; gap: 10px; color: var(--text-2); font-size: 0.95rem; }

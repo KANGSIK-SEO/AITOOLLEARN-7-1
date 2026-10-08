@@ -138,7 +138,7 @@ const I18N = {
             ["인스타그램 정사각 게시물용 꽃 그림", "정사각 · 꽃"],
         ],
         pending: ["질문을 이해하고 있어요", "어울리는 작품을 찾고 있어요", "추천 이유를 쓰고 있어요"],
-        citeLabel: "{n}번 작품으로 이동", writing: "답변을 쓰는 중…", sessionExpired: "로그인이 만료됐어요. 다시 로그인해 주세요.",
+        retry: "다시 시도", citeLabel: "{n}번 작품으로 이동", writing: "답변을 쓰는 중…", sessionExpired: "로그인이 만료됐어요. 다시 로그인해 주세요.",
         limitWarn: "무료 질문이 {n}개 남았어요. 초대코드가 있다면 회원가입 때 입력할 수 있어요.",
         genericError: "오류가 발생했어요. 잠시 후 다시 시도해 주세요.",
         // 결과 묶음 · 카드
@@ -201,7 +201,7 @@ const I18N = {
             ["Flowers for a square Instagram post", "Square · flowers"],
         ],
         pending: ["Understanding your request", "Finding matching artworks", "Writing why they fit"],
-        citeLabel: "Go to artwork {n}", writing: "Writing the answer…", sessionExpired: "Your session expired. Please sign in again.",
+        retry: "Try again", citeLabel: "Go to artwork {n}", writing: "Writing the answer…", sessionExpired: "Your session expired. Please sign in again.",
         limitWarn: "{n} free questions left. Invite codes can be entered at sign-up.",
         genericError: "Something went wrong. Please try again shortly.",
         count: "{n} works", purpose: "For · {p}", all: "All", landscape: "Landscape", portrait: "Portrait", square: "Square",
@@ -229,7 +229,7 @@ const I18N = {
     },
 };
 
-// 서버 오류 코드(README '오류 코드' 참고) → 안내 문구
+// 서버 오류 코드(README '오류 코드' 참고) → 안내 문구. retry: 같은 질문을 다시 보내 볼 만한 일시적 오류인지
 const ERRORS = {
     UNAUTHENTICATED: { ko: "로그인이 필요합니다.", en: "Please sign in." },
     INVALID_EMAIL: { ko: "이메일 형식이 올바르지 않습니다.", en: "That email address isn't valid." },
@@ -245,15 +245,15 @@ const ERRORS = {
     AI_REFUSED: { ko: "이 질문에는 답할 수 없어요. 질문을 바꿔 다시 시도해 주세요.", en: "I can't answer this question. Please rephrase and try again." },
     ARTWORK_NOT_FOUND: { ko: "작품을 찾을 수 없습니다.", en: "Artwork not found." },
     RECORD_NOT_ALLOWED: { ko: "이 작품은 판단 규칙을 통과하지 못해 근거 기록을 발급할 수 없어요.", en: "This artwork didn't pass our rights rules." },
-    AI_BACKED_OFF: { ko: "AI 서비스가 잠시 쉬고 있어요. 잠시 후 다시 시도해 주세요.", en: "The AI service is taking a short break." },
-    AI_TIMEOUT: { ko: "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요.", en: "The response is taking too long." },
-    AI_RATE_LIMITED: { ko: "AI 요청이 많아 잠시 제한됐어요.", en: "The AI service is rate-limited right now." },
-    AI_ERROR: { ko: "AI 서버와 통신하지 못했어요.", en: "Couldn't reach the AI server." },
-    DB_ERROR: { ko: "데이터베이스에 문제가 생겼어요.", en: "There was a database problem." },
-    ART_DB_ERROR: { ko: "작품 데이터베이스를 읽지 못했어요.", en: "Couldn't read the artwork database." },
-    INTERNAL_ERROR: { ko: "예상치 못한 오류가 발생했어요.", en: "An unexpected error occurred." },
-    NETWORK_ERROR: { ko: "서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요.", en: "Couldn't reach the server. Check your connection." },
-    STREAM_DROPPED: { ko: "답변을 받는 중 연결이 끊겼어요. 다시 시도해 주세요.", en: "The connection dropped while answering. Please try again." },   // 화면 전용 코드
+    AI_BACKED_OFF: { ko: "AI 서비스가 잠시 쉬고 있어요. 잠시 후 다시 시도해 주세요.", en: "The AI service is taking a short break.", retry: true },
+    AI_TIMEOUT: { ko: "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요.", en: "The response is taking too long.", retry: true },
+    AI_RATE_LIMITED: { ko: "AI 요청이 많아 잠시 제한됐어요.", en: "The AI service is rate-limited right now.", retry: true },
+    AI_ERROR: { ko: "AI 서버와 통신하지 못했어요.", en: "Couldn't reach the AI server.", retry: true },
+    DB_ERROR: { ko: "데이터베이스에 문제가 생겼어요.", en: "There was a database problem.", retry: true },
+    ART_DB_ERROR: { ko: "작품 데이터베이스를 읽지 못했어요.", en: "Couldn't read the artwork database.", retry: true },
+    INTERNAL_ERROR: { ko: "예상치 못한 오류가 발생했어요.", en: "An unexpected error occurred.", retry: true },
+    NETWORK_ERROR: { ko: "서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요.", en: "Couldn't reach the server. Check your connection.", retry: true },
+    STREAM_DROPPED: { ko: "답변을 받는 중 연결이 끊겼어요. 다시 시도해 주세요.", en: "The connection dropped while answering. Please try again.", retry: true },   // 화면 전용 코드
 };
 
 function t(key, vars) {
@@ -766,13 +766,16 @@ function addPending() {
 }
 
 // 안내·오류 상자. message는 { key, vars }(화면 문구) 또는 { error }(서버 오류)
-function addNotice(type, message, { code } = {}) {
+function addNotice(type, message, { code, onRetry } = {}) {
     const box = el("div", `msg notice ${type}`);
     box.setAttribute("role", type === "error" ? "alert" : "status");
     box.appendChild(icon("alert"));
     const body = el("div", "notice-body");
     body.appendChild(message.error ? bindError(el("span"), message.error) : bindText(el("span"), message.key, message.vars));
     if (code) body.appendChild(el("span", "notice-code", code));
+    if (onRetry) {
+        body.appendChild(button("btn", { iconName: "retry", labelKey: "retry", onClick: () => { box.remove(); onRetry(); } }));
+    }
     box.appendChild(body);
     turnTarget().appendChild(box);
 }
@@ -1004,7 +1007,9 @@ async function receiveOnce(message) {
 
 function showChatError(message, status, error) {
     if (status === 401) { show(false); toast(t("sessionExpired")); return; }
-    addNotice("error", { error }, { code: error?.code || String(status) });
+    const code = error?.code;
+    const retryable = ERRORS[code]?.retry || status === 0;
+    addNotice("error", { error }, { code: code || String(status), onRetry: retryable ? () => sendMessage(message) : null });
 }
 
 function showLimitWarning(data) {
