@@ -63,6 +63,18 @@ SCHEMA = [
         created_at  TEXT NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_incidents_time ON incidents (created_at)",
+    # 접속 기록: 1분마다 AI가 읽고 규칙에 없는 수상한 움직임을 찾는다 (2일 지나면 지운다)
+    """CREATE TABLE IF NOT EXISTS access_log (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        ip          TEXT NOT NULL,
+        method      TEXT NOT NULL,
+        path        TEXT NOT NULL,     -- 쿼리 포함, 300자까지
+        status      INTEGER NOT NULL,
+        user_agent  TEXT,
+        ms          INTEGER,
+        created_at  TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_access_log_time ON access_log (created_at)",
     """CREATE TABLE IF NOT EXISTS runtime_flags (
         key         TEXT PRIMARY KEY,
         value       TEXT NOT NULL,

@@ -144,3 +144,60 @@ def test_same_problem_waits_but_a_different_problem_is_diagnosed(issues):
 def test_refusals_are_not_treated_as_outages(issues):
     guardian.record_incident("reliability", "AI_REFUSED", "x")
     assert not issues
+
+
+def _verdict(monkeypatch, verdict: str, seen: list | None = None):
+    def fake(messages, **kwargs):
+        if seen is not None:
+            seen.append((messages, kwargs))
+        return verdict
+    monkeypatch.setattr(llm, "chat_completion", fake)
+
+
+def test_requests_are_logged_for_the_ai_watch(issues):
+    client = TestClient(app)
+    client.get("/?q=봄")
+    client.get("/healthz")
+    rows = db.execute("SELECT ip, method, path, status FROM access_log")
+    assert [(r["method"], r["path"], r["status"]) for r in rows] == [("GET", "/?q=%EB%B4%84", 200)]
+
+
+def test_ai_watch_reads_only_new_logs_and_blocks_after_two_flags(issues, monkeypatch):
+    client = TestClient(app)
+    seen = []
+    _verdict(monkeypatch, '{"suspicious": true, "severity": "medium", "ips": ["testclient", "6.6.6.6"], '
+                          '"reason": "같은 API를 기계적으로 반복"}', seen)
+    client.get("/")
+    first = guardian.watch_traffic()
+    assert first["ips"] == ["testclient"]  # 기록에 없는 IP(6.6.6.6)는 AI가 말해도 무시한다
+    assert seen[0][1]["purpose"] == "watch" and seen[0][1]["json_schema"] is guardian.WATCH_SCHEMA
+    assert guardian.watch_traffic() == {"watched": 0}  # 이미 본 기록은 다시 보내지 않는다
+    assert not guardian.is_blocked("testclient")  # AI 한 번의 판단으로는 막지 않는다
+    client.get("/")
+    guardian.watch_traffic()
+    guardian._blocks["loaded_at"] = 0
+    assert guardian.is_blocked("testclient")
+    assert _codes().count("AI_SUSPICIOUS_TRAFFIC") == 2
+
+
+def test_ai_watch_normal_traffic_records_nothing(issues, monkeypatch):
+    _verdict(monkeypatch, '{"suspicious": false, "severity": "low", "ips": [], "reason": ""}')
+    TestClient(app).get("/")
+    assert guardian.watch_traffic() == {"watched": 1, "suspicious": False}
+    assert "AI_SUSPICIOUS_TRAFFIC" not in _codes()
+
+
+def test_ai_watch_high_severity_alerts_now(issues, monkeypatch):
+    TestClient(app).get("/")
+    issues.clear()
+    _verdict(monkeypatch, '{"suspicious": true, "severity": "high", "ips": ["testclient"], "reason": "계정 돌려 막기"}')
+    guardian.scan()
+    assert issues and issues[0][0].startswith("[가디언] 실시간 경보")
+
+
+def test_ai_watch_survives_ai_failure(issues, monkeypatch):
+    def down(*a, **k):
+        raise AIUnavailableError("AI_ERROR", "down")
+    monkeypatch.setattr(llm, "chat_completion", down)
+    TestClient(app).get("/")
+    assert guardian.watch_traffic()["error"] == "ai"
