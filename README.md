@@ -249,6 +249,35 @@ erDiagram
         int artwork_id "코드만"
         int user_id "코드만, 비어도 됨"
     }
+    incidents {
+        int id PK
+        text category "reliability | security"
+        text code
+        text severity
+        text created_at
+    }
+    access_log {
+        int id PK
+        text ip
+        text path
+        int status
+        text created_at
+    }
+    ai_usage {
+        int id PK
+        text purpose
+        text model
+        int input_tokens
+        text created_at
+    }
+    runtime_flags {
+        text key PK "예: ai_backoff_until"
+        text value
+    }
+    rate_counters {
+        text bucket PK "예: login:<ip>"
+        int count
+    }
     artworks ||--|| artworks_fts : "트리거로 동기화"
     users ||--o{ chats : "FK 선언"
     users ||--o{ favorites : "FK 선언"
@@ -258,6 +287,27 @@ erDiagram
     artworks }o..o{ chats : "코드만 (JSON)"
 ```
 실선은 DB에 외래 키(FK)로 선언된 관계, 점선은 작품 DB가 다른 파일(`data/art.db`)이라 코드에서만 잇는 관계다.
+선이 없는 5개 표(가디언·운영용)는 사용자나 작품에 묶이지 않는 독립 기록이라 FK가 없다.
+
+**PK·FK 한눈에 보기** (12개 표 전부, 근거: `app/db.py`, `db/schema.sql`)
+
+| 표 | 파일 | PK | FK (DB에 선언) | 코드로만 잇는 값 |
+|---|---|---|---|---|
+| `artworks` | `data/art.db` | `id` | — | `UNIQUE(source, source_id)` |
+| `artworks_fts` | `data/art.db` | `rowid` (= `artworks.id`) | — | 트리거로 동기화 |
+| `users` | Turso/`data/app.db` | `id` | — | `email UNIQUE` |
+| `chats` | Turso/`data/app.db` | `id` | `user_id → users.id` | `artwork_ids`(JSON) → `artworks.id` |
+| `favorites` | Turso/`data/app.db` | `id` | `user_id → users.id` | `artwork_id → artworks.id`, `UNIQUE(user_id, artwork_id)` |
+| `rights_records` | Turso/`data/app.db` | `number` | — | `artwork_id → artworks.id`, `user_id → users.id`(비로그인이면 NULL) |
+| `incidents` | Turso/`data/app.db` | `id` | — | — |
+| `access_log` | Turso/`data/app.db` | `id` | — | — |
+| `ai_usage` | Turso/`data/app.db` | `id` | — | — |
+| `runtime_flags` | Turso/`data/app.db` | `key` | — | — |
+| `rate_counters` | Turso/`data/app.db` | `bucket` | — | — |
+
+작품 DB와 사용자 DB는 서로 다른 파일(다른 DB)이라 SQLite가 둘 사이 FK를 걸 수 없다. 그래서 작품 번호는
+저장 전에 코드가 확인한다 (예: 즐겨찾기 저장 전 `app/routers/favorites.py`의 `_artwork_or_404`).
+
 
 - `data/art.db` (읽기 전용, 레포에 포함): `artworks`(source, source_id, title, artist, date_display, medium, subjects, image_url, source_url, license, is_public_domain …) + `artworks_fts`(FTS5). 스키마: `db/schema.sql`
 - Turso/SQLite (쓰기): 
@@ -266,6 +316,8 @@ erDiagram
   - `favorites(id, user_id → users.id, artwork_id(art.db artworks.id), created_at, UNIQUE(user_id, artwork_id))` — 즐겨찾기
   - `incidents(id, category[reliability|security], code, message, context(JSON), severity, auto_action, diagnosis, created_at)` — 가디언 사건 로그. `diagnosis`는 일일 배치 분석 전까지 NULL.
   - `rights_records(number PK, artwork_id, user_id, snapshot(JSON), archives(JSON), signature, issued_at)` — 권리 근거 기록 (발급 시점 그대로)
+  - `access_log(id, ip, method, path, status, user_agent, ms, created_at)` — 모든 요청의 접속 기록 (1분마다 AI 감시가 읽음, 2일 보관)
+  - `ai_usage(id, purpose, model, input_tokens, output_tokens, cache_read, cache_write, created_at)` — Claude 토큰 사용량 (30일 보관)
   - `runtime_flags(key, value, updated_at)` — AI 백오프·로그인 잠금 등 자동 대응 상태값 (예: `ai_backoff_until`, `lockout:<email>`)
   - `rate_counters(bucket, count, window_start)` — IP/이메일 단위 레이트리밋 카운터
 
