@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 340
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.ref_name }}   # 대기 중 다른 run이 올린 수집 결과까지 포함한 최신 브랜치에서 시작
       - uses: actions/setup-python@v5
@@ -81,7 +81,7 @@ jobs:
       VERCEL_PROJECT: ${{ vars.VERCEL_PROJECT || 'art-chatbot' }}
       VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE || secrets.VERCEL_SCOPE }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}   # 수집 job이 방금 올린 커밋까지 포함
       - name: Deploy to Vercel (production)
