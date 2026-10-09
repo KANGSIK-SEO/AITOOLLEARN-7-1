@@ -107,10 +107,6 @@
 
     <script src="/static/ondevice.js"></script>
     <script src="/static/app.js"></script>
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
-        }
-    </script>
+    <script src="/static/boot.js"></script>
 </body>
 </html>

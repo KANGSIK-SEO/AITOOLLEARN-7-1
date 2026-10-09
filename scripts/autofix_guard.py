@@ -18,7 +18,8 @@ from pathlib import Path
 PROTECTED = (
     ".github/", "app/auth.py", "app/config.py", "app/db.py", "app/llm.py", "app/claude_llm.py",
     "requirements", "vercel.json", "index.py", "Dockerfile", "deploy/", ".env", "data/",
-    "scripts/autofix_", "scripts/quality_", "docs/review-checklist.md", "CONTRIBUTING.md",
+    "scripts/autofix_", "scripts/quality_", "scripts/security_", "docs/review-checklist.md", "docs/security-",
+    "CONTRIBUTING.md", "SECURITY.md",
 )
 # 새로 들어온 줄에 있으면 안 되는 것: 외부 통신, 명령 실행, 비밀 값 읽기, 코드 동적 실행
 # (urllib.parse는 주소 문자열을 나누기만 해서 통신이 아니다, re.compile은 정규식 준비라 코드 실행이 아니다 — 허용)
