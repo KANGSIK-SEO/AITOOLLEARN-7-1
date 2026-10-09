@@ -244,7 +244,8 @@ def _cron_authorized(request: Request) -> bool:
     비교는 걸리는 시간으로 값을 추측할 수 없게 compare_digest로 한다."""
     secret = CRON_SECRET.strip()
     scheme, _, token = request.headers.get("authorization", "").strip().partition(" ")
-    return bool(secret) and scheme.lower() == "bearer" and hmac.compare_digest(token.strip(), secret)
+    # compare_digest는 한글 같은 비ASCII 글자가 든 문자열을 받으면 TypeError로 터진다 → 바이트로 바꿔 비교 (2026-10-09 500의 원인)
+    return bool(secret) and scheme.lower() == "bearer" and hmac.compare_digest(token.strip().encode(), secret.encode())
 
 
 def _dependency_checks() -> dict:

@@ -343,3 +343,13 @@ def test_scan_route_failure_outside_steps_is_reported_not_500(issues, monkeypatc
     assert r.status_code == 503 and r.json()["failed_steps"] == ["scan"]
     alert = [i for i in issues if "'scan' 단계 오류" in i[0]]
     assert alert and "TypeError" in alert[0][1] and "boom" in alert[0][1]
+
+
+def test_non_ascii_cron_header_is_401_not_500(issues, monkeypatch):
+    from app import main
+    monkeypatch.setattr(main, "CRON_SECRET", "s3cret")
+    client = TestClient(app)
+    # 설정 안내의 예시 글자를 그대로 넣은 경우 — 예전에는 compare_digest가 TypeError를 내 500이 났다
+    assert client.get("/api/guardian/scan", headers={"Authorization": "Bearer 여기에CRON_SECRET값".encode()}).status_code == 401
+    monkeypatch.setattr(main, "CRON_SECRET", "비밀값")
+    assert client.get("/api/guardian/scan", headers={"Authorization": "Bearer wrong"}).status_code == 401
