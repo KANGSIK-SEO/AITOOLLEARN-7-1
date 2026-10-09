@@ -44,7 +44,7 @@
 - `app/db.py` — **저장소.** 사용자·대화 로그·가디언 사건 저장(로컬 SQLite 또는 Turso 자동 선택).
 - `app/config.py` — **규칙집.** 사용 모델(gpt-6-astra/폴백 solar-pro4)·초대코드·요금제 상한 등 설정을 고정.
 - `app/guardian.py` — **가디언.** 장애·보안 사건을 즉시 기록·대응(잠금, AI 백오프, 악성 입력 차단)하고, 1일 1회 gpt-6-astra로 일괄 분석·GitHub 이슈까지 생성.
-- `app/static/*` — **화면.** 브라우저에 보이는 HTML/JS/CSS 전부. 초대코드 회원은 화이트 테마(`body.light-theme`)로 바뀐다.
+- `app/static/*` — **화면.** 브라우저에 보이는 HTML/JS/CSS 전부(프레임워크 없음). 갤러리 톤 디자인, 한/영 전환, 라이트/다크 테마, 왼쪽 대화 기록 사이드바. 구조는 [`wiki/frontend.md`](wiki/frontend.md).
 
 ```
 브라우저 ─ /static (HTML/JS) ─┐
@@ -73,7 +73,7 @@
 - `scripts/export_artworks_json.py`가 `data/art.db`(CC0만, `is_public_domain = 1`)를 `app/static/artworks.json`으로 내보낸다. `data/art.db`가 바뀔 때만 다시 실행하면 된다.
 - `app/static/ondevice.js`가 이 JSON을 최초 1회만 받아 메모리에 캐시하고, 사용자가 고른 화풍/주제/연도 조건을 **Datalog 스타일 규칙**으로 조합해 그 자리에서 배열 필터링한다 (예: `candidate(W) :- style(W, "Impressionism"), subject(W, "landscape").`). 주제어가 여러 개면 "같은 head를 가진 규칙이 여러 개면 합집합"이라는 실제 Datalog 의미론대로 규칙을 여러 줄로 나눠 OR로 평가한다. 재귀가 필요 없는 질의라 naive bottom-up 평가로 충분하다.
 - **"AI 없이 이해하기"**: 자유 문장(예: "봄 느낌 풍경화")을 입력하면, LLM 없이 **한/영 키워드 사전 매칭**만으로 화풍/주제/연도를 추출해 위 규칙에 자동으로 채운다 — gpt-6-astra가 하는 자연어 이해를 훨씬 단순한 규칙 기반으로 대체한 버전. 사전에 없는 단어는 당연히 못 알아듣는다(의도된 한계이자 AI와의 핵심 차이점).
-- 카드 렌더링은 채팅과 동일한 `addCards()`를 그대로 재사용 — 결과 화면이 100% 같은 스타일.
+- 카드 렌더링은 채팅과 동일한 `buildResultGroup()`·`makeCard()`를 그대로 재사용 — 결과 화면이 100% 같은 스타일.
 - Oxford Semantic Technologies(RDFox)가 갤럭시 기기에 Datalog 추론 엔진을 온디바이스로 넣은 것과 같은 설계 철학: 클라우드로 보내지 않고 기기에서 바로 추론한다.
 
 ## 3. API 명세
@@ -164,7 +164,7 @@
 - 추천 작품 수가 `ART_RESULTS_LIMIT_PREMIUM`(기본 100, 일반은 `ART_RESULTS_LIMIT`=6)으로 늘어난다. 답변 본문에서 번호로
   설명하는 작품은 `ANSWER_NARRATION_LIMIT`(6)개까지만이고 — 100개를 전부 LLM이 한 줄씩 설명하면 토큰 비용이 커지고
   응답이 잘릴 수 있어서다 — 나머지는 카드로만 보여주고 "그 외 N개를 더 찾았어요"를 한 줄 덧붙인다(`app/chat.py`).
-- 화면 배경이 화이트 테마로 바뀐다(`body.light-theme`, `app/static/style.css`, `app/static/app.js`).
+- 상단 바 이메일 옆에 "초대 회원" 배지가 붙는다(`app/static/index.html`의 `#premium-badge`, `app/static/app.js`의 `show()`).
 
 초대코드 여부는 서버 세션 없이 서명된 쿠키에 담기므로(`app/auth.py`) 가입/로그인 시점 기준이며, 코드 입력 UI는
 로그인 화면이 아니라 **회원가입** 화면에만 있다(`app/static/index.html`).

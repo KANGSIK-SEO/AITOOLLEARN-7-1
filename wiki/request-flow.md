@@ -1,7 +1,7 @@
 ---
 title: 질문 하나가 답이 되기까지
 sources: [app/main.py, app/chat.py, app/art.py, app/guardian.py, app/db.py, app/static/app.js]
-updated: 2026-10-08
+updated: 2026-10-09
 ---
 # 질문 하나가 답이 되기까지
 
@@ -56,4 +56,4 @@ AI 실패는 [가디언](guardian.md)이 사건으로 기록한다.
 | `delta` | 답변 글이 만들어질 때마다 | 글을 이어 붙인다 |
 | `done` / `error` | 끝났을 때 / 답변 도중 실패 | 저장 결과 / 오류 안내 |
 
-④에서 실패하면 스트림을 열지 않고 `/api/chat`과 같은 오류 응답을 준다. 화면은 연결이 안 되면 `/api/chat`으로 다시 시도한다 (`app/static/app.js`의 `sendMessageStream`).
+④에서 실패하면 스트림을 열지 않고 `/api/chat`과 같은 오류 응답을 준다. 화면은 연결이 안 되면 `/api/chat`으로 다시 시도한다 (`app/static/app.js`의 `receiveStream` → `receiveOnce`).

@@ -54,9 +54,10 @@ app.add_middleware(
 
 # 보안 헤더 (2026-10-09 보안 점수·인증 준비). 모든 응답에 붙인다.
 # CSP: 스크립트는 우리 서버의 파일만 실행(화면 안 스크립트 금지 → 해커가 끼워 넣은 스크립트는 실행되지 않음),
-#      그림은 미술관 https 주소 허용, 글꼴은 Google Fonts만, 다른 사이트가 우리 화면을 틀 안에 넣지 못하게.
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-       "font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; "
+#      그림은 미술관 https 주소 허용, 글꼴은 Google Fonts·jsDelivr(Pretendard)만, 다른 사이트가 우리 화면을 틀 안에 넣지 못하게.
+CSP = ("default-src 'self'; script-src 'self'; "
+       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "   # 글꼴 CSS (Pretendard·Inter)
+       "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; img-src 'self' data: https:; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
        "frame-ancestors 'none'; upgrade-insecure-requests")
 SECURITY_HEADERS = {
@@ -218,7 +219,7 @@ def _set_cookie(resp: JSONResponse, token: str, request: Request) -> None:
 # 화면 파일 내용으로 버전을 만든다. 파일이 바뀌어 배포되면 버전이 바뀌므로
 # ① index.html의 정적 파일 주소(?v=버전)가 달라져 브라우저·CDN 캐시를 우회하고
 # ② 서비스워커 캐시 이름이 달라져 새 서비스워커가 옛 캐시를 지운다 (sw.js의 activate).
-VERSIONED_ASSETS = ("style.css", "app.js", "ondevice.js", "boot.js")
+VERSIONED_ASSETS = ("style.css", "app.js", "ondevice.js", "boot.js", "theme-init.js")
 ASSET_VERSION = hashlib.sha256(b"".join(
     (STATIC_DIR / name).read_bytes() for name in (*VERSIONED_ASSETS, "index.html", "sw.js")
 )).hexdigest()[:10]

@@ -3,15 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#0b0c10">
+    <meta name="theme-color" content="#f6f3ee" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#141311" media="(prefers-color-scheme: dark)">
     <title>오프라인 / Offline</title>
     <style>
-        :root { color-scheme: dark; font-family: system-ui, sans-serif; }
-        body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0d0d12; color: #e0e0e0; }
+        /* style.css를 못 받는 상황이라 색을 여기에 직접 적는다 — 값은 style.css의 디자인 토큰과 같다 */
+        :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+        body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: light-dark(#f6f3ee, #141311); color: light-dark(#1d1b18, #ede9e2); }
         main { max-width: 30rem; padding: 2rem; text-align: center; }
-        h1 { color: #00f2ff; font-size: 1.5rem; }
-        p { line-height: 1.6; }
-        button { padding: 0.7rem 1.2rem; border: 0; border-radius: 999px; background: #00f2ff; color: #000; font-weight: 700; cursor: pointer; }
+        h1 { color: light-dark(#9a4a26, #e0895a); font-family: "Noto Serif KR", "Nanum Myeongjo", Georgia, serif; font-size: 1.5rem; }
+        p { line-height: 1.6; color: light-dark(#5f5a52, #b4ada1); }
+        button { padding: 0.7rem 1.2rem; border: 0; border-radius: 999px; background: light-dark(#1d1b18, #ede9e2); color: light-dark(#f6f3ee, #141311); font-weight: 700; cursor: pointer; }
     </style>
 </head>
 <body>
