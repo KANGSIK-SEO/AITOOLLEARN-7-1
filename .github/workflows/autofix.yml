@@ -150,7 +150,7 @@ jobs:
           mv summary.md out/summary.md
           cp "$RUNNER_TEMP/issue.json" out/issue.json
           echo "바뀐 줄: $(grep -c '^[+-]' out/autofix.patch || true)"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: autofix
           path: out/
@@ -198,7 +198,7 @@ jobs:
         run: |
           pip install -q -r requirements-dev.txt
           python -m pytest -q tests 2>&1 | tail -30 | tee "$RUNNER_TEMP/autofix/tests.txt"; exit ${PIPESTATUS[0]}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: autofix-checked
@@ -234,7 +234,7 @@ jobs:
         run: |
           mkdir -p review
           python3 scripts/autofix_review.py "$RUNNER_TEMP/pristine/issue.json" "$RUNNER_TEMP/pristine/autofix.patch" review/review.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: autofix-review
           path: review/
