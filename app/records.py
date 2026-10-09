@@ -372,28 +372,6 @@ button.ghost{{background:#fff;color:#0066ff;border:1px solid #0066ff;margin:8px 
 <h2>주의사항</h2><ul>{cautions}</ul>
 <div class="foot"><span>기록 번호 {e(row['number'])}</span><span>발급 {e(row['issued_at'].replace('T', ' ').replace('+00:00', ' UTC'))}</span>
 <span>기록 무결성: {'확인됨 ✓' if intact else '⚠️ 변조 의심'}</span></div>
-</div><button onclick="window.print()">인쇄 / PDF로 저장</button>
-<script>
-const ARCHIVE_API = "/api/records/{e(row['number'])}/archive";
-const r = document.getElementById("retry");
-if (r) r.onclick = async () => {{
-  r.disabled = true; r.textContent = "보관 요청 중…";
-  await fetch(ARCHIVE_API, {{ method: "POST" }});
-  location.reload();
-}};
-// 진행 중인 보관이 있으면 15초마다 최대 10분 동안 확인하고, 상태가 바뀌면 페이지를 새로 그린다
-if ({'true' if pending else 'false'}) {{
-  let tries = 0;
-  const poll = async () => {{
-    tries += 1;
-    try {{
-      const res = await fetch(ARCHIVE_API, {{ method: "POST" }});
-      const data = await res.json();
-      const still = (data.archives || []).some(a => a.requested_at && !a.archived_url && !a.error);
-      if (!still) return location.reload();
-    }} catch (_) {{ /* 잠깐 실패해도 다음 확인에서 다시 본다 */ }}
-    if (tries < 40) setTimeout(poll, 15000);
-  }};
-  setTimeout(poll, 15000);
-}}
-</script></body></html>"""
+</div><button id="print-btn">인쇄 / PDF로 저장</button>
+<div id="record-info" hidden data-archive-api="/api/records/{e(row['number'])}/archive" data-pending="{'true' if pending else 'false'}"></div>
+<script src="/static/record.js"></script></body></html>"""

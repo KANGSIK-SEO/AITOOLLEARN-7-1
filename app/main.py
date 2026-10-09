@@ -52,6 +52,34 @@ app.add_middleware(
     allow_credentials=False,
 )
 
+# 보안 헤더 (2026-10-09 보안 점수·인증 준비). 모든 응답에 붙인다.
+# CSP: 스크립트는 우리 서버의 파일만 실행(화면 안 스크립트 금지 → 해커가 끼워 넣은 스크립트는 실행되지 않음),
+#      그림은 미술관 https 주소 허용, 글꼴은 Google Fonts만, 다른 사이트가 우리 화면을 틀 안에 넣지 못하게.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+       "font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; "
+       "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
+       "frame-ancestors 'none'; upgrade-insecure-requests")
+SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains",   # 2년 동안 https로만 접속
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Content-Security-Policy": CSP,
+}
+# FastAPI 자동 문서(/docs, /redoc)는 CDN 스크립트를 쓰므로 CSP만 뺀다
+CSP_EXEMPT = ("/docs", "/redoc")
+
+
+def _with_security_headers(request: Request, response):
+    for name, value in SECURITY_HEADERS.items():
+        if name == "Content-Security-Policy" and request.url.path.startswith(CSP_EXEMPT):
+            continue
+        response.headers.setdefault(name, value)
+    return response
+
+
 @app.middleware("http")
 async def request_context(request: Request, call_next):
     """요청마다 request_id를 정하고(app/reqctx.py), 가디언 실시간 감시를 거친다.
@@ -64,7 +92,8 @@ async def request_context(request: Request, call_next):
     pending = reqctx.start_pending()
     ip = guardian.client_ip(request)
     if await run_in_threadpool(guardian.is_blocked, ip):
-        return error(403, "BLOCKED", "의심스러운 요청이 반복되어 잠시 접속이 제한되었어요. 잠시 후 다시 시도해 주세요.")
+        return _with_security_headers(request, error(
+            403, "BLOCKED", "의심스러운 요청이 반복되어 잠시 접속이 제한되었어요. 잠시 후 다시 시도해 주세요."))
     if await run_in_threadpool(guardian.is_probe_path, request.url.path):
         await run_in_threadpool(guardian.note_probe, ip, request.url.path)
         response = error(404, "NOT_FOUND", "찾을 수 없습니다.")
@@ -91,7 +120,7 @@ async def request_context(request: Request, call_next):
     # 맨 마지막: 스트리밍 답변·위 진단이 쓴 토큰까지 모아서 한 번에 저장한다
     tasks.add_task(_after_response, guardian.save_pending_usage, pending)
     response.background = tasks
-    return response
+    return _with_security_headers(request, response)
 
 
 def _after_response(fn, *args) -> None:
@@ -189,7 +218,7 @@ def _set_cookie(resp: JSONResponse, token: str, request: Request) -> None:
 # 화면 파일 내용으로 버전을 만든다. 파일이 바뀌어 배포되면 버전이 바뀌므로
 # ① index.html의 정적 파일 주소(?v=버전)가 달라져 브라우저·CDN 캐시를 우회하고
 # ② 서비스워커 캐시 이름이 달라져 새 서비스워커가 옛 캐시를 지운다 (sw.js의 activate).
-VERSIONED_ASSETS = ("style.css", "app.js", "ondevice.js")
+VERSIONED_ASSETS = ("style.css", "app.js", "ondevice.js", "boot.js")
 ASSET_VERSION = hashlib.sha256(b"".join(
     (STATIC_DIR / name).read_bytes() for name in (*VERSIONED_ASSETS, "index.html", "sw.js")
 )).hexdigest()[:10]

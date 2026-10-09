@@ -1,0 +1,37 @@
+# OpenSSF Scorecard: 오픈소스 보안 재단(OpenSSF)이 저장소의 보안 습관(코드 리뷰, 의존성 관리, 위험한 워크플로,
+# 보안 정책, 서명 등)을 0~10점으로 매기는 공개 점수. README 배지로 보이고 결과는 Security → Code scanning에.
+name: scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: "41 3 * * 2"   # 매주 화요일
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write   # 결과를 공개 점수판(api.scorecard.dev)에 올리기 위한 서명
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@v2.4.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scorecard
+          path: results.sarif
+          retention-days: 5
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
