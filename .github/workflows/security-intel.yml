@@ -34,7 +34,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v6
         with:
           path: intel-seen.json
           key: intel-seen-${{ github.run_id }}
@@ -48,7 +48,7 @@ jobs:
           pip install -q -r requirements.txt
           pip freeze > freeze.txt
           python3 scripts/security_intel.py freeze.txt intel-seen.json intel
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@v6
         if: always()
         with:
           path: intel-seen.json
