@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>저작권 걱정 없는 퍼블릭 도메인 명화 찾기 / Public Domain Masterpiece Finder</title>
     <meta name="description" content="상업적으로 사용할 수 있는 CC0 퍼블릭 도메인 명화를 한국어와 영어로 찾아주는 AI 챗봇입니다.">
     <meta name="robots" content="index, follow">
@@ -22,88 +22,286 @@
     <meta name="twitter:description" content="상업적으로 사용할 수 있는 CC0 퍼블릭 도메인 명화를 한국어와 영어로 찾아보세요.">
     <meta name="twitter:image" content="https://art-chatbot-eight.vercel.app/static/icons/icon-512.png">
     <meta name="twitter:image:alt" content="퍼블릭 도메인 명화 찾기 챗봇 아이콘">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
     <link rel="manifest" href="/static/manifest.json">
-    <meta name="theme-color" content="#0b0c10">
+    <meta name="theme-color" content="#f6f3ee" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#141311" media="(prefers-color-scheme: dark)">
+    <link rel="icon" type="image/svg+xml" href="/static/icons/favicon.svg">
     <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
     <link rel="icon" type="image/png" sizes="512x512" href="/static/icons/icon-512.png">
     <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="명화 챗봇">
+    <script src="/static/theme-init.js"></script>
 </head>
 <body>
-    <main class="chat-container" aria-label="명화 찾기 채팅 / Masterpiece finder chat">
-        <header class="chat-header" role="banner">
-            <div class="chat-title" role="heading" aria-level="1">🖼️ 저작권 걱정 없는 퍼블릭 도메인 명화 찾기<br><span class="chat-subtitle">Public Domain Masterpiece Finder</span></div>
-            <div class="status-bar" id="status-bar" role="status" aria-live="polite">로그인이 필요합니다 / Login required</div>
-            <div class="header-actions">
-                <button id="favorites-btn" class="link-btn" type="button" aria-label="즐겨찾기 보기 / Show favorites" hidden>★ 즐겨찾기 / Favorites</button>
-                <button id="logout-btn" class="link-btn" type="button" aria-label="로그아웃 / Log out" hidden>로그아웃 / Log out</button>
-            </div>
-        </header>
+    <!-- 아이콘 묶음: <svg class="i"><use href="#i-이름"/></svg>로 재사용한다 -->
+    <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute" aria-hidden="true">
+        <defs>
+            <symbol id="i-museum" viewBox="0 0 32 32"><path d="M16 5.5 27.5 11.2v1.3h-23v-1.3Z"/><rect x="5" y="13.6" width="22" height="1.6" rx=".4"/><rect x="7.2" y="16.4" width="2.4" height="7.4" rx=".5"/><rect x="12.2" y="16.4" width="2.4" height="7.4" rx=".5"/><rect x="17.4" y="16.4" width="2.4" height="7.4" rx=".5"/><rect x="22.4" y="16.4" width="2.4" height="7.4" rx=".5"/><rect x="5" y="24.8" width="22" height="1.6" rx=".4"/><rect x="3.8" y="27.2" width="24.4" height="1.6" rx=".4"/></symbol>
+            <symbol id="i-heart" viewBox="0 0 24 24"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></symbol>
+            <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></symbol>
+            <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+            <symbol id="i-record" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-4"/></symbol>
+            <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+            <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></symbol>
+            <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></symbol>
+            <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></symbol>
+            <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
+            <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+            <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></symbol>
+            <symbol id="i-lab" viewBox="0 0 24 24"><path d="M10 2v7.31"/><path d="M14 9.3V2"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/><path d="M5.52 16h12.96"/></symbol>
+            <symbol id="i-retry" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></symbol>
+            <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
+            <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/></symbol>
+            <symbol id="i-install" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></symbol>
+            <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+            <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></symbol>
+        </defs>
+    </svg>
 
-        <div id="install-banner" class="install-banner" role="region" aria-label="앱 설치 / App installation" hidden>
-            <button id="install-btn" class="pill install-btn">📲 앱으로 설치하기 / Install app</button>
+    <a class="skip-link" href="#main" data-i18n="skip">본문으로 건너뛰기</a>
+
+    <header class="topbar" role="banner">
+        <div class="topbar-inner">
+            <a class="brand" href="/" aria-label="명화 찾기 홈 / Home">
+                <span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><use href="#i-museum"/></svg></span>
+                <span class="brand-text">
+                    <span class="brand-name" data-i18n="brandName">명화 찾기</span>
+                    <span class="brand-sub">Public Domain Gallery</span>
+                </span>
+            </a>
+            <nav class="topbar-nav" aria-label="주 메뉴 / Main menu">
+                <button id="history-btn" class="nav-btn" type="button" aria-haspopup="dialog" hidden>
+                    <svg class="i"><use href="#i-history"/></svg><span data-i18n="history">대화 기록</span>
+                </button>
+                <button id="favorites-btn" class="nav-btn" type="button" aria-haspopup="dialog" hidden>
+                    <svg class="i"><use href="#i-heart"/></svg><span data-i18n="favorites">즐겨찾기</span>
+                </button>
+                <button id="lab-btn" class="nav-btn" type="button" aria-haspopup="dialog" hidden>
+                    <svg class="i"><use href="#i-lab"/></svg><span data-i18n="lab">온디바이스</span>
+                </button>
+                <button id="install-btn" class="icon-btn" type="button" data-i18n-aria="install" data-i18n-title="install" hidden>
+                    <svg class="i"><use href="#i-install"/></svg>
+                </button>
+                <div id="user-chip" class="user-chip" hidden>
+                    <span id="user-email" class="user-email"></span>
+                    <span id="premium-badge" class="premium-badge" data-i18n="premium" hidden>초대 회원</span>
+                    <button id="logout-btn" class="icon-btn" type="button" data-i18n-aria="logout" data-i18n-title="logout">
+                        <svg class="i"><use href="#i-logout"/></svg>
+                    </button>
+                </div>
+                <span class="nav-sep" aria-hidden="true"></span>
+                <button id="lang-btn" class="icon-btn lang-btn" type="button" aria-label="Language">EN</button>
+                <button id="theme-btn" class="icon-btn" type="button" data-i18n-aria="theme" data-i18n-title="theme">
+                    <svg class="i theme-icon-light"><use href="#i-moon"/></svg>
+                    <svg class="i theme-icon-dark"><use href="#i-sun"/></svg>
+                </button>
+            </nav>
         </div>
+    </header>
 
-        <section id="auth-panel" class="auth-panel" aria-label="로그인 및 회원가입 / Log in and sign up">
-            <p class="hint">어디에 쓸지 말하면 용도에 맞는 CC0 명화를 찾고, 써도 되는지 확인한 근거를 날짜와 함께 기록해 드려요. / Tell us what it's for — we find CC0 masterpieces that fit and keep a dated record of the rights evidence.<br>(MET · Art Institute of Chicago · Cleveland Museum of Art 공개 데이터 / Open data)</p>
-            <input type="email" id="email" aria-label="이메일 / Email" placeholder="이메일 / Email" autocomplete="username">
-            <input type="password" id="password" aria-label="비밀번호 (8자 이상) / Password (8+ characters)" placeholder="비밀번호 (8자 이상) / Password (8+ characters)" autocomplete="current-password">
-            <input type="text" id="private-code" aria-label="초대코드 (선택) / Invite code (optional)" placeholder="초대코드 (선택) / Invite code (optional)" autocomplete="off">
-            <div class="auth-buttons">
-                <button id="login-btn" class="pill">로그인 / Login</button>
-                <button id="signup-btn" class="pill secondary">회원가입 / Sign up</button>
+    <main id="main" tabindex="-1">
+        <!-- ===== 로그인 전: 소개 + 로그인/가입 + 공개 미리보기 ===== -->
+        <section id="auth-panel" class="landing" aria-labelledby="hero-title">
+            <div class="hero landing-inner">
+                <div class="hero-copy">
+                    <p class="eyebrow"><svg class="i"><use href="#i-check"/></svg><span data-i18n="eyebrow">CC0 · 퍼블릭 도메인 · 상업적 이용 가능</span></p>
+                    <h1 id="hero-title" class="display" data-i18n-html="heroTitle">저작권 걱정 없는<br>퍼블릭 도메인 명화 찾기</h1>
+                    <p class="lead" data-i18n="heroLead">PPT 배경, 카페 포스터, 교재 삽화처럼 쓰임새를 적으면 세계 미술관이 공개한 CC0 작품 중에서 맞는 그림을 골라 드려요. 작품마다 출처 표기 문구와 권리 근거 기록을 함께 제공합니다.</p>
+                    <dl class="stats">
+                        <div><dt>78,000+</dt><dd data-i18n="statWorks">CC0 작품</dd></div>
+                        <div><dt>3</dt><dd data-i18n="statMuseums">세계 미술관</dd></div>
+                        <div><dt>R1–R6</dt><dd data-i18n="statRules">권리 판단 규칙</dd></div>
+                    </dl>
+                    <p class="museums">The Met · Art Institute of Chicago · Cleveland Museum of Art</p>
+                </div>
+
+                <div class="auth-card">
+                    <div class="tabs" role="tablist" aria-label="로그인 또는 회원가입 / Log in or sign up">
+                        <button id="tab-login" class="tab" type="button" role="tab" aria-selected="true" aria-controls="auth-form" data-i18n="login">로그인</button>
+                        <button id="tab-signup" class="tab" type="button" role="tab" aria-selected="false" aria-controls="auth-form" data-i18n="signup">회원가입</button>
+                    </div>
+                    <form id="auth-form" class="auth-form" role="tabpanel" novalidate>
+                        <label class="field">
+                            <span data-i18n="email">이메일</span>
+                            <input type="email" id="email" autocomplete="username" required placeholder="you@example.com">
+                        </label>
+                        <label class="field">
+                            <span data-i18n="password">비밀번호</span>
+                            <input type="password" id="password" autocomplete="current-password" required minlength="8" maxlength="128" data-i18n-placeholder="passwordHint" placeholder="8자 이상">
+                        </label>
+                        <label class="field" id="code-field" hidden>
+                            <span><span data-i18n="inviteCode">초대코드</span> <em class="optional" data-i18n="optional">선택</em></span>
+                            <input type="text" id="private-code" autocomplete="off" data-i18n-placeholder="inviteHint" placeholder="받은 코드가 있다면 입력">
+                        </label>
+                        <div id="auth-error" class="form-error" role="alert"></div>
+                        <button id="auth-submit" class="btn btn-primary btn-block" type="submit" data-i18n="login">로그인</button>
+                        <p class="auth-note" data-i18n="authNote">질문은 로그인한 사용자만 할 수 있어요. 가입하면 무료 질문 100회가 주어집니다.</p>
+                    </form>
+                </div>
             </div>
-            <div id="auth-error" class="error-text" role="alert"></div>
+
+            <section class="band" aria-labelledby="preview-title">
+                <div class="band-inner">
+                    <div class="band-head">
+                        <div class="band-title-wrap">
+                            <p class="eyebrow"><span data-i18n="previewEyebrow">로그인 없이 둘러보기</span></p>
+                            <h2 id="preview-title" class="band-title" data-i18n="previewTitle">컬렉션 미리보기</h2>
+                            <p class="section-sub" data-i18n="previewSub">검색에 쓰는 실제 작품 DB에서 바로 불러왔어요. 그림을 누르면 큰 이미지와 출처 정보를 볼 수 있어요.</p>
+                        </div>
+                        <div id="preview-topics" class="topics" role="tablist" data-i18n-aria="previewTopics"></div>
+                    </div>
+                    <div id="preview-grid" class="masonry" aria-live="polite"></div>
+                    <div class="band-cta">
+                        <div>
+                            <p class="band-cta-title" data-i18n="ctaTitle">원하는 그림을 문장으로 찾아보세요</p>
+                            <p class="band-cta-sub" data-i18n="ctaSub">가입하면 무료 질문 100회 · 용도에 맞는 비율 필터 · 권리 근거 기록 발급</p>
+                        </div>
+                        <button id="cta-signup" class="btn btn-primary" type="button" data-i18n="ctaButton">무료로 시작하기</button>
+                    </div>
+                </div>
+            </section>
         </section>
 
-        <section id="chat-panel" aria-label="명화 찾기 대화 / Masterpiece finder conversation" hidden>
-            <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions" aria-label="대화 내용 / Conversation">
-                <div class="message bot" role="article">안녕하세요! 어디에 쓸지 말해 주세요. 용도에 맞는 비율·분위기의 CC0 명화를 찾고, 써도 되는지 확인하는 수고를 대신해 드려요. 근거는 날짜와 함께 기록으로 보관해 드려요. / Tell me what it's for — I'll find CC0 masterpieces that fit, check the rights for you, and keep a dated record of the evidence.</div>
-                <div class="examples" id="examples" role="group" aria-label="예시 질문 / Example questions">
-                    <button class="chip" type="button">카페 벽에 걸 세로형 포스터</button>
-                    <button class="chip" type="button">교재 삽화용 정물화</button>
-                    <button class="chip" type="button">PPT 배경용 가로형 풍경화</button>
-                    <button class="chip" type="button">인스타그램 정사각 게시물용 꽃 그림</button>
+        <!-- ===== 로그인 후: 대화 ===== -->
+        <aside id="sidebar" class="sidebar" aria-labelledby="sidebar-title" hidden>
+            <div class="sidebar-head">
+                <h2 id="sidebar-title" class="sidebar-title" data-i18n="history">대화 기록</h2>
+                <button id="sidebar-refresh" class="icon-btn" type="button" data-i18n-aria="refresh" data-i18n-title="refresh">
+                    <svg class="i"><use href="#i-retry"/></svg>
+                </button>
+            </div>
+            <div id="sidebar-body" class="sidebar-body"></div>
+        </aside>
+
+        <section id="chat-panel" class="chat" aria-label="명화 찾기 대화 / Masterpiece finder conversation" hidden>
+            <div id="chat-log" class="thread" role="log" aria-live="polite" aria-relevant="additions" data-i18n-aria="conversation">
+                <div id="welcome" class="welcome">
+                    <span class="welcome-mark"><svg class="i"><use href="#i-spark"/></svg></span>
+                    <h2 class="display welcome-title" data-i18n="welcomeTitle">어디에 쓸 그림을 찾으세요?</h2>
+                    <p class="lead" data-i18n="welcomeLead">용도를 말하면 비율과 분위기에 맞는 CC0 명화를 찾고, 왜 어울리는지 설명해 드려요.</p>
+                    <div class="examples" id="examples" role="group" data-i18n-aria="examples"></div>
                 </div>
             </div>
 
-            <button id="ondevice-toggle" type="button" class="ondevice-toggle" aria-controls="ondevice-panel" aria-expanded="false">🧠 온디바이스 추천 (서버 호출 없음) / On-device recommend (no server call)</button>
-            <div id="ondevice-panel" class="ondevice-panel" role="region" aria-label="온디바이스 추천 설정 / On-device recommendation settings" hidden>
-                <p class="hint">자유롭게 써보세요, AI 없이 키워드 사전으로 해석해요 / Type freely — parsed on-device, no AI<br>(예: "봄 느낌 풍경화", "19세기 인상주의 바다")</p>
-                <div class="ondevice-row">
-                    <input type="text" id="od-freetext" aria-label="온디바이스 검색어 / On-device search query" placeholder="예: 봄 느낌 풍경화 / e.g. spring landscape">
-                    <button id="od-parse-btn" type="button" class="pill secondary">AI 없이 이해하기 / Parse (no AI)</button>
+            <div class="composer-wrap">
+                <form id="chat-form" class="composer" data-i18n-aria="sendForm">
+                    <textarea id="message-input" rows="1" maxlength="500" autocomplete="off" data-i18n-aria="questionLabel" data-i18n-placeholder="questionPlaceholder" placeholder="예: 카페 벽에 걸 세로형 포스터"></textarea>
+                    <button id="send-btn" class="send-btn" type="submit" data-i18n-aria="send" data-i18n-title="send" disabled>
+                        <svg class="i"><use href="#i-send"/></svg>
+                    </button>
+                </form>
+                <div class="composer-meta">
+                    <span data-i18n="composerHint">Enter 보내기 · Shift+Enter 줄바꿈</span>
+                    <span id="char-count" class="char-count">0 / 500</span>
                 </div>
-                <div class="ondevice-row">
-                    <select id="od-style" aria-label="화풍 / Art style"><option value="">화풍 전체 / Any style</option></select>
-                    <input type="text" id="od-subject" aria-label="주제 키워드 / Subject keywords" placeholder="주제 키워드, 여러 개는 콤마로 / subject keywords, comma-separated">
-                </div>
-                <div class="ondevice-row">
-                    <input type="number" id="od-year-from" aria-label="시작 연도 / Start year" placeholder="연도부터 / year from">
-                    <input type="number" id="od-year-to" aria-label="종료 연도 / End year" placeholder="연도까지 / year to">
-                </div>
-                <pre id="od-rule-preview" class="rule-preview" role="status" aria-label="검색 규칙 미리보기 / Search rule preview"></pre>
-                <button id="od-run-btn" type="button" class="pill">추천받기 (내 기기에서 바로) / Recommend on this device</button>
             </div>
-
-            <form id="chat-form" class="input-area" aria-label="메시지 보내기 / Send a message">
-                <input type="text" id="message-input" aria-label="질문 입력 / Enter your question" maxlength="500" placeholder="질문을 입력하세요 (최대 500자) / Type your question (max 500 chars)" autocomplete="off">
-                <button id="send-btn" type="submit" aria-label="보내기 / Send" title="보내기 / Send">➤</button>
-            </form>
         </section>
     </main>
 
-    <div id="install-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="install-modal-title" hidden>
-        <div class="modal-box" role="document">
-            <h2 id="install-modal-title">앱으로 설치하기 / Install app</h2>
-            <ol id="install-steps" class="install-steps"></ol>
-            <button id="install-modal-close" class="pill">닫기 / Close</button>
+    <footer id="site-footer" class="site-footer">
+        <div class="footer-inner">
+            <div class="footer-brand">
+                <a class="brand" href="/">
+                    <span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><use href="#i-museum"/></svg></span>
+                    <span class="brand-text">
+                        <span class="brand-name" data-i18n="brandName">명화 찾기</span>
+                        <span class="brand-sub">Public Domain Gallery</span>
+                    </span>
+                </a>
+                <p class="footer-desc" data-i18n="footerDesc">세계 미술관이 CC0로 공개한 작품을 한국어로 찾고, 출처 표기와 권리 근거를 함께 챙기는 서비스입니다.</p>
+            </div>
+            <nav class="footer-col" aria-labelledby="footer-data">
+                <h3 id="footer-data" class="footer-head" data-i18n="footerData">데이터 출처</h3>
+                <a href="https://www.metmuseum.org/hubs/open-access" target="_blank" rel="noopener noreferrer">The Met Open Access</a>
+                <a href="https://www.artic.edu/open-access/open-access-images" target="_blank" rel="noopener noreferrer">Art Institute of Chicago</a>
+                <a href="https://www.clevelandart.org/open-access" target="_blank" rel="noopener noreferrer">Cleveland Museum of Art</a>
+            </nav>
+            <nav class="footer-col" aria-labelledby="footer-project">
+                <h3 id="footer-project" class="footer-head" data-i18n="footerProject">프로젝트</h3>
+                <a href="https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1" target="_blank" rel="noopener noreferrer">GitHub</a>
+                <a href="https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/blob/develop/docs/rights-policy.md" target="_blank" rel="noopener noreferrer" data-i18n="footerPolicy">권리 판단 기준</a>
+                <a href="https://creativecommons.org/publicdomain/zero/1.0/deed.ko" target="_blank" rel="noopener noreferrer" data-i18n="footerCc0">CC0 라이선스란?</a>
+            </nav>
         </div>
-    </div>
+        <div class="footer-bottom">
+            <p data-i18n="footerNote">작품 이미지는 각 미술관이 CC0로 공개한 퍼블릭 도메인입니다. 이 서비스의 안내와 근거 기록은 법률 자문이 아닙니다.</p>
+            <p>© 2026 AITOOLLEARN-7-1</p>
+        </div>
+    </footer>
+
+    <!-- ===== 대화 기록 · 즐겨찾기 서랍 ===== -->
+    <dialog id="drawer" class="drawer" aria-labelledby="drawer-title">
+        <div class="drawer-head">
+            <h2 id="drawer-title" class="drawer-title"></h2>
+            <button class="icon-btn" type="button" data-close data-i18n-aria="close"><svg class="i"><use href="#i-x"/></svg></button>
+        </div>
+        <div id="drawer-body" class="drawer-body"></div>
+    </dialog>
+
+    <!-- ===== 작품 상세 ===== -->
+    <dialog id="artwork-modal" class="modal modal-artwork" aria-labelledby="art-title">
+        <button class="icon-btn modal-close" type="button" data-close data-i18n-aria="close"><svg class="i"><use href="#i-x"/></svg></button>
+        <div class="art-detail">
+            <div class="art-stage"><img id="art-img" alt=""></div>
+            <div class="art-info">
+                <p id="art-museum" class="eyebrow"></p>
+                <h2 id="art-title" class="display art-title"></h2>
+                <p id="art-artist" class="art-artist"></p>
+                <dl id="art-meta" class="meta-list"></dl>
+                <div id="art-actions" class="art-actions"></div>
+                <div class="credit-box">
+                    <span class="credit-label" data-i18n="creditLabel">출처 표기 예시</span>
+                    <p id="art-credit" class="credit-text"></p>
+                </div>
+                <div id="art-links" class="art-links"></div>
+            </div>
+        </div>
+    </dialog>
+
+    <!-- ===== 온디바이스 추천 (서버·AI 호출 없음) ===== -->
+    <dialog id="lab-modal" class="modal modal-lab" aria-labelledby="lab-title">
+        <button class="icon-btn modal-close" type="button" data-close data-i18n-aria="close"><svg class="i"><use href="#i-x"/></svg></button>
+        <p class="eyebrow"><svg class="i"><use href="#i-lab"/></svg><span data-i18n="labEyebrow">실험실 · 서버/AI 호출 없음</span></p>
+        <h2 id="lab-title" class="display lab-title" data-i18n="labTitle">온디바이스 추천</h2>
+        <p class="lead small" data-i18n="labLead">브라우저에 받아 둔 작품 데이터를 Datalog 규칙으로 바로 걸러요. 자유 문장은 AI 대신 키워드 사전으로 해석합니다.</p>
+        <div class="lab-row">
+            <input type="text" id="od-freetext" class="input" data-i18n-aria="labFree" data-i18n-placeholder="labFreePh" placeholder="예: 봄 느낌 풍경화, 19세기 인상주의 바다">
+            <button id="od-parse-btn" type="button" class="btn btn-ghost" data-i18n="labParse">키워드로 해석</button>
+        </div>
+        <div class="lab-grid">
+            <label class="field"><span data-i18n="labStyle">화풍</span>
+                <select id="od-style" class="input"><option value="" data-i18n="labAnyStyle">전체</option></select>
+            </label>
+            <label class="field"><span data-i18n="labSubject">주제 키워드</span>
+                <input type="text" id="od-subject" class="input" data-i18n-placeholder="labSubjectPh" placeholder="콤마로 여러 개">
+            </label>
+            <label class="field"><span data-i18n="labFrom">시작 연도</span>
+                <input type="number" id="od-year-from" class="input" placeholder="1850">
+            </label>
+            <label class="field"><span data-i18n="labTo">종료 연도</span>
+                <input type="number" id="od-year-to" class="input" placeholder="1900">
+            </label>
+        </div>
+        <pre id="od-rule-preview" class="rule-preview" role="status" data-i18n-aria="labRule"></pre>
+        <button id="od-run-btn" type="button" class="btn btn-primary btn-block" data-i18n="labRun">내 기기에서 추천받기</button>
+    </dialog>
+
+    <!-- ===== 앱 설치 안내 ===== -->
+    <dialog id="install-modal" class="modal modal-small" aria-labelledby="install-modal-title">
+        <h2 id="install-modal-title" class="modal-title" data-i18n="install">앱으로 설치하기</h2>
+        <ol id="install-steps" class="install-steps"></ol>
+        <button id="install-modal-close" class="btn btn-primary btn-block" type="button" data-i18n="close">닫기</button>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
     <script src="/static/ondevice.js"></script>
     <script src="/static/app.js"></script>

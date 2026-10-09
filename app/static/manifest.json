@@ -1,7 +1,7 @@
 {
   "name": "저작권 걱정 없는 퍼블릭 도메인 명화 찾기",
   "short_name": "명화 챗봇",
-  "description": "CC0 퍼블릭 도메인 명화를 한국어로 찾아주는 챗봇",
+  "description": "상업적으로 사용할 수 있는 CC0 퍼블릭 도메인 명화를 한국어와 영어로 찾아주는 AI 챗봇",
   "id": "/",
   "start_url": "/",
   "scope": "/",
@@ -9,8 +9,8 @@
   "orientation": "portrait-primary",
   "categories": ["education", "entertainment"],
   "prefer_related_applications": false,
-  "background_color": "#0b0c10",
-  "theme_color": "#0b0c10",
+  "background_color": "#f6f3ee",
+  "theme_color": "#f6f3ee",
   "lang": "ko",
   "icons": [
     { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
