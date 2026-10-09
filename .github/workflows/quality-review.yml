@@ -34,7 +34,7 @@ jobs:
       SITE_URL: ${{ vars.SITE_URL || 'https://art-chatbot-eight.vercel.app' }}
       MAX_FIXES: ${{ vars.QUALITY_MAX_FIXES || '3' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/setup-python@v5

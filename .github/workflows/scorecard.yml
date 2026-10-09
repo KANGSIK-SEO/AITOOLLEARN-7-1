@@ -19,7 +19,7 @@ jobs:
       security-events: write
       id-token: write   # 결과를 공개 점수판(api.scorecard.dev)에 올리기 위한 서명
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ossf/scorecard-action@v2.4.0
