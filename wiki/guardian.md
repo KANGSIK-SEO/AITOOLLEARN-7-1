@@ -1,6 +1,6 @@
 ---
 title: 가디언 (장애·보안 감시)
-sources: [app/guardian.py, app/main.py, vercel.json, .github/workflows/monitor.yml, .github/workflows/autofix.yml, .github/workflows/autofix-ship.yml, scripts/autofix_guard.py, scripts/autofix_propose.py, CONTRIBUTING.md]
+sources: [scripts/autofix_review.py, scripts/security_intel.py, .github/workflows/security-intel.yml, app/guardian.py, app/main.py, vercel.json, .github/workflows/monitor.yml, .github/workflows/autofix.yml, .github/workflows/autofix-ship.yml, scripts/autofix_guard.py, scripts/autofix_propose.py, CONTRIBUTING.md]
 updated: 2026-10-08
 ---
 # 가디언
@@ -15,8 +15,14 @@ updated: 2026-10-08
 | 악성 입력 3번 (10분 안) | 그 IP 1시간 차단 |
 | 한 IP에서 로그인 실패 10번 (여러 계정 돌려 보기) | 그 IP 1시간 차단 |
 | 고객이 겪는 오류 첫 발생(AI 응답 실패·DB·서버 오류), 장애 5분에 10건, 심각(high) 사건 | **즉시 AI 진단 + GitHub 이슈** (같은 종류 1분에 한 번, 다른 문제는 간격 없이 바로, 횟수 제한 없음) |
+| 규칙에 없는 수상한 접속 (대량 요청, 계정 돌려 막기, 번호 바꿔 보기 등) | 1분마다 Claude Haiku가 새 접속 기록을 읽고 판단 → `AI_SUSPICIOUS_TRAFFIC` 사건, 10분 안 두 번이면 IP 1시간 차단, 심각하면 즉시 이슈 |
+| 챗봇 AI가 답하지 못함 (손님이 없어도) | cron-job.org가 1분마다 `/api/guardian/scan` → 짧은 질문으로 확인, 실패면 503(메일) + `outage` 이슈(30분에 한 번) |
+| 서버가 버거움 (최근 5분 요청 30% 이상이 8초 초과·502~504) | `[용량]` 이슈 — Vercel 플랜 확인 (자동 수정 아님, 6시간에 한 번) |
+| 평가 체크리스트 항목 미흡 (매일) | `quality-review.yml` → 보고서 이슈 갱신, 코드로 고칠 항목은 `[품질]` 이슈 → 자동 수정 PR |
 | 서버가 통째로 안 뜸 | `monitor.yml`이 **1분마다** 확인(5분마다 시작해 안에서 1분 간격 5번) → `outage` 이슈, 회복되면 닫음 |
 
+- **AI는 한 번의 판단으로 막지 않는다.** 접속 기록에는 공격자가 쓴 글(경로·user_agent)이 섞이므로, 기록에 실제로 있는 IP만 받아들이고 두 번 걸려야 차단한다.
+- **모델 역할**: 챗봇 답변·진단·접속 감시는 가장 저렴한 `claude-haiku-5-5`, 코드 수정안은 `claude-fable-5-1`.
 - 차단은 시간이 지나면 저절로 풀린다. 회사처럼 여러 사람이 IP 하나를 쓰면 같이 막힐 수 있어서 1시간으로 짧게 잡았다.
 - 차단 목록은 서버마다 30초씩 기억해서, 요청마다 DB를 읽지 않는다 (`BLOCK_CACHE_SECONDS`).
 - 즉시 분석은 응답을 보낸 뒤에 돌아서 사용자를 기다리게 하지 않는다 (`app/main.py` 미들웨어).
@@ -41,6 +47,8 @@ updated: 2026-10-08
 - **횟수 제한**: 하루 총횟수 제한 없음(organization 지원으로 비용 무관). 같은 문제는 10분에 한 번, 같은 문제의 수정 PR이 이미 열려 있으면 새로 만들지 않는다 — 같은 장애로 PR이 쏟아지는 것만 막는다. (`AUTOFIX_DAILY_MAX`, `AUTOFIX_SAME_PROBLEM_MINUTES`로 조정)
 - **코드로 고치기 (승인 필요)**: AI는 파일 내용만 돌려주고, 허용된 파일과 새 테스트(`tests/test_autofix_*.py`)에만 써진다 (`scripts/autofix_propose.py`).
 - **사람 대신 기계가 먼저 거르는 것** (`scripts/autofix_guard.py`): 보호 파일(인증·비밀 키·DB·배포·검사 규칙 자신), 외부 통신, 명령 실행, 환경변수 읽기, eval/exec, 삭제, 기존 테스트 수정, 400줄 넘는 변경, 새 테스트 없음.
+- **해커의 숨은 지시 막기**: 기계 검사가 보이지 않는 문자·비밀 값 노출·외부 전송·처음 보는 주소·보안 검사 제거를 막고, 다른 AI(Haiku)가 공격자의 눈으로 한 번 더 검토해 수상하면 PR을 열지 않는다. PR 본문의 "🔒 보안 점검" 칸에 결과가 보인다. PR은 AI 코드가 실행되기 전의 원본 patch로만 만든다.
+- **보안 동향 학습 (매시간)**: `security-intel.yml`이 보안 뉴스 RSS·라이브러리 취약점(OSV)을 읽어 요약 이슈에 남기고, 자동 수정 코드에 들어가면 안 되는 문자열을 배운다(더할 수만 있음).
 - **왜 승인 한 번은 남겼나**: 로그에는 공격자가 쓴 글이 섞인다. AI가 속아도 마지막에 사람이 한 번 보게 하려는 것이다. 완전 자동은 이 작업 환경의 보안 장치도 막았다.
 - 학습 기록 이슈에는 워크플로가 정해진 칸(날짜·이슈·결과·이유·파일)만 남기고, AI는 봇이 쓴 댓글만 읽는다.
 

@@ -27,7 +27,7 @@ const SCROLL_DURATION_MS = 900;       // 새 질문을 화면 위로 올리는 �
 const TOPBAR_HIDE_AFTER = 120;        // 이만큼 내려간 뒤부터 상단 바를 접는다
 const SCROLL_NOISE = 6;               // 이보다 작은 스크롤 움직임은 무시한다
 const TOAST_MS = 2200;
-const STORAGE_KEYS = {                // index.html의 첫 화면 스크립트도 theme·lang 키를 쓴다
+const STORAGE_KEYS = {                // static/theme-init.js(첫 화면 스크립트)도 theme·lang 키를 쓴다
     theme: "pd-theme", lang: "pd-lang", sidebar: "pd-sidebar", iosPrompt: "iosInstallPromptShown",
 };
 const MUSEUMS = { met: "The Metropolitan Museum of Art", aic: "Art Institute of Chicago", cma: "Cleveland Museum of Art" };
@@ -231,6 +231,9 @@ const I18N = {
     },
 };
 
+// 서버 25초 + 네트워크 여유. 이만큼 아무 응답(스트리밍은 조각)이 없으면 기다리지 않고 '접속자가 많습니다'를 보여준다
+const CLIENT_TIMEOUT_MS = 30000;
+
 // 서버 오류 코드(README '오류 코드' 참고) → 안내 문구. retry: 같은 질문을 다시 보내 볼 만한 일시적 오류인지
 const ERRORS = {
     UNAUTHENTICATED: { ko: "로그인이 필요합니다.", en: "Please sign in." },
@@ -248,7 +251,9 @@ const ERRORS = {
     ARTWORK_NOT_FOUND: { ko: "작품을 찾을 수 없습니다.", en: "Artwork not found." },
     RECORD_NOT_ALLOWED: { ko: "이 작품은 판단 규칙을 통과하지 못해 근거 기록을 발급할 수 없어요.", en: "This artwork didn't pass our rights rules." },
     AI_BACKED_OFF: { ko: "AI 서비스가 잠시 쉬고 있어요. 잠시 후 다시 시도해 주세요.", en: "The AI service is taking a short break.", retry: true },
-    AI_TIMEOUT: { ko: "응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요.", en: "The response is taking too long.", retry: true },
+    // 25초 안에 답을 못 주면 서버도 화면도 같은 안내를 쓴다 (app/config.py BUSY_MESSAGE, 서버 DB 시간 초과는 BUSY)
+    AI_TIMEOUT: { ko: "죄송합니다. 접속자가 많습니다. 잠시 후 다시 시도해 주세요.", en: "Sorry, we have a lot of visitors right now. Please try again shortly.", retry: true },
+    BUSY: { ko: "죄송합니다. 접속자가 많습니다. 잠시 후 다시 시도해 주세요.", en: "Sorry, we have a lot of visitors right now. Please try again shortly.", retry: true },
     AI_RATE_LIMITED: { ko: "AI 요청이 많아 잠시 제한됐어요.", en: "The AI service is rate-limited right now.", retry: true },
     AI_ERROR: { ko: "AI 서버와 통신하지 못했어요.", en: "Couldn't reach the AI server.", retry: true },
     DB_ERROR: { ko: "데이터베이스에 문제가 생겼어요.", en: "There was a database problem.", retry: true },
@@ -309,10 +314,16 @@ function applyI18n() {
 // 모든 요청이 이 함수를 지난다. 네트워크 오류도 서버 오류와 같은 모양({ error: { code } })으로 돌려준다
 async function api(path, options = {}) {
     let res;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CLIENT_TIMEOUT_MS);
     try {
-        res = await fetch(path, { headers: { "Content-Type": "application/json" }, credentials: "same-origin", ...options });
-    } catch (_) {
-        return { ok: false, status: 0, data: { error: { code: "NETWORK_ERROR" } } };
+        res = await fetch(path, { headers: { "Content-Type": "application/json" }, credentials: "same-origin",
+                                  signal: controller.signal, ...options });
+    } catch (e) {
+        const code = e?.name === "AbortError" ? "BUSY" : "NETWORK_ERROR";   // 30초 넘게 답이 없으면 '접속자가 많습니다'
+        return { ok: false, status: 0, data: { error: { code } } };
+    } finally {
+        clearTimeout(timer);
     }
     let data = {};
     try { data = await res.json(); } catch (_) { /* 본문 없음 */ }
@@ -966,16 +977,28 @@ async function sendMessage(message) {
 }
 
 async function receiveStream(message, pending) {
+    // 30초 동안 아무것도(첫 응답·답변 조각) 오지 않으면 끊고 '접속자가 많습니다'를 보여준다 — 조각이 올 때마다 다시 잰다
+    const controller = new AbortController();
+    let timedOut = false;
+    let timer = null;
+    const arm = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { timedOut = true; controller.abort(); }, CLIENT_TIMEOUT_MS);
+    };
+    arm();
     let res;
     try {
         res = await fetch("/api/chat/stream", {
             method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin",
-            body: JSON.stringify({ message }),
+            body: JSON.stringify({ message }), signal: controller.signal,
         });
     } catch (_) {
+        clearTimeout(timer);
+        if (timedOut) return showChatError(message, 504, { code: "BUSY" });
         return receiveOnce(message);   // 연결 자체가 안 되면 한 번에 받기로 다시 시도
     }
     if (!res.ok || !res.body) {   // 답변 전 단계(의도 추출·검색)에서 실패하면 스트림 없이 일반 오류 응답이 온다
+        clearTimeout(timer);
         let data = {};
         try { data = await res.json(); } catch (_) { /* 본문 없음 */ }
         return showChatError(message, res.status, data.error);
@@ -985,6 +1008,7 @@ async function receiveStream(message, pending) {
     let meta = null;
     try {
         await readNdjson(res, (event) => {
+            arm();
             if (event.type === "meta") {           // 검색이 끝났다 → 카드부터
                 meta = event;
                 pending.remove();
@@ -997,9 +1021,11 @@ async function receiveStream(message, pending) {
             }
         });
     } catch (_) {
+        clearTimeout(timer);
         answer?.finish();
-        return showChatError(message, 0, { code: "STREAM_DROPPED" });
+        return showChatError(message, 0, { code: timedOut ? "BUSY" : "STREAM_DROPPED" });
     }
+    clearTimeout(timer);
     answer?.finish();
     showLimitWarning(meta);
 }
@@ -1013,6 +1039,8 @@ async function receiveOnce(message) {
 
 function showChatError(message, status, error) {
     if (status === 401) { show(false); toast(t("sessionExpired")); return; }
+    // Vercel이 시간 초과로 끊으면 JSON 없이 504가 온다 — 이것도 '접속자가 많습니다'로 안내한다
+    if (!error?.code && [502, 503, 504].includes(status)) error = { code: "BUSY" };
     const code = error?.code;
     const retryable = ERRORS[code]?.retry || status === 0;
     addNotice("error", { error }, { code: code || String(status), onRetry: retryable ? () => sendMessage(message) : null });

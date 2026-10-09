@@ -4,6 +4,7 @@ TURSO_DATABASE_URL이 있으면 Turso(HTTP API), 없으면 로컬 SQLite 파일(
 두 백엔드 모두 execute(sql, params) -> list[dict] 로 동일하게 사용한다. (INSERT는 RETURNING 사용)
 """
 import json
+import socket
 import logging
 import os
 import re
@@ -12,7 +13,7 @@ import time
 import urllib.error
 import urllib.request
 
-from .config import ROOT
+from .config import ROOT, TIMEOUT_SECONDS
 
 log = logging.getLogger("app.db")
 
@@ -63,6 +64,30 @@ SCHEMA = [
         created_at  TEXT NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_incidents_time ON incidents (created_at)",
+    # 접속 기록: 1분마다 AI가 읽고 규칙에 없는 수상한 움직임을 찾는다 (2일 지나면 지운다)
+    """CREATE TABLE IF NOT EXISTS access_log (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        ip          TEXT NOT NULL,
+        method      TEXT NOT NULL,
+        path        TEXT NOT NULL,     -- 쿼리 포함, 300자까지
+        status      INTEGER NOT NULL,
+        user_agent  TEXT,
+        ms          INTEGER,
+        created_at  TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_access_log_time ON access_log (created_at)",
+    # Claude 토큰 사용량: 목적(answer·intent·watch·triage …)별로 얼마나 쓰는지 보고 줄인다 (30일 보관)
+    """CREATE TABLE IF NOT EXISTS ai_usage (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        purpose       TEXT NOT NULL,
+        model         TEXT NOT NULL,
+        input_tokens  INTEGER NOT NULL,
+        output_tokens INTEGER NOT NULL,
+        cache_read    INTEGER NOT NULL DEFAULT 0,
+        cache_write   INTEGER NOT NULL DEFAULT 0,
+        created_at    TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_ai_usage_time ON ai_usage (created_at)",
     """CREATE TABLE IF NOT EXISTS runtime_flags (
         key         TEXT PRIMARY KEY,
         value       TEXT NOT NULL,
@@ -97,6 +122,10 @@ _initialized = False
 
 class DbError(RuntimeError):
     pass
+
+
+class DbTimeout(DbError):
+    """Turso가 25초(TIMEOUT_SECONDS) 안에 답하지 않음 — 화면에는 '접속자가 많습니다'로 안내한다."""
 
 
 def _turso_url() -> str | None:
@@ -144,9 +173,13 @@ def _turso_pipeline(base: str, stmts: list[tuple[str, tuple]]) -> list[list[dict
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
             data = json.load(resp)
-    except (urllib.error.URLError, TimeoutError) as e:
+    except (TimeoutError, socket.timeout) as e:
+        raise DbTimeout(f"Turso 응답 시간 초과({TIMEOUT_SECONDS:g}s)") from e
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, (TimeoutError, socket.timeout)):
+            raise DbTimeout(f"Turso 응답 시간 초과({TIMEOUT_SECONDS:g}s)") from e
         raise DbError(f"Turso 연결 실패: {e}") from e
     out = []
     for item in data["results"][:len(stmts)]:

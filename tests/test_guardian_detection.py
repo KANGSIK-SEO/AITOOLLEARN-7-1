@@ -188,7 +188,7 @@ def test_daily_digest_urgency_parsing(fresh_db, monkeypatch, diagnosis, urgency,
     _incident("AI_TIMEOUT")
     issues = []
     monkeypatch.setattr(llm, "chat_completion", lambda *a, **k: diagnosis)
-    monkeypatch.setattr(guardian, "open_github_issue", lambda title, body: issues.append(title))
+    monkeypatch.setattr(guardian, "open_github_issue", lambda title, body, labels=None: issues.append(title))
     assert guardian.run_daily_digest() == {"analyzed": 1, "urgency": urgency}
     assert bool(issues) is opens_issue
 

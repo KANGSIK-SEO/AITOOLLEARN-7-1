@@ -64,12 +64,46 @@ def fake_claude(monkeypatch):
     return messages
 
 
-def test_default_is_fable_low_effort_with_server_fallback(fake_claude):
+def test_default_is_cheapest_haiku_with_low_effort(fake_claude):
     out = llm.chat_completion([{"role": "system", "content": "규칙"}, {"role": "user", "content": "질문"}])
     assert out == "[1] 봄 풍경"
     p = fake_claude.calls[0]
-    assert p["model"] == "claude-fable-5-1" and p["output_config"] == {"effort": "low"}
+    # Haiku 5.5는 effort를 안 보내면 medium으로 생각한다 — 비용을 줄이려고 low를 직접 보낸다
+    assert p["model"] == "claude-haiku-5-5" and p["output_config"] == {"effort": "low"}
     assert p["system"] == "규칙" and p["messages"] == [{"role": "user", "content": "질문"}]
+    assert "fallbacks" not in p and "betas" not in p  # Haiku에는 서버 폴백이 없다
+    assert "thinking" not in p  # 답변은 생각을 켜 둔다 (adaptive)
+
+
+def test_simple_extraction_turns_thinking_off_on_haiku(fake_claude):
+    fake_claude.response = _response('{"chitchat": true, "keywords": [], "artist": null, "year_from": null, '
+                                     '"year_to": null, "orientation": null, "purpose": null}')
+    chat.extract_intent("안녕")
+    assert fake_claude.calls[0]["thinking"] == {"type": "disabled"}
+
+
+def test_long_system_prompt_is_cached_short_one_is_not(fake_claude):
+    llm.chat_completion([{"role": "system", "content": "가" * 3000}, {"role": "user", "content": "q"}])
+    system = fake_claude.calls[0]["system"]
+    assert system[0]["cache_control"] == {"type": "ephemeral"} and system[0]["text"] == "가" * 3000
+    llm.chat_completion([{"role": "system", "content": "짧음"}, {"role": "user", "content": "q"}])
+    assert fake_claude.calls[1]["system"] == "짧음"
+
+
+def test_usage_is_recorded_per_purpose(fake_claude, monkeypatch):
+    saved = []
+    monkeypatch.setattr("app.guardian.save_ai_usage", lambda rows: saved.extend(rows))
+    fake_claude.response.usage = SimpleNamespace(input_tokens=120, output_tokens=30,
+                                                  cache_read_input_tokens=100, cache_creation_input_tokens=0)
+    llm.chat_completion([{"role": "user", "content": "q"}], purpose="watch")
+    assert saved == [("watch", "claude-haiku-5-5", 120, 30, 100, 0)]
+
+
+def test_fable_gets_low_effort_with_server_fallback(fake_claude, monkeypatch):
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-fable-5-1")
+    llm.chat_completion([{"role": "user", "content": "질문"}])
+    p = fake_claude.calls[0]
+    assert p["model"] == "claude-fable-5-1" and p["output_config"] == {"effort": "low"}
     assert p["fallbacks"] == "default" and p["betas"] == ["server-side-fallback-2026-07-01"]
     assert "thinking" not in p and "temperature" not in p  # Fable: 생각은 항상 켜져 있고 샘플링 옵션은 400
 
@@ -204,3 +238,12 @@ def test_claude_rate_limit_without_solar_key_uses_gpt(fake_claude, monkeypatch):
 
 def test_credit_error_is_reported_as_exhausted():
     assert claude_llm._as_unavailable(_credit_error()).code == "AI_KEY_MISSING"
+
+
+def test_same_question_reuses_intent_without_calling_ai(fake_claude):
+    fake_claude.response = _response('{"chitchat": false, "keywords": ["sunflower"], "artist": null, '
+                                     '"year_from": null, "year_to": null, "orientation": null, "purpose": null}')
+    first = chat.extract_intent("고흐 해바라기")
+    first["keywords"].append("changed")   # 호출부가 고쳐도
+    second = chat.extract_intent("  고흐   해바라기 ")
+    assert len(fake_claude.calls) == 1 and second["keywords"] == ["sunflower"]

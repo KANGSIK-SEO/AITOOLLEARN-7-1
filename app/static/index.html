@@ -38,15 +38,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="명화 챗봇">
-    <script>
-        // 첫 화면이 그려지기 전에 저장된 테마·언어를 적용해 깜빡임을 막는다
-        try {
-            const theme = localStorage.getItem("pd-theme");
-            if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
-            const lang = localStorage.getItem("pd-lang");
-            if (lang === "en") document.documentElement.lang = "en";
-        } catch (_) { /* 저장소를 못 써도 기본값으로 동작 */ }
-    </script>
+    <script src="/static/theme-init.js"></script>
 </head>
 <body>
     <!-- 아이콘 묶음: <svg class="i"><use href="#i-이름"/></svg>로 재사용한다 -->
@@ -313,10 +305,6 @@
 
     <script src="/static/ondevice.js"></script>
     <script src="/static/app.js"></script>
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
-        }
-    </script>
+    <script src="/static/boot.js"></script>
 </body>
 </html>

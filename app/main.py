@@ -17,7 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.background import BackgroundTask
+from starlette.background import BackgroundTasks
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
@@ -25,7 +25,8 @@ from . import art, auth, chat, db, explain, guardian, records, reqctx
 from .config import (ART_RESULTS_LIMIT, ART_RESULTS_LIMIT_PREMIUM, CHAT_LIFETIME_LIMIT_FREE,
                      CHAT_LIMIT_PER_HOUR, CHAT_LIMIT_PER_HOUR_PREMIUM, CHAT_MAX_LENGTH,
                      CONTEXT_TURNS, CRON_SECRET, FREE_LIMIT_WARNING_THRESHOLD, BROWSE_LIMIT_PER_HOUR,
-                     BROWSE_PAGE_SIZE, RECORD_LIMIT_PER_HOUR, AIUnavailableError, validate_env)
+                     BROWSE_PAGE_SIZE, BUSY_MESSAGE, RECORD_LIMIT_PER_HOUR, TIMEOUT_SECONDS, AIUnavailableError,
+                     validate_env)
 
 reqctx.install()
 logging.basicConfig(level=logging.INFO, format=reqctx.LOG_FORMAT)
@@ -51,16 +52,49 @@ app.add_middleware(
     allow_credentials=False,
 )
 
+# 보안 헤더 (2026-10-09 보안 점수·인증 준비). 모든 응답에 붙인다.
+# CSP: 스크립트는 우리 서버의 파일만 실행(화면 안 스크립트 금지 → 해커가 끼워 넣은 스크립트는 실행되지 않음),
+#      그림은 미술관 https 주소 허용, 글꼴은 Google Fonts·jsDelivr(Pretendard)만, 다른 사이트가 우리 화면을 틀 안에 넣지 못하게.
+CSP = ("default-src 'self'; script-src 'self'; "
+       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "   # 글꼴 CSS (Pretendard·Inter)
+       "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; img-src 'self' data: https:; connect-src 'self'; "
+       "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
+       "frame-ancestors 'none'; upgrade-insecure-requests")
+SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains",   # 2년 동안 https로만 접속
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Content-Security-Policy": CSP,
+}
+# FastAPI 자동 문서(/docs, /redoc)는 CDN 스크립트를 쓰므로 CSP만 뺀다
+CSP_EXEMPT = ("/docs", "/redoc")
+
+
+def _with_security_headers(request: Request, response):
+    for name, value in SECURITY_HEADERS.items():
+        if name == "Content-Security-Policy" and request.url.path.startswith(CSP_EXEMPT):
+            continue
+        response.headers.setdefault(name, value)
+    return response
+
+
 @app.middleware("http")
 async def request_context(request: Request, call_next):
     """요청마다 request_id를 정하고(app/reqctx.py), 가디언 실시간 감시를 거친다.
     - 차단된 IP는 바로 403, 공격 도구가 찾는 경로는 404로 끝내고 횟수를 센다 (app/guardian.py)
-    - 처리 중 생긴 즉시 분석 요청은 응답을 보낸 뒤에 실행해 사용자를 기다리게 하지 않는다"""
+    - 처리 중 생긴 즉시 분석 요청과 접속 기록(1분마다 AI가 읽음)은 응답을 보낸 뒤에 남겨 사용자를 기다리게 하지 않는다
+    - 버전(?v=)이 붙은 정적 파일 응답에는 장기 캐시 헤더를 붙인다 (_static_cache_headers)"""
+    started = time.monotonic()
     reqctx.set_request_id(reqctx.new_request_id())
+    reqctx.start_deadline(TIMEOUT_SECONDS)   # 이 요청은 25초 안에 끝낸다 — 바깥 호출은 남은 시간만큼만 기다린다
     pending = reqctx.start_pending()
     ip = guardian.client_ip(request)
     if await run_in_threadpool(guardian.is_blocked, ip):
-        return error(403, "BLOCKED", "의심스러운 요청이 반복되어 잠시 접속이 제한되었어요. 잠시 후 다시 시도해 주세요.")
+        return _with_security_headers(request, error(
+            403, "BLOCKED", "의심스러운 요청이 반복되어 잠시 접속이 제한되었어요. 잠시 후 다시 시도해 주세요."))
     if await run_in_threadpool(guardian.is_probe_path, request.url.path):
         await run_in_threadpool(guardian.note_probe, ip, request.url.path)
         response = error(404, "NOT_FOUND", "찾을 수 없습니다.")
@@ -74,9 +108,26 @@ async def request_context(request: Request, call_next):
             response = error(500, "SERVER_ERROR", "서버에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.")
         if response.status_code == 404:
             await run_in_threadpool(guardian.note_not_found, ip, request.url.path)
-    if pending.get("triage") and response.background is None:
-        response.background = BackgroundTask(guardian.run_triage, pending["triage"])
-    return response
+    _static_cache_headers(request, response)
+    tasks = BackgroundTasks()
+    if response.background is not None:
+        tasks.tasks.append(response.background)
+    tasks.add_task(_after_response, guardian.log_access, ip, request.method,
+                   request.url.path + (f"?{request.url.query}" if request.url.query else ""),
+                   response.status_code, request.headers.get("user-agent", ""),
+                   int((time.monotonic() - started) * 1000))
+    if pending.get("triage"):
+        tasks.add_task(_after_response, guardian.run_triage, pending["triage"])
+    # 맨 마지막: 스트리밍 답변·위 진단이 쓴 토큰까지 모아서 한 번에 저장한다
+    tasks.add_task(_after_response, guardian.save_pending_usage, pending)
+    response.background = tasks
+    return _with_security_headers(request, response)
+
+
+def _after_response(fn, *args) -> None:
+    """응답을 보낸 뒤의 일은 사용자가 기다리지 않으므로 요청의 25초 마감에 묶지 않는다 (각 호출의 25초 상한은 그대로)."""
+    reqctx.clear_deadline()
+    fn(*args)
 
 
 STATUS_BY_CODE = {"AI_TIMEOUT": 504, "AI_ERROR": 502, "AI_RATE_LIMITED": 429,
@@ -105,6 +156,9 @@ async def validation_exc(_: Request, __: RequestValidationError):
 @app.exception_handler(db.DbError)
 async def db_exc(_: Request, exc: db.DbError):
     log.error("db_error detail=%s", exc)
+    if isinstance(exc, db.DbTimeout):   # 25초 안에 답이 없으면 '접속자가 많습니다'
+        guardian.record_incident("reliability", "DB_ERROR", str(exc), {"timeout": True}, "high")
+        return error(503, "BUSY", BUSY_MESSAGE)
     guardian.record_incident("reliability", "DB_ERROR", str(exc), {}, "high")
     return error(503, "DB_ERROR", "데이터베이스에 문제가 생겼어요. 잠시 후 다시 시도해 주세요.")
 
@@ -165,11 +219,27 @@ def _set_cookie(resp: JSONResponse, token: str, request: Request) -> None:
 # 화면 파일 내용으로 버전을 만든다. 파일이 바뀌어 배포되면 버전이 바뀌므로
 # ① index.html의 정적 파일 주소(?v=버전)가 달라져 브라우저·CDN 캐시를 우회하고
 # ② 서비스워커 캐시 이름이 달라져 새 서비스워커가 옛 캐시를 지운다 (sw.js의 activate).
-VERSIONED_ASSETS = ("style.css", "app.js", "ondevice.js")
+VERSIONED_ASSETS = ("style.css", "app.js", "ondevice.js", "boot.js", "theme-init.js")
 ASSET_VERSION = hashlib.sha256(b"".join(
     (STATIC_DIR / name).read_bytes() for name in (*VERSIONED_ASSETS, "index.html", "sw.js")
 )).hexdigest()[:10]
 NO_CACHE = {"Cache-Control": "no-cache"}  # 매번 서버에 새 버전이 있는지 확인 (내용이 같으면 304로 가볍게)
+# 버전(?v=현재 버전)이 붙은 정적 파일은 내용이 바뀌면 주소도 바뀌므로 1년 동안 재확인 없이 캐시해도 안전하다.
+# 버전이 없거나 다른 버전의 요청은 StaticFiles 기본값(매번 재확인)을 그대로 둔다.
+IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
+
+
+def _static_cache_headers(request: Request, response: Response) -> None:
+    """/static/<VERSIONED_ASSETS>?v=<ASSET_VERSION> 의 정상 응답(200/304)에만 장기 캐시 헤더를 붙인다.
+    쿼리는 FastAPI가 이미 해석해 둔 request.query_params를 쓴다 (별도 해석 모듈 불필요)."""
+    path = request.url.path
+    if request.method != "GET" or not path.startswith("/static/") or response.status_code not in (200, 304):
+        return
+    if path[len("/static/"):] not in VERSIONED_ASSETS:
+        return
+    if request.query_params.get("v") != ASSET_VERSION:
+        return
+    response.headers["Cache-Control"] = IMMUTABLE_CACHE
 
 
 def _versioned(text: str) -> str:
@@ -199,15 +269,16 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/healthz")
-def healthz():
-    """의존성까지 확인하는 상태 점검 (업타임 모니터·배포 후 확인용).
+def _cron_authorized(request: Request) -> bool:
+    """크론 전용 주소 확인. 값을 복사할 때 딸려 온 앞뒤 공백·줄바꿈과 'bearer' 대소문자는 무시하고,
+    비교는 걸리는 시간으로 값을 추측할 수 없게 compare_digest로 한다."""
+    secret = CRON_SECRET.strip()
+    scheme, _, token = request.headers.get("authorization", "").strip().partition(" ")
+    # compare_digest는 한글 같은 비ASCII 글자가 든 문자열을 받으면 TypeError로 터진다 → 바이트로 바꿔 비교 (2026-10-09 500의 원인)
+    return bool(secret) and scheme.lower() == "bearer" and hmac.compare_digest(token.strip().encode(), secret.encode())
 
-    /api/health는 프로세스가 떠 있는지만 본다(항상 200). /healthz는 사용자 DB(Turso/로컬)와
-    미술 DB(data/art.db)에 실제로 쿼리를 보내, 하나라도 실패하면 503을 돌려준다.
-    AI는 호출마다 비용이 들고 외부 장애가 곧 우리 장애는 아니므로 확인하지 않는다.
-    오류 상세(접속 주소·경로)는 응답에 넣지 않고 로그에만 남긴다.
-    """
+
+def _dependency_checks() -> dict:
     checks = {}
     for name, probe, errors in (("db", lambda: db.execute("SELECT 1 AS ok"), db.DbError),
                                 ("art_db", art.ping, sqlite3.Error)):
@@ -218,6 +289,19 @@ def healthz():
         except errors as e:
             log.error("healthz_check_failed check=%s detail=%s", name, e)
             checks[name] = {"status": "error"}
+    return checks
+
+
+@app.get("/healthz")
+def healthz():
+    """의존성까지 확인하는 상태 점검 (업타임 모니터·배포 후 확인용).
+
+    /api/health는 프로세스가 떠 있는지만 본다(항상 200). /healthz는 사용자 DB(Turso/로컬)와
+    미술 DB(data/art.db)에 실제로 쿼리를 보내, 하나라도 실패하면 503을 돌려준다.
+    AI는 호출마다 비용이 들고 외부 장애가 곧 우리 장애는 아니므로 확인하지 않는다.
+    오류 상세(접속 주소·경로)는 응답에 넣지 않고 로그에만 남긴다.
+    """
+    checks = _dependency_checks()
     healthy = all(c["status"] == "ok" for c in checks.values())
     return JSONResponse({"status": "ok" if healthy else "degraded", "checks": checks},
                         status_code=200 if healthy else 503, headers={"Cache-Control": "no-store"})
@@ -226,17 +310,38 @@ def healthz():
 @app.get("/api/guardian/daily-digest")
 def guardian_daily_digest(request: Request):
     """가디언의 일일 점검 (Vercel Cron 전용, CRON_SECRET으로 보호)."""
-    if not CRON_SECRET or request.headers.get("authorization") != f"Bearer {CRON_SECRET}":
+    if not _cron_authorized(request):
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
     return guardian.run_daily_digest()
 
 
-@app.post("/api/guardian/scan")
+@app.api_route("/api/guardian/scan", methods=["GET", "POST"])
 def guardian_scan(request: Request):
-    """실시간 감시 보조: 요청이 없을 때도 5분마다 최근 사건을 훑는다 (.github/workflows/monitor.yml, CRON_SECRET 필요)."""
-    if not CRON_SECRET or request.headers.get("authorization") != f"Bearer {CRON_SECRET}":
+    """1분 실시간 점검 (cron-job.org가 1분마다 GET, monitor.yml이 POST — CRON_SECRET 필요).
+    DB·작품 DB·챗봇 AI가 실제로 답하는지 확인하고 가디언 점검(접속 감시·부하·사건)을 돌린다.
+    하나라도 고장이면 503 — 바깥 점검 서비스가 실패로 보고 알림을 보낸다."""
+    if not _cron_authorized(request):
         raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
-    return guardian.scan()
+    try:
+        checks = _dependency_checks()
+        result = guardian.scan()
+        healthy = (all(c["status"] == "ok" for c in checks.values()) and result["ai"].get("status") == "ok"
+                   and not result["failed_steps"])
+        body = json.loads(json.dumps({"status": "ok" if healthy else "degraded", "checks": checks, **result},
+                                     default=str))   # 응답으로 못 바꾸는 값이 섞여도 500이 나지 않게
+    except Exception as e:  # noqa: BLE001 — 원인 모를 500 대신 위치를 남기고 503 (2026-10-09)
+        failure = guardian.report_scan_failure("scan", e)
+        return JSONResponse({"status": "degraded", "failed_steps": ["scan"], "scan": failure},
+                            status_code=503, headers={"Cache-Control": "no-store"})
+    return JSONResponse(body, status_code=200 if healthy else 503, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/guardian/summary")
+def guardian_summary(request: Request):
+    """품질 점검용 운영 요약 (.github/workflows/quality-review.yml, CRON_SECRET 필요)."""
+    if not _cron_authorized(request):
+        raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
+    return guardian.summary()
 
 
 @app.post("/api/auth/signup")
@@ -639,7 +744,7 @@ def aic_image(image_id: str, w: int = 400, download: int = 0, request: Request =
         return error(400, "INVALID_IMAGE", "지원하지 않는 이미지 요청입니다.")
     req = urllib.request.Request(f"{AIC_IIIF}/{image_id}/full/{w},/0/default.jpg", headers={"AIC-User-Agent": AIC_UA, "User-Agent": "AITOOLLEARN-7-1/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
             body = resp.read()
     except urllib.error.HTTPError as e:
         log.warning("image_proxy_failure image_id=%s status=%s", image_id, e.code)

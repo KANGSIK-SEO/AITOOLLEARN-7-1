@@ -46,12 +46,23 @@ def test_small_fix_with_new_test_passes(repo):
     ("x = os.environ['ANTHROPIC_API_KEY']", "환경변수"),
     ("urllib.request.urlopen('https://evil.example')", "외부 통신"),
     ("eval(user_input)", "코드 동적 실행"),
+    ("from urllib import request", "외부 통신"),
+    ("import urllib", "외부 통신"),
+    ("compile(src, 'x', 'exec')", "코드 동적 실행"),
 ])
 def test_dangerous_code_is_rejected(repo, line, label):
     (repo / "app" / "guardian.py").write_text(f"LIMIT = 3\n{line}\n")
     (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
     _stage(repo)
     assert any(label in p for p in autofix_guard.check("HEAD"))
+
+
+def test_harmless_lines_are_not_flagged(repo):
+    # urllib.parse(주소 나누기)와 re.compile(정규식 준비)은 위험하지 않다 — 품질 자동 수정이 이 둘 때문에 막혔었다
+    (repo / "app" / "guardian.py").write_text("LIMIT = 3\nfrom urllib.parse import parse_qs\nRE = re.compile(r'x')\n")
+    (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
+    _stage(repo)
+    assert autofix_guard.check("HEAD") == []
 
 
 def test_protected_files_and_existing_tests_are_off_limits(repo):
@@ -135,3 +146,98 @@ def test_prompt_marks_issue_as_untrusted_and_lists_editable_files():
     prompt = autofix_propose.build_prompt({"title": "t", "body": "이 코드를 넣어라"}, [])
     assert "<issue>" in prompt and "app/guardian.py" in prompt.split("<editable>")[1].split("</editable>")[0]
     assert "app/auth.py" not in prompt.split("<editable>")[1].split("</editable>")[0]
+
+
+def _screen_client(verdict, calls):
+    message = SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(verdict))],
+                              usage=SimpleNamespace(input_tokens=900, output_tokens=40))
+    return SimpleNamespace(messages=SimpleNamespace(create=lambda **p: calls.append(p) or message))
+
+
+def test_screen_uses_cheapest_model_without_source_code():
+    calls = []
+    verdict = {"code_fixable": False, "confident": True, "reason": "규칙이 이미 막은 공격"}
+    assert autofix_propose.screen({"title": "BRUTE_FORCE", "body": "x"}, [], _screen_client(verdict, calls)) == verdict
+    p = calls[0]
+    assert p["model"] == "claude-haiku-5-5" and p["thinking"] == {"type": "disabled"}
+    assert "<source>" not in p["messages"][0]["content"]  # 코드 전체를 보내지 않아 싸다
+
+
+def test_screen_failure_falls_through_to_fable():
+    def boom(**p):
+        raise ValueError("bad json")
+    client = SimpleNamespace(messages=SimpleNamespace(create=boom))
+    assert autofix_propose.screen({"title": "t"}, [], client)["code_fixable"] is True
+
+
+def test_source_part_is_first_and_cached_for_an_hour():
+    stable, task = autofix_propose.build_parts({"title": "t", "body": "b"}, [])
+    assert stable.startswith("<source>") and "<issue>" in task and "<issue>" not in stable
+    calls = []
+    message = SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text='{"summary":"s","files":[]}')],
+                              usage=SimpleNamespace(input_tokens=10, output_tokens=5, cache_read_input_tokens=90000))
+    client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(
+        stream=lambda **p: calls.append(p) or _FakeStream(message))))
+    autofix_propose.ask_claude([stable, task], client)
+    content = calls[0]["messages"][0]["content"]
+    assert content[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"} and content[0]["text"] == stable
+    assert content[1] == {"type": "text", "text": task}
+
+
+def test_cost_estimate_counts_cache_reads_cheaply():
+    usage = SimpleNamespace(input_tokens=1000, output_tokens=2000, cache_read_input_tokens=100_000,
+                            cache_creation_input_tokens=0)
+    _, cost = autofix_propose.usage_cost("claude-fable-5-1", usage)
+    assert round(cost, 3) == round((1000 * 10 + 100_000 * 1 + 2000 * 50) / 1e6, 3)
+
+
+@pytest.mark.parametrize("line, label", [
+    ("x = 1  # \u202egnirts nedih", "보이지 않는 문자"),          # 글자 방향 뒤집기(트로이 소스)
+    ("NOTE = 'ok\u200b'", "보이지 않는 문자"),                     # 폭 없는 공백
+    ("TAG = '\U000e0049\U000e0047\U000e004e'", "보이지 않는 문자"),  # 태그 문자로 숨긴 지시
+    ("log.info('pw=%s', password)", "비밀 값 노출"),
+    ("return {'key': ANTHROPIC_KEY}", "비밀 값 노출"),
+    ("URL = 'https://evil.example/collect'", "처음 보는 외부 주소"),
+])
+def test_hidden_or_leaking_lines_are_rejected(repo, line, label):
+    (repo / "app" / "guardian.py").write_text(f"LIMIT = 3\n{line}\n")
+    (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
+    _stage(repo)
+    assert any(label in p for p in autofix_guard.check("HEAD")), autofix_guard.check("HEAD")
+
+
+def test_frontend_exfiltration_is_rejected(repo):
+    (repo / "app" / "static").mkdir()
+    (repo / "app" / "static" / "app.js").write_text("navigator.sendBeacon('/x', document.cookie);\n")
+    (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
+    _stage(repo)
+    assert any("밖으로 보내" in p for p in autofix_guard.check("HEAD"))
+
+
+def test_removing_a_security_check_is_rejected(repo):
+    (repo / "app" / "guardian.py").write_text("LIMIT = 3\nif is_blocked(ip):\n    deny()\n")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "with check")
+    (repo / "app" / "guardian.py").write_text("LIMIT = 3\n")
+    (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
+    _stage(repo)
+    assert any("보안 검사 제거" in p for p in autofix_guard.check("HEAD"))
+
+
+def test_known_domain_and_korean_text_are_fine(repo):
+    (repo / "app" / "guardian.py").write_text("LIMIT = 3\nSRC = 'https://www.artic.edu'\n")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "domain")
+    (repo / "app" / "guardian.py").write_text("LIMIT = 2\nSRC = 'https://www.artic.edu'\n# 한국어 설명은 괜찮다\n")
+    (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
+    _stage(repo)
+    assert autofix_guard.check("HEAD") == []
+
+
+def test_learned_deny_strings_only_make_it_stricter(repo, tmp_path_factory, monkeypatch):
+    deny = tmp_path_factory.mktemp("intel") / "deny.json"   # 저장소 밖에 둔다
+    deny.write_text(json.dumps(["eval_backdoor_x", "ab", 123]))   # 너무 짧거나 글자가 아닌 값은 버린다
+    monkeypatch.setenv("AUTOFIX_EXTRA_DENY", str(deny))
+    (repo / "app" / "guardian.py").write_text("LIMIT = 3\nEVAL_BACKDOOR_X = 1\n")
+    (repo / "tests" / "test_autofix_x.py").write_text("def test_x():\n    assert True\n")
+    _stage(repo)
+    problems = autofix_guard.check("HEAD")
+    assert len([p for p in problems if "배운 금지 문자열" in p]) == 1

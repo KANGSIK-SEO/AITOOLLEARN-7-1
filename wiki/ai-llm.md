@@ -9,7 +9,7 @@ updated: 2026-10-08
 
 | 상황 | 쓰는 순서 |
 |---|---|
-| `ANTHROPIC_API_KEY` 있음 | Claude `claude-fable-5-1` → (크레딧 소진·한도·인증·통신 문제) **Upstage `solar-pro4`** → (solar 키 없으면) OpenAI `gpt-6-astra` |
+| `ANTHROPIC_API_KEY` 있음 | Claude `claude-haiku-5-5`(가장 저렴, 자동 코드 수정만 Fable) → (크레딧 소진·한도·인증·통신 문제) **Upstage `solar-pro4`** → (solar 키 없으면) OpenAI `gpt-6-astra` |
 | Claude 키 없음 | OpenAI `gpt-6-astra` → (**429/401/403**, 한도 소진·키 문제) Upstage `solar-pro4` |
 
 Anthropic은 크레딧을 다 쓰면 429가 아니라 400("credit balance is too low")을 준다. 이것도 소진으로 보고 solar로 넘긴다 (`claude_llm._credit_exhausted`).
@@ -30,9 +30,12 @@ solar-pro4는 2026-10 기준 무료지만 **2027-04-01부터 유료 전환** 공
 
 ## 시간 제한과 재시도 (`app/llm.py`)
 
-- 한 번 요청 최대 **20초** (`LLM_TIMEOUT_SECONDS`)
-- 재시도·폴백을 모두 합쳐 **25초** 안에서만 시도 (`LLM_CALL_BUDGET_SECONDS`)
-- 5xx·연결 오류는 같은 곳에 **1번** 더 보낸다 (`LLM_MAX_RETRIES`). 시간 초과는 다시 보내지 않는다 — 이미 20초를 기다렸으니까.
+- **사용량 절감**: effort `low` + 검색 조건·접속 감시는 생각 끔, 긴 지시문 캐시, 같은 질문 검색 조건 하루 기억, 접속 감시는 규칙으로 먼저 거름, 자동 수정은 Haiku 사전 확인 + 코드 1시간 캐시. 목적별 토큰은 `ai_usage` 표 → `/api/guardian/summary` → 매일 품질 점검.
+- **모든 타임아웃은 25초** (`TIMEOUT_SECONDS`): AI(Claude·GPT·solar), Turso, 이미지, 인터넷 아카이브, GitHub 모두 같다.
+- **요청 하나도 25초가 상한**: 미들웨어가 요청마다 마감 시각을 걸고(`reqctx.start_deadline`), AI를 두 번 불러도 남은 시간만큼만 기다린다. 남은 시간이 2초 미만이면 새로 부르지 않는다.
+- 넘으면 오류 코드 `AI_TIMEOUT`(DB는 `BUSY`)과 **"죄송합니다. 접속자가 많습니다. 잠시 후 다시 시도해 주세요."** 화면도 30초 동안 아무 응답이 없으면 같은 안내를 띄운다(Vercel 504 포함).
+- 5xx·연결 오류는 GPT·solar에서만 같은 곳에 **1번** 더 보낸다 (`LLM_MAX_RETRIES`). Claude SDK 자체 재시도는 껐다(시간이 두 배가 되므로) — 대신 다른 AI로 넘어간다. 시간 초과는 다시 보내지 않는다.
+- 응답을 보낸 뒤의 일(가디언 진단, 접속 기록)은 사용자가 기다리지 않으므로 요청 마감에 묶지 않는다 (각 호출 25초 상한은 그대로).
 
 ## 두 번의 호출 (`app/chat.py`)
 
