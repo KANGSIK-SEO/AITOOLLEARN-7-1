@@ -95,8 +95,17 @@ def test_usage_is_recorded_per_purpose(fake_claude, monkeypatch):
     monkeypatch.setattr("app.guardian.save_ai_usage", lambda rows: saved.extend(rows))
     fake_claude.response.usage = SimpleNamespace(input_tokens=120, output_tokens=30,
                                                   cache_read_input_tokens=100, cache_creation_input_tokens=0)
+    llm.chat_completion([{"role": "user", "content": "q"}], purpose="probe")
+    assert saved == [("probe", "claude-haiku-5-5", 120, 30, 100, 0)]
+
+
+def test_traffic_watch_uses_fable_unless_switched_back(fake_claude, monkeypatch):
+    monkeypatch.delenv("WATCH_MODEL", raising=False)
     llm.chat_completion([{"role": "user", "content": "q"}], purpose="watch")
-    assert saved == [("watch", "claude-haiku-5-5", 120, 30, 100, 0)]
+    assert fake_claude.calls[0]["model"] == "claude-fable-5-1" and "thinking" not in fake_claude.calls[0]
+    monkeypatch.setenv("WATCH_MODEL", "claude-haiku-5-5")   # 비용이 크면 Vercel 환경변수 하나로 되돌린다
+    llm.chat_completion([{"role": "user", "content": "q"}], purpose="watch")
+    assert fake_claude.calls[1]["model"] == "claude-haiku-5-5"
 
 
 def test_fable_gets_low_effort_with_server_fallback(fake_claude, monkeypatch):
