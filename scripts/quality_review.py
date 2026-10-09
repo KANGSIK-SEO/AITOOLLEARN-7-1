@@ -6,7 +6,7 @@
 
 판정:
 - ok: 이미 잘 되어 있음
-- fix: 고칠 수 있는 파일(app/*.py, app/static/*.js|css|html) 안에서 코드로 고칠 수 있음 → 워크플로가 [품질] 이슈를 열고
+- fix: 고칠 수 있는 파일(app/*.py, app/routers/*.py, app/static/*.js|css|html) 안에서 코드로 고칠 수 있음 → 워크플로가 [품질] 이슈를 열고
   자동 수정(Claude Fable)을 부른다. 수정 PR은 주인이 승인해야 배포된다.
 - manual: 사람이 해야 함(Vercel 설정·플랜, 비밀 값, 보호 파일, 발표용 설명) → 보고서에만 남긴다.
 용량 판정이 upgrade면 워크플로가 [용량] 이슈를 연다 (Vercel 플랜 결제는 사람이 한다).
@@ -29,7 +29,7 @@ from autofix_guard import PROTECTED  # noqa: E402
 
 DEFAULT_MODEL = "claude-haiku-5-5"
 DEFAULT_SITE = "https://art-chatbot-eight.vercel.app"
-CONTEXT_FILES = ("app/*.py", "app/static/*.js", "app/static/*.html", "app/static/*.css", "app/static/*.json",
+CONTEXT_FILES = ("app/*.py", "app/routers/*.py", "app/static/*.js", "app/static/*.html", "app/static/*.css", "app/static/*.json",
                  "vercel.json", "db/schema.sql", "requirements.txt", "README.md", "docs/llm-eval.md")
 SKIP_FILES = {"app/static/artworks.json"}  # 작품 데이터 2MB — 코드가 아니다
 PROBE_PATHS = ("/", "/static/app.js", "/static/style.css", "/sw.js", "/static/manifest.json", "/healthz")

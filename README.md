@@ -36,7 +36,11 @@
 ## 2. 시스템 구조
 
 **한눈에 보기** (팀원 전원 필독 — 본인 담당 파일은 깊게, 나머지는 이 정도만 알면 충분합니다)
-- `app/main.py` — **교통정리.** 모든 URL 경로(로그인/챗/내 로그)가 여기 모임. 요청 검증·로그·오류 응답 담당.
+- `app/main.py` — **조립.** 앱을 만들고 보안 헤더·요청 감시(request_id·가디언) 미들웨어를 건 뒤 목적별 라우터를 붙인다.
+- `app/routers/` — **창구.** 목적별 API: `auth`(가입·로그인) · `chat`(챗봇) · `logs`(내 대화 로그) · `favorites` · `artworks`(더 보기·이미지) · `records`(권리 근거 기록) · `explain` · `health` · `ops`(운영 점검) · `pages`(화면).
+- `app/deps.py` — **출입증 검사.** 로그인 필수/선택, 크론 전용 검사를 FastAPI `Depends`로 재사용한다.
+- `app/schemas.py` — **양식.** 요청/응답 모양(Pydantic). `app/errors.py` — 모든 오류를 `{"error": {"code", "message"}}` 한 모양으로.
+- `app/repository.py` — **창고 관리.** users·chats·favorites SQL을 모아 라우터에서 SQL을 뺐다.
 - `app/auth.py` — **문지기.** 비밀번호 해시(scrypt)와 로그인 쿠키(HMAC 서명) 검증. 초대코드(프리미엄) 여부도 이 쿠키에 담긴다. 서버에 세션을 저장하지 않음.
 - `app/chat.py` — **지휘자.** "질문 → 검색조건 추출 → 검색 → 답변 생성" 파이프라인을 순서대로 지휘.
 - `app/art.py` — **검색엔진.** `data/art.db`에서 SQLite FTS5로 작품을 찾음. AI 호출 없이 순수 DB 검색. 상위 2개(`GUARANTEED_TOP`)는 관련도순 고정, 나머지는 후보 풀에서 무작위로 섞어 같은 질문이라도 항상 똑같은 작품만 나오지 않게 한다.
@@ -48,17 +52,44 @@
 
 ```
 브라우저 ─ /static (HTML/JS) ─┐
-                              ├─ FastAPI (app/main.py, Vercel Function)
-  POST /api/chat ─────────────┘    ├─ 인증: scrypt 해시 + HMAC 서명 쿠키 (app/auth.py, is_premium 포함)
+                              ├─ FastAPI (app/main.py, Vercel Function) — 미들웨어: request_id·가디언 감시·보안 헤더
+  POST /api/chat ─────────────┘    ├─ 라우터 app/routers/chat.py ← Depends(current_session) (app/deps.py, 비로그인 401)
+                                   ├─ 인증: scrypt 해시 + HMAC 서명 쿠키 (app/auth.py, is_premium 포함)
                                    ├─ chat.extract_intent → gpt-6-astra (검색 조건 JSON)
                                    ├─ art.search → data/art.db (읽기 전용 SQLite + FTS5)
                                    ├─ chat.compose_answer → gpt-6-astra (근거 기반 한국어 답변)
                                    ├─ guardian: 실패 시 즉시 기록·대응 (잠금/백오프/차단)
-                                   └─ db.execute → Turso(SQLite 호환): users, chats, incidents
+                                   └─ repository.save_chat → db.execute → Turso(SQLite 호환): users, chats, incidents
+```
+
+```
+app/
+├─ main.py            앱 조립 (미들웨어·오류 처리기·라우터 연결)
+├─ routers/           API 계층 — 요청을 받고 검증해 서비스·리포지토리를 부른다
+│  ├─ auth.py         POST /api/auth/signup·login·logout, GET /api/me
+│  ├─ chat.py         POST /api/chat, /api/chat/stream
+│  ├─ logs.py         GET /api/me/chats
+│  ├─ favorites.py    POST·DELETE /api/favorites, GET /api/me/favorites
+│  ├─ artworks.py     GET /api/artworks, /api/img/aic/{id}
+│  ├─ records.py      /api/records…, /records/{number}
+│  ├─ explain.py      /api/explain, /explain/{token}
+│  ├─ health.py       /api/health, /healthz
+│  ├─ ops.py          /api/guardian/* (CRON_SECRET)
+│  └─ pages.py        /, /sw.js (캐시 무효화)
+├─ deps.py            인증 의존성 (current_session·current_user·optional_session·require_cron)
+├─ schemas.py         요청/응답 스키마
+├─ errors.py          공통 오류 응답·예외 처리기
+├─ repository.py      사용자 DB 접근 (users·chats·favorites)
+├─ db.py              DB 접속 (Turso/로컬 SQLite, 타임아웃)
+└─ chat.py · art.py · llm.py · claude_llm.py · guardian.py · records.py · rights.py   서비스 계층
 ```
 | 컴포넌트 | 역할 |
 |---|---|
-| `app/main.py` | 라우팅, 입력 검증, 로그, 오류 응답 |
+| `app/main.py` | 앱 조립: 미들웨어(request_id·가디언·보안 헤더), 라우터 연결 |
+| `app/routers/*` | 목적별 API (auth·chat·logs·favorites·artworks·records·explain·health·ops·pages), 입력 검증 |
+| `app/deps.py` | 인증 의존성 — 로그인 필수/선택, 크론 전용 |
+| `app/schemas.py` · `app/errors.py` | 요청/응답 스키마, 공통 오류 응답 |
+| `app/repository.py` | users·chats·favorites SQL (라우터와 DB 분리) |
 | `app/chat.py` | 질문 → 검색 의도 → DB 검색 → 답변 생성 파이프라인 |
 | `app/llm.py` | OpenAI gpt-6-astra 호출(서버 전용, 타임아웃 설정) + solar-pro4 비상 폴백 |
 | `app/config.py` | 사용 모델(gpt-6-astra)·키 이름·초대코드/요금제 상한 등 설정 |
@@ -77,7 +108,9 @@
 - Oxford Semantic Technologies(RDFox)가 갤럭시 기기에 Datalog 추론 엔진을 온디바이스로 넣은 것과 같은 설계 철학: 클라우드로 보내지 않고 기기에서 바로 추론한다.
 
 ## 3. API 명세
-오류는 항상 `{"error": {"code": "...", "message": "..."}}`.
+오류는 항상 `{"error": {"code": "...", "message": "..."}}` (`app/errors.py`).
+서버를 켜고 `http://localhost:8000/docs`를 열면 요청/응답 스키마(`app/schemas.py`)가 담긴 자동 API 문서를 볼 수 있다.
+경로는 자원 이름(명사) + 메서드로 정했다: 만들기 `POST`, 조회 `GET`, 지우기 `DELETE`, 내 자원은 `/api/me/...`.
 인증: 웹은 로그인 시 발급되는 `session` 쿠키(HttpOnly)로, TV 앱 등 다른 오리진 클라이언트는 응답의 `token`을
 `Authorization: Bearer <token>` 헤더로 보낸다. 둘 다 있으면 쿠키가 우선한다. 토큰 유효기간은 7일.
 
@@ -170,13 +203,68 @@
 로그인 화면이 아니라 **회원가입** 화면에만 있다(`app/static/index.html`).
 
 ## 4. DB 구조
+
+```mermaid
+erDiagram
+    artworks {
+        int id PK "작품 번호"
+        text source UK "met · aic · cma"
+        text source_id UK "미술관의 작품 번호"
+        text title
+        text artist
+        text image_url
+        int is_public_domain
+    }
+    artworks_fts {
+        int rowid PK "= artworks.id"
+        text title "검색 색인"
+        text artist "검색 색인"
+    }
+    users {
+        int id PK
+        text email UK
+        text password_hash
+        int is_premium
+        text created_at
+    }
+    chats {
+        int id PK
+        int user_id FK "누가"
+        text question "무엇을 물었고"
+        text answer "무엇을 답했나 (실패 시 NULL)"
+        text status "ok | error"
+        text error_code
+        int latency_ms
+        text artwork_ids "JSON 배열, 코드만"
+        text created_at "언제"
+    }
+    favorites {
+        int id PK
+        int user_id FK "UQ(user_id, artwork_id)"
+        int artwork_id "코드만"
+        text created_at
+    }
+    rights_records {
+        text number PK "PD-XXXX-XXXX-XXXX"
+        int artwork_id "코드만"
+        int user_id "코드만, 비어도 됨"
+    }
+    artworks ||--|| artworks_fts : "트리거로 동기화"
+    users ||--o{ chats : "FK 선언"
+    users ||--o{ favorites : "FK 선언"
+    users |o..o{ rights_records : "코드만"
+    artworks ||..o{ favorites : "코드만 (다른 파일)"
+    artworks ||..o{ rights_records : "코드만 (다른 파일)"
+    artworks }o..o{ chats : "코드만 (JSON)"
+```
+실선은 DB에 외래 키(FK)로 선언된 관계, 점선은 작품 DB가 다른 파일(`data/art.db`)이라 코드에서만 잇는 관계다.
+
 - `data/art.db` (읽기 전용, 레포에 포함): `artworks`(source, source_id, title, artist, date_display, medium, subjects, image_url, source_url, license, is_public_domain …) + `artworks_fts`(FTS5). 스키마: `db/schema.sql`
 - Turso/SQLite (쓰기): 
   - `users(id, email UNIQUE, password_hash, is_premium, created_at)`
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
-  - `favorites(id, user_id → users.id, artwork_id(art.db artworks.id), created_at, UNIQUE(user_id, artwork_id))`
+  - `favorites(id, user_id → users.id, artwork_id(art.db artworks.id), created_at, UNIQUE(user_id, artwork_id))` — 즐겨찾기
   - `incidents(id, category[reliability|security], code, message, context(JSON), severity, auto_action, diagnosis, created_at)` — 가디언 사건 로그. `diagnosis`는 일일 배치 분석 전까지 NULL.
-  - `favorites(user_id → users.id, artwork_id → art.db artworks.id, created_at)` — 즐겨찾기 (PK: user_id+artwork_id)
   - `rights_records(number PK, artwork_id, user_id, snapshot(JSON), archives(JSON), signature, issued_at)` — 권리 근거 기록 (발급 시점 그대로)
   - `runtime_flags(key, value, updated_at)` — AI 백오프·로그인 잠금 등 자동 대응 상태값 (예: `ai_backoff_until`, `lockout:<email>`)
   - `rate_counters(bucket, count, window_start)` — IP/이메일 단위 레이트리밋 카운터
@@ -192,9 +280,17 @@ cd scripts && python3 collect_aic.py && python3 collect_met.py
 결과 묶음의 비율 필터(전체/가로형/세로형)로 거른다. "PPT·배너·배경화면"이 들어간 질문은 AI가
 `orientation: landscape`를 뽑아 가로형 필터가 자동으로 켜진다.
 
+**대화 로그를 왜 저장하는가**
+- **사용자**: 지난 질문·답변을 다시 본다 (왼쪽 대화 기록 사이드바 ← `GET /api/me/chats`), 최근 5개는 다음 답변의 문맥이 된다.
+- **운영(추적)**: 실패한 질문도 `status='error'`, `error_code`(예: `AI_TIMEOUT`), `latency_ms`로 남는다. 서버 로그의 같은 `request_id`로 "요청 → AI 호출 → DB 저장" 중 어디서 끊겼는지 찾는다.
+- **비용 보호**: 사용자별 시간당·평생 질문 수를 `chats`에서 세어 한도를 건다 (`app/routers/chat.py`).
+- **개선**: 쌓인 질문으로 검색 조건 추출·답변 품질을 평가한다 (`scripts/eval_llm.py`, `docs/llm-eval.md`).
+
 **DB 확인 가이드** (택 1 이상)
 1. 로그 조회 API: `curl -b cookies.txt https://<서비스>/api/me/chats`
 2. 확인용 SQL: `scripts/check_logs.sql` (`turso db shell <db-name> < scripts/check_logs.sql`)
+   - 로컬 실행(Turso 값 없음)이면 DB 파일은 `data/app.db`: `sqlite3 data/app.db < scripts/check_logs.sql`
+     (sqlite3가 없으면 `python -c "import sqlite3; print(sqlite3.connect('data/app.db').execute('SELECT user_id, created_at, question, status FROM chats ORDER BY id DESC LIMIT 10').fetchall())"`)
 3. 서버 로그: `request_received`, `ai_call_start`, `ai_call_success|ai_call_failure`, `db_save_success|db_save_failure` 이벤트를 stdout(Vercel Logs)에 남긴다. 모든 줄 끝에 `request_id`가 붙는다. 한 요청 안의 단계별 소요시간은 `chat_stage stage=intent|search|answer request_id=… latency_ms=… ok=…`로 따로 남는다(`app/chat.py`). 전체 이벤트 목록: [`docs/logging.md`](docs/logging.md)
 
 ## 5. 실행·배포
@@ -244,7 +340,7 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 `python3 scripts/eval_llm.py`로 질문 20개 평가 세트를 돌려 의도 추출 정확도·근거성(환각)·규칙 준수율을 잰다.
 
 **캐시 무효화**: 서버가 화면 파일 내용으로 버전을 만들어 `index.html`의 정적 파일 주소(`?v=버전`)와
-서비스워커 캐시 이름에 붙인다. 배포로 파일이 바뀌면 버전이 바뀌어 옛 캐시를 자동으로 버린다 (`app/main.py`).
+서비스워커 캐시 이름에 붙인다. 배포로 파일이 바뀌면 버전이 바뀌어 옛 캐시를 자동으로 버린다 (`app/routers/pages.py`).
 
 **자동 배포 (GitHub Actions)**
 - `.github/workflows/deploy.yml`: **`main`에 PR이 합쳐질 때마다** Vercel 프로덕션 배포를 한다. 배포된 코드 = `main` (feature → `develop` → `main`).
@@ -285,7 +381,8 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:8000/api/guardian/
 **AI 도구 사용**: Claude Code(커밋 작성자 `Claude`)를 함께 사용했다. 서강식의 지시·검토 아래
 develop 병합·충돌 해결(PR #51), 권리 판단 규칙·권리 근거 기록(`app/rights.py`, `app/records.py`, `docs/rights-policy.md`),
 작품 수집 확장(클리블랜드 미술관, GitHub Actions 수집), 용도 기준 추천, 캐시 무효화, LLM 평가(`scripts/eval_llm.py`),
-GitHub Actions 배포를 구현했다. 모든 변경은 PR로 리뷰 후 병합한다.
+GitHub Actions 배포를 구현했다. FastAPI 계층 분리(`app/routers/`, `app/deps.py`, `app/schemas.py`, `app/errors.py`,
+`app/repository.py`로 `app/main.py`를 나눔, 동작 변경 없음)도 같은 방식으로 했다. 모든 변경은 PR로 리뷰 후 병합한다.
 
 ## 8. 민감정보 관리
 - 모든 키는 환경 변수로만 사용하고 `.env`는 `.gitignore`로 제외한다. 예시는 `.env.example`.

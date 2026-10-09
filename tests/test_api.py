@@ -10,7 +10,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-test-secret-key-1234")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import db, llm  # noqa: E402
-from app import main as main_module  # noqa: E402
+from app.routers import chat as chat_router  # noqa: E402
 from app.config import AIUnavailableError  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -120,8 +120,8 @@ def test_users_cannot_see_others_logs(client, monkeypatch):
 
 def test_signup_with_valid_premium_code_raises_rate_limit(client, monkeypatch):
     monkeypatch.setenv("PREMIUM_CODE", "vip-2026")
-    monkeypatch.setattr(main_module, "CHAT_LIMIT_PER_HOUR", 1)
-    monkeypatch.setattr(main_module, "CHAT_LIMIT_PER_HOUR_PREMIUM", 2)
+    monkeypatch.setattr(chat_router, "CHAT_LIMIT_PER_HOUR", 1)
+    monkeypatch.setattr(chat_router, "CHAT_LIMIT_PER_HOUR_PREMIUM", 2)
     monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
 
     r = client.post("/api/auth/signup",
@@ -149,7 +149,7 @@ def test_signup_without_premium_code_is_regular_when_code_unset(client, monkeypa
 
 
 def test_free_limit_blocks_after_lifetime_quota(client, monkeypatch):
-    monkeypatch.setattr(main_module, "CHAT_LIFETIME_LIMIT_FREE", 2)
+    monkeypatch.setattr(chat_router, "CHAT_LIFETIME_LIMIT_FREE", 2)
     monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
     signup(client)
     assert client.post("/api/chat", json={"message": "1"}).status_code == 200
@@ -160,7 +160,7 @@ def test_free_limit_blocks_after_lifetime_quota(client, monkeypatch):
 
 def test_premium_user_is_exempt_from_free_limit(client, monkeypatch):
     monkeypatch.setenv("PREMIUM_CODE", "vip-2026")
-    monkeypatch.setattr(main_module, "CHAT_LIFETIME_LIMIT_FREE", 1)
+    monkeypatch.setattr(chat_router, "CHAT_LIFETIME_LIMIT_FREE", 1)
     monkeypatch.setattr(llm, "chat_completion", fake_llm([]))
     client.post("/api/auth/signup",
                 json={"email": "vip3@x.com", "password": "password123", "private_code": "vip-2026"})
@@ -216,7 +216,7 @@ def test_image_proxy_validates_and_sends_aic_header(client, monkeypatch):
         seen["url"], seen["hdr"] = req.full_url, dict(req.header_items())
         return FakeResp()
 
-    monkeypatch.setattr("app.main.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("app.routers.artworks.urllib.request.urlopen", fake_urlopen)
     ok = client.get("/api/img/aic/bda9058b-5be6-37d0-e5a6-926584540757?w=400")
     assert ok.status_code == 200 and ok.headers["content-type"] == "image/jpeg"
     assert "immutable" in ok.headers["cache-control"]
@@ -359,7 +359,7 @@ def test_rate_limit_429_at_default_30_per_hour(client, monkeypatch):
     calls = []
     monkeypatch.setattr(llm, "chat_completion", fake_llm(calls))
     uid = signup(client).json()["user"]["id"]
-    assert main_module.CHAT_LIMIT_PER_HOUR == 30
+    assert chat_router.CHAT_LIMIT_PER_HOUR == 30
     _insert_chats(uid, 29, minutes_ago=10)
     assert client.post("/api/chat", json={"message": "30번째"}).status_code == 200  # 30번째까지는 허용
 

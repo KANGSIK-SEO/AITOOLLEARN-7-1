@@ -101,7 +101,7 @@ def test_turso_timeout_shows_busy(monkeypatch):
         assert r.json()["error"] == {"code": "BUSY", "message": config.BUSY_MESSAGE}
     else:  # /api/me가 DB 없이 끝나면, 예외 처리기를 직접 확인한다
         import asyncio
-        from app.main import db_exc
+        from app.errors import db_exc
         resp = asyncio.run(db_exc(None, db.DbTimeout("x")))
         assert resp.status_code == 503 and b"BUSY" in resp.body
 

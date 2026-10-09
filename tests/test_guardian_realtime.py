@@ -316,8 +316,8 @@ def test_ai_probe_failure_alerts_once_as_outage(issues, monkeypatch):
 
 
 def test_scan_endpoint_get_reports_503_when_ai_is_down(issues, monkeypatch):
-    from app import main
-    monkeypatch.setattr(main, "CRON_SECRET", "s3cret")
+    from app import deps
+    monkeypatch.setattr(deps, "CRON_SECRET", "s3cret")
     client = TestClient(app)
     headers = {"Authorization": "Bearer s3cret"}
     r = client.get("/api/guardian/scan", headers=headers)
@@ -333,20 +333,20 @@ def test_scan_endpoint_get_reports_503_when_ai_is_down(issues, monkeypatch):
 
 
 def test_cron_secret_tolerates_copied_whitespace_but_not_wrong_values(issues, monkeypatch):
-    from app import main
-    monkeypatch.setattr(main, "CRON_SECRET", "s3cret\n")   # Vercel에 값을 넣을 때 줄바꿈이 딸려 온 경우
+    from app import deps
+    monkeypatch.setattr(deps, "CRON_SECRET", "s3cret\n")   # Vercel에 값을 넣을 때 줄바꿈이 딸려 온 경우
     client = TestClient(app)
     assert client.get("/api/guardian/scan", headers={"Authorization": "Bearer s3cret "}).status_code in (200, 503)
     assert client.get("/api/guardian/scan", headers={"Authorization": "bearer s3cret"}).status_code in (200, 503)
     assert client.get("/api/guardian/scan", headers={"Authorization": "Bearer wrong"}).status_code == 401
     assert client.get("/api/guardian/scan", headers={"Authorization": "s3cret"}).status_code == 401
-    monkeypatch.setattr(main, "CRON_SECRET", "  ")
+    monkeypatch.setattr(deps, "CRON_SECRET", "  ")
     assert client.get("/api/guardian/scan", headers={"Authorization": "Bearer "}).status_code == 401
 
 
 def test_one_broken_scan_step_does_not_crash_the_whole_check(issues, monkeypatch):
-    from app import main
-    monkeypatch.setattr(main, "CRON_SECRET", "s3cret")
+    from app import deps
+    monkeypatch.setattr(deps, "CRON_SECRET", "s3cret")
 
     def broken():
         raise KeyError("status sk-ant-abcdefghijklmnop")
@@ -364,8 +364,8 @@ def test_one_broken_scan_step_does_not_crash_the_whole_check(issues, monkeypatch
 
 def test_scan_runs_traffic_watch_after_the_response(issues, monkeypatch):
     """Fable 판단은 수십 초 걸릴 수 있어 1분 점검 응답(25초 제한) 뒤에 돈다. 실패해도 위치와 함께 보고한다."""
-    from app import main
-    monkeypatch.setattr(main, "CRON_SECRET", "s3cret")
+    from app import deps
+    monkeypatch.setattr(deps, "CRON_SECRET", "s3cret")
     ran = []
     monkeypatch.setattr(guardian, "watch_traffic", lambda: ran.append(1) or {"watched": 0})
     r = TestClient(app).get("/api/guardian/scan", headers={"Authorization": "Bearer s3cret"})
@@ -379,12 +379,13 @@ def test_scan_runs_traffic_watch_after_the_response(issues, monkeypatch):
 
 
 def test_scan_route_failure_outside_steps_is_reported_not_500(issues, monkeypatch):
-    from app import main
-    monkeypatch.setattr(main, "CRON_SECRET", "s3cret")
+    from app import deps
+    from app.routers import health
+    monkeypatch.setattr(deps, "CRON_SECRET", "s3cret")
 
     def boom():
         raise TypeError("unexpected")
-    monkeypatch.setattr(main, "_dependency_checks", boom)
+    monkeypatch.setattr(health, "dependency_checks", boom)
     r = TestClient(app).get("/api/guardian/scan", headers={"Authorization": "Bearer s3cret"})
     assert r.status_code == 503 and r.json()["failed_steps"] == ["scan"]
     alert = [i for i in issues if "'scan' 단계 오류" in i[0]]
@@ -392,10 +393,10 @@ def test_scan_route_failure_outside_steps_is_reported_not_500(issues, monkeypatc
 
 
 def test_non_ascii_cron_header_is_401_not_500(issues, monkeypatch):
-    from app import main
-    monkeypatch.setattr(main, "CRON_SECRET", "s3cret")
+    from app import deps
+    monkeypatch.setattr(deps, "CRON_SECRET", "s3cret")
     client = TestClient(app)
     # 설정 안내의 예시 글자를 그대로 넣은 경우 — 예전에는 compare_digest가 TypeError를 내 500이 났다
     assert client.get("/api/guardian/scan", headers={"Authorization": "Bearer 여기에CRON_SECRET값".encode()}).status_code == 401
-    monkeypatch.setattr(main, "CRON_SECRET", "비밀값")
+    monkeypatch.setattr(deps, "CRON_SECRET", "비밀값")
     assert client.get("/api/guardian/scan", headers={"Authorization": "Bearer wrong"}).status_code == 401

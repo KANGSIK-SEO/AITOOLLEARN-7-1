@@ -34,8 +34,8 @@ SCREEN_MODEL = "claude-haiku-5-5"
 PRICE_PER_MTOK = {"claude-fable-5-1": (10.0, 50.0), "claude-opus-5-5": (4.0, 20.0),
                   "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-5-5": (0.10, 0.50)}
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
-EDITABLE_RE = re.compile(r"^app/[a-z_]+\.py$|^app/static/[a-z_]+\.(js|css|html)$")
-CONTEXT_GLOBS = ("app/*.py", "app/static/*.js", "app/static/*.html", "app/static/*.css", "db/schema.sql")
+EDITABLE_RE = re.compile(r"^app/(routers/)?[a-z_]+\.py$|^app/static/[a-z_]+\.(js|css|html)$")
+CONTEXT_GLOBS = ("app/*.py", "app/routers/*.py", "app/static/*.js", "app/static/*.html", "app/static/*.css", "db/schema.sql")
 MAX_ISSUE_CHARS = 20_000
 LESSON_KEYS = ("date", "issue", "problem", "outcome", "reason", "files")
 

@@ -1,6 +1,6 @@
 """무료 질문 횟수 제한(평생 한도)과 남은 횟수 안내 테스트.
 
-한도 판정은 app/main.py의 chat_endpoint에서 하고, "초대코드(프리미엄) 계정인가"는 app/auth.py가
+한도 판정은 app/routers/chat.py의 _chat_context에서 하고, "초대코드(프리미엄) 계정인가"는 app/auth.py가
 서명한 세션 토큰의 premium 값으로 정해진다. 그래서 토큰 위조·구버전 토큰도 함께 확인한다.
 """
 import base64
@@ -17,7 +17,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-test-secret-key-1234")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import auth, db, llm  # noqa: E402
-from app import main as main_module  # noqa: E402
+from app.routers import chat as chat_router  # noqa: E402
 from app.config import AIUnavailableError  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -29,8 +29,8 @@ WARN_AT = 2    # 남은 횟수가 이 값 이하이면 안내
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_DB_PATH", str(tmp_path / "app.db"))
     monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
-    monkeypatch.setattr(main_module, "CHAT_LIFETIME_LIMIT_FREE", FREE)
-    monkeypatch.setattr(main_module, "FREE_LIMIT_WARNING_THRESHOLD", WARN_AT)
+    monkeypatch.setattr(chat_router, "CHAT_LIFETIME_LIMIT_FREE", FREE)
+    monkeypatch.setattr(chat_router, "FREE_LIMIT_WARNING_THRESHOLD", WARN_AT)
     db.reset_for_tests()
     return TestClient(app)
 

@@ -16,7 +16,7 @@ from pathlib import Path
 
 # AI가 고칠 수 없는 파일: 비밀 키·인증·DB 접속·배포 경로·검사 규칙 자신
 PROTECTED = (
-    ".github/", "app/auth.py", "app/config.py", "app/db.py", "app/llm.py", "app/claude_llm.py",
+    ".github/", "app/auth.py", "app/deps.py", "app/config.py", "app/db.py", "app/llm.py", "app/claude_llm.py",
     "requirements", "vercel.json", "index.py", "Dockerfile", "deploy/", ".env", "data/",
     "scripts/autofix_", "scripts/quality_", "scripts/security_", "docs/review-checklist.md", "docs/security-",
     "CONTRIBUTING.md", "SECURITY.md",
