@@ -1,0 +1,33 @@
+# 방문자 통계 — 앱을 연 날부터 날짜별 가입자·질문한 사람·질문 수를 운영 서버에서 읽어 이 실행 화면(Summary)에 표로 보여 준다.
+# 이메일·질문 내용은 보이지 않고 숫자만. 접속 IP 수는 최근 2일치만 남아 있다(그 전 기록은 지워짐).
+# 필요: Repository secret CRON_SECRET (monitor.yml과 같은 값). Actions 탭 → visitors → Run workflow로 실행.
+name: visitors
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SITE_URL: ${{ vars.SITE_URL || 'https://art-chatbot-eight.vercel.app' }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+    steps:
+      - name: 방문자 통계 읽기
+        run: |
+          code=$(curl -sS -m 30 -o stats.json -w '%{http_code}' \
+            -H "Authorization: Bearer $CRON_SECRET" "$SITE_URL/api/guardian/visitors" || echo 000)
+          if [ "$code" != 200 ]; then echo "::error::방문자 통계를 읽지 못했습니다 (HTTP $code)"; exit 1; fi
+          jq -r '"전체: 가입자 \(.totals.users)명 · 질문한 사람 \(.totals.chat_users)명 · 질문 \(.totals.chats)건 · 즐겨찾기 \(.totals.favorites)건 · 첫 가입 \(.totals.first_signup // "-")"' stats.json
+          {
+            echo "## 방문자 통계 (앱을 연 날부터)"
+            jq -r '"가입자 **\(.totals.users)**명 · 질문한 사람 **\(.totals.chat_users)**명 · 질문 **\(.totals.chats)**건 · 즐겨찾기 \(.totals.favorites)건"' stats.json
+            echo
+            echo "| 날짜 | 새 가입 | 질문한 사람 | 질문 | 실패 | 접속 IP | 요청 |"
+            echo "|---|---:|---:|---:|---:|---:|---:|"
+            jq -r '.daily[] | "| \(.day) | \(.signups // 0) | \(.chat_users // 0) | \(.chats // 0) | \(.chat_errors // 0) | \(.ips // "-") | \(.requests // "-") |"' stats.json
+          } | tee -a "$GITHUB_STEP_SUMMARY"

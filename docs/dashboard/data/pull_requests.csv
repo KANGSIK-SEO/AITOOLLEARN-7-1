@@ -1,0 +1,90 @@
+number,title,author,state,base,created,merged,person
+178,방문자 통계: 앱을 연 날부터 날짜별 가입자·질문 수 보기,KANGSIK-SEO,open,develop,2026-10-09,,서강식
+177,release: 1분 접속 감시를 Fable이 판단,KANGSIK-SEO,merged,main,2026-10-09,2026-10-09,서강식
+176,feat: 1분 접속 감시를 Fable이 판단,KANGSIK-SEO,merged,develop,2026-10-09,2026-10-09,서강식
+175,release: 1분 감시 monitor.yml 이어 달리기,KANGSIK-SEO,merged,main,2026-10-09,2026-10-09,서강식
+174,feat: 1분 감시를 cron-job.org 없이 monitor.yml 이어 달리기로,KANGSIK-SEO,merged,develop,2026-10-09,2026-10-09,서강식
+173,release: Scorecard 기본 브랜치 실행 + upload-artifact 6,KANGSIK-SEO,merged,main,2026-10-09,2026-10-09,서강식
+172,fix: Scorecard를 기본 브랜치(develop)에서 실행,KANGSIK-SEO,merged,develop,2026-10-09,2026-10-09,서강식
+171,release: OpenSSF Scorecard v2.4.4,KANGSIK-SEO,merged,main,2026-10-09,2026-10-09,서강식
+170,fix: OpenSSF Scorecard v2.4.4,KANGSIK-SEO,merged,develop,2026-10-09,2026-10-09,서강식
+169,release: 프론트엔드 전면 개편(유영민) + 의존성 업데이트,KANGSIK-SEO,merged,main,2026-10-09,2026-10-09,서강식
+166,build(deps): Bump ossf/scorecard-action from 2.4.0 to 2.4.4,dependabot[bot],closed,develop,2026-10-09,,자동화 봇
+167,build(deps): Bump actions/upload-artifact from 4 to 6,dependabot[bot],merged,develop,2026-10-09,2026-10-09,자동화 봇
+165,build(deps): Bump actions/cache from 4 to 6,dependabot[bot],merged,develop,2026-10-09,2026-10-09,자동화 봇
+164,build(deps): Bump actions/checkout from 4 to 7,dependabot[bot],merged,develop,2026-10-09,2026-10-09,자동화 봇
+163,build(deps): Bump actions/download-artifact from 4 to 7,dependabot[bot],merged,develop,2026-10-09,2026-10-09,자동화 봇
+162,release: 보안 점수·인증 준비,KANGSIK-SEO,merged,main,2026-10-09,2026-10-09,서강식
+161,"feat: 보안 점수·인증 준비 (보안 헤더·CSP, CodeQL, Scorecard, Dependabot, SECURITY.md)",KANGSIK-SEO,merged,develop,2026-10-09,2026-10-09,서강식
+160,fix: 설치 색·오프라인 화면을 새 디자인 톤으로 맞추고 위키 함수명 정정,maebsy,merged,feature/ui-redesign,2026-10-09,2026-10-09,유영민
+158,release: 크론 비밀값에 한글이 섞이면 500이 나던 문제,KANGSIK-SEO,merged,main,2026-10-09,2026-10-09,서강식
+157,fix: 크론 비밀값에 한글이 섞이면 500이 나던 문제,KANGSIK-SEO,merged,develop,2026-10-09,2026-10-09,서강식
+150,release: 1분 점검 주소 전체를 감싸 500 대신 오류 위치 보고,KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+149,fix: 1분 점검 주소 전체를 감싸 500 대신 오류 위치 보고,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+143,release: 1분 점검 단계별 격리·오류 위치 보고 + 자동 수정 중복 방지,KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+142,fix: 1분 점검 단계별 격리·오류 위치 보고 + 자동 수정 중복 방지,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+141,[자동 수정] [가디언] 실시간 경보 — SERVER_ERROR — 긴급도 high (2건),github-actions[bot],closed,main,2026-10-08,,자동화 봇
+140,[자동 수정] [가디언] 실시간 경보 — SERVER_ERROR — 긴급도 medium (2건),github-actions[bot],closed,main,2026-10-08,,자동화 봇
+138,[자동 수정] [가디언] 실시간 경보 — SERVER_ERROR — 긴급도 medium (1건),github-actions[bot],closed,main,2026-10-08,,자동화 봇
+132,release: 크론 비밀값 비교에서 복사된 공백·줄바꿈 무시,KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+131,fix: 크론 비밀값 비교에서 복사된 공백·줄바꿈 무시,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+130,release: 바깥 1분 점검(cron-job.org)용 scan + 챗봇 AI 답변 확인,KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+129,feat: 바깥 1분 점검(cron-job.org)용 scan + 챗봇 AI 답변 확인,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+128,[자동 수정] [품질] 정적 파일 캐시 헤더 미흡,github-actions[bot],closed,main,2026-10-08,,자동화 봇
+125,release: Claude 사용량 절감 + 해커 숨은 지시 방어 + 보안 동향 학습,KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+124,feat: Claude 사용량 절감 + 해커 숨은 지시 방어 + 매시간 보안 동향 학습,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+123,chore: 자동 수정 반영 (main → develop),github-actions[bot],merged,develop,2026-10-08,2026-10-08,자동화 봇
+122,release: 자동 수정 안전 검사 오탐 수정 (re.compile),KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+121,fix: 자동 수정 안전 검사가 re.compile을 코드 실행으로 오인,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+120,[자동 수정] [품질] 정적 파일 캐시 헤더 없음,github-actions[bot],merged,main,2026-10-08,2026-10-08,자동화 봇
+119,release: 자동 수정 안전 검사 오탐 수정,KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+118,fix: 자동 수정 안전 검사가 urllib.parse를 외부 통신으로 오인,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+117,release: 모든 타임아웃 25초 통일 + '접속자가 많습니다' 안내,KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+116,feat: 모든 타임아웃 25초 통일 + '접속자가 많습니다' 안내,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+111,release: 매일 품질 자동 점검 + 서버 용량 경보,KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+110,feat: 매일 품질 자동 점검 + 서버 용량 경보,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+109,release: 기본 모델 Haiku + 1분마다 AI 접속 기록 감시,KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+108,feat: 기본 모델 Haiku + 1분마다 AI 접속 기록 감시,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+107,feat: 프론트엔드 전면 개편 — 갤러리 톤 디자인 · 대화 기록 · 다시 시도 · 스트리밍 대응,maebsy,merged,develop,2026-10-08,2026-10-09,유영민
+104,release: 1분 간격 감시 + 승인 후 즉시 자동 수정,KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+103,feat: 1분 간격 감시 + 승인 후 즉시 자동 수정,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+102,release: Claude 소진 시 solar-pro4 대체 + 자동 수정 설정값 수정,KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+101,feat: Claude 소진 시 solar-pro4가 이어받기 + 테스트 이슈 오발송·자동 수정 설정값 수정,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+58,feat: Claude Fable·스트리밍·가디언 실시간 감시·자동 학습·승인형 자동 수정,KANGSIK-SEO,merged,develop,2026-10-08,2026-10-08,서강식
+57,release: 레이트리밋 원자화 + Claude Fable·스트리밍·가디언 실시간 감시·승인형 자동 수정,KANGSIK-SEO,merged,main,2026-10-08,2026-10-08,서강식
+56,release: 프로젝트 LLM 위키,KANGSIK-SEO,merged,main,2026-10-07,2026-10-07,서강식
+55,docs: 프로젝트 LLM 위키 추가 (wiki/),KANGSIK-SEO,merged,develop,2026-10-07,2026-10-07,서강식
+54,release: 로그인·채팅 속도 개선,KANGSIK-SEO,merged,main,2026-10-07,2026-10-07,서강식
+53,perf: Turso DB 왕복 묶기 (로그인·채팅 대기 단축),KANGSIK-SEO,merged,develop,2026-10-07,2026-10-07,서강식
+52,release: develop → main (첫 정식 배포),KANGSIK-SEO,merged,main,2026-10-07,2026-10-07,서강식
+51,feat: 권리 근거 기록·용도 기준 추천·작품 7.8만 점 + 요구사항·캐시·LLM 평가 보강,KANGSIK-SEO,merged,develop,2026-10-07,2026-10-07,서강식
+40,feat: SEO 및 공유 미리보기 메타데이터 보강,maebsy,merged,develop,2026-10-06,2026-10-07,유영민
+39,refactor: 상태 메시지 공통 컴포넌트로 리팩터링,maebsy,merged,develop,2026-10-06,2026-10-07,유영민
+38,feat: 채팅 메시지 타임스탬프 표시 추가,maebsy,merged,develop,2026-10-06,2026-10-07,유영민
+37,refactor: 설명 페이지 공통 스타일 적용,maebsy,merged,develop,2026-10-06,2026-10-07,유영민
+36,feat: PWA 오프라인 캐싱 전략 개선,maebsy,merged,develop,2026-10-06,2026-10-07,유영민
+35,feat: 온디바이스 패널 전환 애니메이션 추가,maebsy,merged,develop,2026-10-06,2026-10-07,유영민
+34,fix: 작은 화면 채팅 레이아웃 개선,maebsy,merged,develop,2026-10-06,2026-10-07,유영민
+33,feat: AI 응답 대기 인디케이터 추가,maebsy,merged,develop,2026-10-06,2026-10-07,유영민
+32,feat: 시스템 색상 테마 지원 추가,maebsy,merged,develop,2026-10-06,2026-10-07,유영민
+31,feat: 채팅 UI 스크린리더 접근성 개선,maebsy,merged,develop,2026-10-06,2026-10-07,유영민
+30,docs: README API 응답 예시를 현재 실제 응답에 맞게 최신화,chul5,merged,develop,2026-10-06,2026-10-06,오철호
+29,fix: 설명 에이전트 오류를 사용자가 다음에 할 일을 알 수 있는 메시지로 변경,chul5,merged,develop,2026-10-06,2026-10-06,오철호
+28,feat: 의존성까지 확인하는 /healthz 상태 점검 엔드포인트 추가,chul5,merged,develop,2026-10-06,2026-10-06,오철호
+27,feat: 챗봇 요청 로그에 단계별 소요시간을 request_id와 함께 기록,chul5,merged,develop,2026-10-06,2026-10-06,오철호
+26,fix: FTS5 검색에 비정상 검색어가 들어와도 예외 없이 처리,chul5,merged,develop,2026-10-06,2026-10-06,오철호
+25,test: 무료 질문 횟수 제한과 프리미엄 판정 토큰 테스트 보강,chul5,merged,develop,2026-10-06,2026-10-06,오철호
+24,test: 가디언 장애·위협 감지 로직 단위 테스트 추가,chul5,merged,develop,2026-10-06,2026-10-06,오철호
+23,feat: AI 호출에 일시 장애 재시도와 전체 시간 예산 추가,chul5,merged,develop,2026-10-06,2026-10-06,오철호
+22,feat: DB 쿼리 실행시간 측정과 느린 쿼리 로깅,chul5,merged,develop,2026-10-06,2026-10-06,오철호
+21,feat: 필수 환경변수 누락·형식 오류를 서버 시작 시 명확한 메시지로 알림,chul5,merged,develop,2026-10-06,2026-10-06,오철호
+20,"test: 의도 파싱·검색·한도·DB 오류 테스트 보강, 로그 request_id 일관화",chul5,merged,develop,2026-10-06,2026-10-06,오철호
+19,feat: 로그인 사용자의 작품 즐겨찾기 API 추가,chul5,merged,develop,2026-10-03,2026-10-06,오철호
+18,docs: README에 시스템 구조 요약과 팀 구성 반영,KANGSIK-SEO,merged,develop,2026-09-29,2026-09-29,서강식
+7,docs: PR 머지 방식을 merge commit으로 고정,KANGSIK-SEO,merged,develop,2026-09-29,2026-09-29,서강식
+6,docs: 서비스명 확정 - 저작권 걱정 없는 퍼블릭 도메인 명화 찾기 챗봇,KANGSIK-SEO,merged,develop,2026-09-29,2026-09-29,서강식
+5,docs: 팀원용 기여 가이드,KANGSIK-SEO,merged,develop,2026-09-28,2026-09-28,서강식
+4,fix: AIC 이미지 403 해결 — 서버 이미지 프록시,KANGSIK-SEO,merged,develop,2026-09-28,2026-09-28,서강식
+3,feat: Ubuntu 24.04 Dockerfile·배포 환경과 리눅스 실행 절차,KANGSIK-SEO,merged,develop,2026-09-28,2026-09-28,서강식
+2,feat: FastAPI 챗봇 (로그인·명화 검색·solar-pro3·대화 로그),KANGSIK-SEO,merged,develop,2026-09-28,2026-09-28,서강식
+1,"feat: 미술 DB 스키마·수집기, solar-pro3 모델 정책",KANGSIK-SEO,merged,develop,2026-09-28,2026-09-28,서강식
