@@ -3,6 +3,8 @@
 시간 순서로 맨 아래에 붙인다. 형식: `## [YYYY-MM-DD] 작업 | 내용` (작업 = ingest / query / lint)
 `grep "^## \[" wiki/log.md | tail -5` 로 최근 작업을 볼 수 있다.
 
+## [2026-10-09] ingest | 1분 감시를 cron-job.org 대신 monitor.yml 이어 달리기(5시간 50분 실행 + 자기 재실행)로, 비밀값 불일치 알림 — guardian 갱신
+
 ## [2026-10-09] ingest | 보안 헤더·CSP(화면 안 스크립트 제거), SECURITY.md, Dependabot, CodeQL, OpenSSF Scorecard, 인증 준비 문서 — guardian 참고
 
 ## [2026-10-07] ingest | 위키 첫 생성 — 코드·문서·PR 기록(#1~#54) 전체를 읽고 19개 페이지 작성
