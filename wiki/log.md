@@ -12,3 +12,4 @@
 ## [2026-10-08] ingest | Claude 소진 시 solar-pro4가 바로 이어받도록 변경 — ai-llm 갱신
 ## [2026-10-08] ingest | 고객 오류 첫 발생 즉시 진단, 자동 수정 제한을 문제별 6시간·하루 8번으로 — guardian 갱신
 ## [2026-10-09] ingest | 프론트엔드 개편 반영 — frontend.md 다시 작성(화면 구성·코드 구조·다국어·테마), search.md 비율 필터 설명 수정
+## [2026-10-09] ingest | 설치 색·오프라인 화면을 새 디자인 톤으로 맞춤, request-flow의 함수명 정정(receiveStream) — frontend·request-flow 갱신
