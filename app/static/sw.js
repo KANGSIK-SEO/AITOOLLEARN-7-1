@@ -10,6 +10,7 @@ const SHELL = [
   '/static/style.css',
   '/static/app.js',
   '/static/ondevice.js',
+  '/static/boot.js',
   '/static/manifest.json',
   '/static/icons/icon-192.png',
   '/static/icons/icon-512.png',

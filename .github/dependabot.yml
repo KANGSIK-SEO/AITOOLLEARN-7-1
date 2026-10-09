@@ -1,0 +1,13 @@
+# 의존성 자동 점검: 라이브러리·GitHub Actions에 새 버전(보안 패치 포함)이 나오면 매주 PR을 연다.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

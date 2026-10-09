@@ -8,6 +8,12 @@
 > **프로젝트 위키**: 기능·구조·결정 이유를 쉬운 말로 정리한 LLM 위키는 [`wiki/index.md`](wiki/index.md).
 > 코드가 바뀌면 [`wiki/AGENTS.md`](wiki/AGENTS.md) 규칙대로 위키도 고치고 `python3 scripts/wiki_lint.py`로 점검한다.
 
+
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/KANGSIK-SEO/AITOOLLEARN-7-1/badge)](https://scorecard.dev/viewer/?uri=github.com/KANGSIK-SEO/AITOOLLEARN-7-1)
+[![CodeQL](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/actions/workflows/codeql.yml/badge.svg)](https://github.com/KANGSIK-SEO/AITOOLLEARN-7-1/actions/workflows/codeql.yml)
+[![Mozilla Observatory](https://img.shields.io/badge/Mozilla%20Observatory-%ED%99%95%EC%9D%B8-blue)](https://developer.mozilla.org/en-US/observatory/analyze?host=art-chatbot-eight.vercel.app)
+— 보안 점수·인증 준비: [`docs/security-certification.md`](docs/security-certification.md), 취약점 신고: [`SECURITY.md`](SECURITY.md)
+
 ## 1. 프로젝트 개요
 - **문제**: PPT·블로그·굿즈·썸네일 제작자는 "저작권 걱정 없는 명화"를 찾을 때 라이선스를 일일이 확인해야 한다.
   범용 챗봇은 라이선스·원본 이미지 링크를 보증하지 못한다.

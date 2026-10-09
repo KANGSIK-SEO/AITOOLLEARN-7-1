@@ -267,7 +267,10 @@ def test_slow_archive_stays_pending_then_completes_on_check(client, monkeypatch)
     assert r.status_code == 200 and r.json()["archived"] is False
     number = r.json()["number"]
     body = client.get(f"/records/{number}").text
-    assert "보관 진행 중" in body and "다시 보관하기" not in body and "setTimeout(poll" in body
+    assert "보관 진행 중" in body and "다시 보관하기" not in body and 'data-pending="true"' in body
+    # 자동 확인 스크립트는 보안 정책(CSP) 때문에 페이지 밖 파일에 있다
+    assert '<script src="/static/record.js">' in body and "<script>" not in body
+    assert "setTimeout(poll" in (Path(__file__).resolve().parent.parent / "app/static/record.js").read_text()
 
     requested = []
     monkeypatch.setattr(records, "request_save", lambda url: requested.append(url) or {})
