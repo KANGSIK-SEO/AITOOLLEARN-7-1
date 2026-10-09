@@ -1,6 +1,6 @@
 ---
 title: 화면 (웹·PWA·온디바이스·캐시)
-sources: [app/static/index.html, app/static/app.js, app/static/style.css, app/static/sw.js, app/static/ondevice.js, app/static/icons/favicon.svg, app/main.py]
+sources: [app/static/index.html, app/static/app.js, app/static/style.css, app/static/sw.js, app/static/manifest.json, app/static/offline.html, app/static/ondevice.js, app/static/icons/favicon.svg, app/main.py]
 updated: 2026-10-09
 ---
 # 화면
@@ -49,6 +49,7 @@ HTML은 `data-i18n` 속성으로, 동적으로 그린 글자는 `bindText()`로 
 ## 앱으로 설치 (PWA)
 
 `manifest.json` + 서비스워커(`sw.js`)로 휴대폰 홈 화면에 앱처럼 설치할 수 있다. 인터넷이 끊기면 `offline.html`을 보여준다.
+설치 아이콘·오프라인 화면의 색은 메인 화면과 같은 종이색·테라코타 톤이다 (`manifest.json`은 밝은 값만 적을 수 있어 밝은 색을 쓰고, `offline.html`은 `style.css`를 못 받을 때를 대비해 색을 직접 적되 다크 모드를 따른다).
 `/api/*`는 서비스워커가 건드리지 않는다 (로그인·대화는 항상 최신이어야 하니까).
 
 ## 캐시 무효화
