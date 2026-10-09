@@ -317,7 +317,7 @@ def guardian_daily_digest(request: Request):
 
 @app.api_route("/api/guardian/scan", methods=["GET", "POST"])
 def guardian_scan(request: Request):
-    """1분 실시간 점검 (cron-job.org가 1분마다 GET, monitor.yml이 POST — CRON_SECRET 필요).
+    """1분 실시간 점검 (monitor.yml이 1분마다 POST, 외부 점검 서비스는 GET — CRON_SECRET 필요).
     DB·작품 DB·챗봇 AI가 실제로 답하는지 확인하고 가디언 점검(접속 감시·부하·사건)을 돌린다.
     하나라도 고장이면 503 — 바깥 점검 서비스가 실패로 보고 알림을 보낸다."""
     if not _cron_authorized(request):

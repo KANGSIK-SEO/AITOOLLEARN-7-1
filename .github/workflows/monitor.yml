@@ -1,79 +1,96 @@
 # 실시간 감시의 바깥 눈: 1분마다 운영 사이트를 확인한다 (서버가 통째로 죽으면 서버 안의 가디언은 알릴 수 없다).
-# GitHub 예약 실행은 최소 5분 간격이라, 5분마다 한 번 시작해 그 안에서 1분 간격으로 5번 확인한다.
-# 매 확인마다:
-# 1) /healthz가 (10초 간격으로) 두 번 연속 실패하면 'outage' 이슈를 열고 자동 수정(autofix.yml)을 바로 부른다.
-#    자동 수정은 수정 PR을 만들어 저장소 주인에게 승인 요청 알림을 보낸다 — 승인해야만 배포된다.
-#    회복되면 이슈를 닫는다.
-# 2) CRON_SECRET 시크릿이 있으면 /api/guardian/scan을 불러, 요청이 없을 때도 최근 사건을 훑게 한다.
-# 공개 저장소라 GitHub Actions 실행 시간은 무료다. 예약 실행은 GitHub 사정으로 몇 분 늦을 수 있다.
+#
+# 왜 이렇게 도나: GitHub 예약 실행(cron)은 몇 시간씩 밀리거나 건너뛴다(2026-10-08 실제로 3시간 반에 1번).
+# 그래서 한 번 시작하면 약 5시간 50분 동안 '안에서' 1분마다 확인하고, 끝나기 직전에 자기 자신을 다시 실행해
+# 끊김 없이 이어 간다. 매시간 예약 실행은 이어 달리기가 끊겼을 때 다시 살리는 보조 장치다.
+# (공개 저장소라 GitHub Actions 실행 시간은 무료. 외부 서비스·추가 가입 없음)
+#
+# 1분마다:
+# 1) /healthz가 (10초 간격으로) 두 번 연속 실패하면 'outage' 이슈를 열고 자동 수정(autofix.yml)을 부른다.
+#    수정 PR은 저장소 주인이 승인해야만 배포된다. 회복되면 이슈를 닫는다.
+# 2) CRON_SECRET이 있으면 /api/guardian/scan을 불러 서버 안 점검(챗봇 AI 답변 확인·접속 감시·부하·사건)을 돌린다.
+#    비밀값이 Vercel과 달라 401이 계속되면 '[감시] 비밀값 불일치' 이슈를 한 번 연다.
 name: monitor
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "7 * * * *"   # 매시간 — 이어 달리기가 끊겼을 때만 실제로 새로 시작한다 (아래 concurrency)
   workflow_dispatch:
 
 permissions:
   issues: write
-  actions: write   # 장애 이슈를 열면 가디언 자동 수정(autofix.yml)을 깨운다
+  actions: write   # 장애 이슈를 열면 자동 수정(autofix.yml)을 부르고, 끝날 때 자기 자신을 다시 실행한다
 
 concurrency:
   group: monitor
-  cancel-in-progress: false
+  cancel-in-progress: false   # 도는 중이면 새 실행은 기다리다가, 앞 실행이 끝나면 이어서 돈다
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 360   # GitHub가 허용하는 최대 실행 시간 (6시간)
     env:
       SITE_URL: ${{ vars.SITE_URL || 'https://art-chatbot-eight.vercel.app' }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      ROUNDS: 5          # 한 번 실행에서 확인하는 횟수 (5분 ÷ 1분)
+      RUN_MINUTES: 345   # 한 번 실행에서 감시하는 시간(분) — 6시간 제한 전에 다음 실행으로 넘긴다
       INTERVAL: 60       # 확인 간격(초)
     steps:
       - name: Check every minute
         run: |
           gh label create outage --color B60205 --description "운영 사이트 장애 (monitor.yml)" --force >/dev/null || true
-          failed=0
-          for round in $(seq 1 "$ROUNDS"); do
-            started=$(date +%s)
+          deadline=$(( $(date +%s) + RUN_MINUTES * 60 ))
+          unauthorized=0; secret_alerted=0; rounds=0; down=0
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            started=$(date +%s); rounds=$((rounds + 1))
             ok=false
             for attempt in 1 2; do
               code=$(curl -s -o body.json -w '%{http_code}' --max-time 20 "$SITE_URL/healthz" || echo 000)
-              echo "[$round/$ROUNDS] attempt $attempt: HTTP $code $(head -c 200 body.json 2>/dev/null)"
               if [ "$code" = "200" ]; then ok=true; break; fi
+              echo "$(date -u +%H:%M) healthz attempt $attempt: HTTP $code $(head -c 200 body.json 2>/dev/null)"
               sleep 10
             done
 
-            open=$(gh issue list --label outage --state open --json number --jq '.[0].number')
+            open=$(gh issue list --label outage --state open --json number,title \
+              --jq '[.[] | select(.title == "[감시] 운영 사이트 장애")][0].number // empty' || true)
             if [ "$ok" = "true" ]; then
               if [ -n "$open" ]; then
-                for n in $(gh issue list --label outage --state open --json number --jq '.[].number'); do
-                  gh issue close "$n" --comment "$(date -u '+%Y-%m-%d %H:%M UTC') 회복 확인 (/healthz 200)"
-                done
+                gh issue close "$open" --comment "$(date -u '+%Y-%m-%d %H:%M UTC') 회복 확인 (/healthz 200)" || true
               fi
               if [ -n "$CRON_SECRET" ]; then
-                curl -sS --max-time 40 -X POST -H "Authorization: Bearer $CRON_SECRET" "$SITE_URL/api/guardian/scan" \
-                  || echo "::warning::가디언 점검 호출 실패"
-                echo
+                scan=$(curl -s -o scan.json -w '%{http_code}' --max-time 40 -X POST \
+                  -H "Authorization: Bearer $CRON_SECRET" "$SITE_URL/api/guardian/scan" || echo 000)
+                [ "$scan" = "200" ] || echo "$(date -u +%H:%M) scan HTTP $scan $(head -c 300 scan.json 2>/dev/null)"
+                if [ "$scan" = "401" ]; then unauthorized=$((unauthorized + 1)); else unauthorized=0; fi
+                if [ "$unauthorized" -ge 3 ] && [ "$secret_alerted" = 0 ]; then
+                  secret_alerted=1
+                  if [ -z "$(gh issue list --state open --search 'in:title 비밀값 불일치' --json number --jq '.[0].number // empty')" ]; then
+                    gh issue create --title "[감시] 비밀값 불일치 — 1분 서버 점검이 막힘" --body \
+                      "GitHub의 CRON_SECRET과 Vercel의 CRON_SECRET이 달라 /api/guardian/scan이 401로 막힙니다 (사이트 생존 확인은 계속 됩니다).
+          두 곳에 같은 값을 넣고 Vercel은 Redeploy 하세요: Vercel → art-chatbot → Settings → Environment Variables, GitHub → Settings → Secrets and variables → Actions." || true
+                  fi
+                fi
               fi
             else
-              failed=1
+              down=$((down + 1))
               msg="$(date -u '+%Y-%m-%d %H:%M UTC') /healthz 응답 HTTP $code — 두 번 연속 실패"
               if [ -n "$open" ]; then
-                gh issue comment "$open" --body "$msg"
+                gh issue comment "$open" --body "$msg" || true
               else
                 url=$(gh issue create --label outage --title "[감시] 운영 사이트 장애" \
-                  --body "$msg. Vercel 대시보드의 Logs와 Deployments를 확인하세요. 회복되면 이 이슈는 자동으로 닫힙니다.")
+                  --body "$msg. Vercel 대시보드의 Logs와 Deployments를 확인하세요. 회복되면 이 이슈는 자동으로 닫힙니다." || true)
                 # 이 워크플로가 연 이슈는 다른 워크플로를 깨우지 않아서, 자동 수정은 직접 부른다
-                gh workflow run autofix.yml -f issue="${url##*/}" || echo "::warning::자동 수정 워크플로를 부르지 못했습니다."
+                [ -n "$url" ] && { gh workflow run autofix.yml -f issue="${url##*/}" || echo "::warning::자동 수정 워크플로를 부르지 못했습니다."; }
               fi
             fi
 
-            [ "$round" -lt "$ROUNDS" ] || break
             wait=$(( INTERVAL - ($(date +%s) - started) ))
             [ "$wait" -gt 0 ] && sleep "$wait"
           done
-          exit "$failed"
+          echo "확인 ${rounds}번 · 사이트 장애 ${down}번 · 마지막 점검 401 연속 ${unauthorized}번"
+          { echo "## 1분 감시 요약"; echo "- 확인 ${rounds}번, 사이트 장애 ${down}번"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Hand over to the next run
+        if: ${{ !cancelled() }}   # 사람이 취소하면 이어 달리지 않는다 (완전히 끄려면 Actions에서 monitor를 Disable)
+        run: gh workflow run monitor.yml --ref "$GITHUB_REF_NAME" || echo "::warning::다음 감시를 시작하지 못했습니다 — 매시간 예약 실행이 다시 살립니다."

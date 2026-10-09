@@ -675,7 +675,7 @@ def _recent_incident_counts() -> dict:
 
 
 def scan() -> dict:
-    """요청이 없어도 감시하도록 1분마다 밖에서 부른다 (cron-job.org·monitor.yml → /api/guardian/scan).
+    """요청이 없어도 감시하도록 1분마다 밖에서 부른다 (monitor.yml 1분 이어 달리기 → /api/guardian/scan, 외부 점검 서비스도 가능).
     챗봇 AI가 답하는지 확인하고(probe_ai), 새 접속 기록을 훑고(watch_traffic), 최근 5분 사건이 몰렸으면 즉시 진단한다.
     단계마다 따로 실행해, 한 단계가 실패하면 그 단계만 {"error": 오류 종류, "where": 파일:줄}로 표시한다."""
     result = {"ai": _scan_step("ai", probe_ai), "traffic": _scan_step("traffic", watch_traffic),
