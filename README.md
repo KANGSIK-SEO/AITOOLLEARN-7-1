@@ -170,6 +170,54 @@
 로그인 화면이 아니라 **회원가입** 화면에만 있다(`app/static/index.html`).
 
 ## 4. DB 구조
+
+```mermaid
+erDiagram
+    artworks {
+        int id PK "작품 번호"
+        text source UK "met · aic · cma"
+        text source_id UK "미술관의 작품 번호"
+        text title
+        text artist
+        text image_url
+        int is_public_domain
+    }
+    artworks_fts {
+        int rowid PK "= artworks.id"
+        text title "검색 색인"
+        text artist "검색 색인"
+    }
+    users {
+        int id PK
+        text email UK
+        text password_hash
+        int is_premium
+    }
+    chats {
+        int id PK
+        int user_id FK
+        text artwork_ids "JSON 배열, 코드만"
+        text status
+    }
+    favorites {
+        int id PK
+        int user_id FK "UQ(user_id, artwork_id)"
+        int artwork_id "코드만"
+    }
+    rights_records {
+        text number PK "PD-XXXX-XXXX-XXXX"
+        int artwork_id "코드만"
+        int user_id "코드만, 비어도 됨"
+    }
+    artworks ||--|| artworks_fts : "트리거로 동기화"
+    users ||--o{ chats : "FK 선언"
+    users ||--o{ favorites : "FK 선언"
+    users |o..o{ rights_records : "코드만"
+    artworks ||..o{ favorites : "코드만 (다른 파일)"
+    artworks ||..o{ rights_records : "코드만 (다른 파일)"
+    artworks }o..o{ chats : "코드만 (JSON)"
+```
+
 - `data/art.db` (읽기 전용, 레포에 포함): `artworks`(source, source_id, title, artist, date_display, medium, subjects, image_url, source_url, license, is_public_domain …) + `artworks_fts`(FTS5). 스키마: `db/schema.sql`
 - Turso/SQLite (쓰기): 
   - `users(id, email UNIQUE, password_hash, is_premium, created_at)`
