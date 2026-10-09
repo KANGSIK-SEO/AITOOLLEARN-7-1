@@ -346,6 +346,14 @@ def guardian_summary(request: Request):
     return guardian.summary()
 
 
+@app.get("/api/guardian/visitors")
+def guardian_visitors(request: Request):
+    """앱을 연 날부터의 방문자 숫자 (.github/workflows/visitors.yml, CRON_SECRET 필요)."""
+    if not _cron_authorized(request):
+        raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
+    return guardian.visitor_stats()
+
+
 @app.post("/api/auth/signup")
 def signup(body: Credentials, request: Request):
     ip = guardian.client_ip(request)

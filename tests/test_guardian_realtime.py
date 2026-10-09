@@ -278,6 +278,21 @@ def test_summary_endpoint_needs_secret_and_reports_latency(issues, monkeypatch):
     assert {"category": "reliability", "code": "AI_TIMEOUT", "n": 1} in s["incidents"]
 
 
+def test_visitor_stats_needs_secret_and_counts_by_day(issues):
+    client = TestClient(app)
+    assert client.get("/api/guardian/visitors").status_code == 401
+    uid = db.execute("INSERT INTO users (email, password_hash, created_at) VALUES ('v@x.com', 'h', "
+                     "'2026-10-01T09:00:00+00:00') RETURNING id")[0]["id"]
+    for status in ("ok", "ok", "error"):
+        db.execute("INSERT INTO chats (user_id, question, status, created_at) VALUES (?, 'q', ?, "
+                   "'2026-10-02T10:00:00+00:00')", (uid, status))
+    s = guardian.visitor_stats()
+    days = {d["day"]: d for d in s["daily"]}
+    assert days["2026-10-01"]["signups"] == 1
+    assert days["2026-10-02"] == {"day": "2026-10-02", "chat_users": 1, "chats": 3, "chat_errors": 1}
+    assert s["totals"]["users"] >= 1 and "v@x.com" not in str(s)
+
+
 def test_ai_probe_ok_then_reuses_result_within_a_minute(issues, monkeypatch):
     seen = []
     _verdict(monkeypatch, "ok", seen)

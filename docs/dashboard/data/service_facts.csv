@@ -1,0 +1,9 @@
+key,label,value,unit
+artworks,작품 수,78624,점
+public_domain,공개 저작물(CC0) 작품,78624,점
+endpoints,API 주소,19,개
+tests,자동 테스트,409,개
+app_tables,앱 DB 표,9,개
+workflows,GitHub 자동화,12,개
+timeout,응답 제한 시간,25,초
+monitor,실서비스 점검 주기,1,분

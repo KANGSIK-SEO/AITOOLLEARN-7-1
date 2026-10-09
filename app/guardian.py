@@ -605,6 +605,25 @@ def summary(hours: int = 24) -> dict:
             "api_ms": {"p50": pct(0.5), "p95": pct(0.95), "max": ms[-1] if ms else None}, "status": status}
 
 
+def visitor_stats() -> dict:
+    """앱을 연 날부터의 방문자 통계 (.github/workflows/visitors.yml, CRON_SECRET 필요). 이메일·질문 내용 없이 숫자만.
+    처음부터 남아 있는 기록은 가입(users)과 질문(chats)뿐이다. 접속 기록(access_log)은 2일만 남는다."""
+    daily: dict[str, dict] = {}
+    for r in db.execute("SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS n FROM users GROUP BY day"):
+        daily.setdefault(r["day"], {})["signups"] = r["n"]
+    for r in db.execute("SELECT substr(created_at, 1, 10) AS day, COUNT(DISTINCT user_id) AS users, COUNT(*) AS n, "
+                        "SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors FROM chats GROUP BY day"):
+        daily.setdefault(r["day"], {}).update(chat_users=r["users"], chats=r["n"], chat_errors=r["errors"])
+    for r in db.execute("SELECT substr(created_at, 1, 10) AS day, COUNT(DISTINCT ip) AS ips, COUNT(*) AS n "
+                        "FROM access_log GROUP BY day"):
+        daily.setdefault(r["day"], {}).update(ips=r["ips"], requests=r["n"])
+    totals = db.execute(
+        "SELECT (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(DISTINCT user_id) FROM chats) AS chat_users, "
+        "(SELECT COUNT(*) FROM chats) AS chats, (SELECT COUNT(*) FROM favorites) AS favorites, "
+        "(SELECT MIN(created_at) FROM users) AS first_signup")[0]
+    return {"totals": totals, "daily": [{"day": d, **daily[d]} for d in sorted(daily)]}
+
+
 # 챗봇 AI가 실제로 답하는지 1분에 한 번 짧게 물어본다 (손님이 없을 때 AI가 고장 나도 바로 알게)
 AI_PROBE_SECONDS = 55
 AI_PROBE_ALERT_MINUTES = 30
