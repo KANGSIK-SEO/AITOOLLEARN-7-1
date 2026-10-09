@@ -1,4 +1,5 @@
 """가디언 실시간 감시: 의심 행동이 쌓이면 IP를 바로 차단하고, 장애가 몰리면 즉시 분석·이슈를 낸다."""
+import json
 import os
 import sys
 from pathlib import Path
@@ -185,14 +186,28 @@ def test_ai_watch_reads_only_new_logs_and_blocks_after_two_flags(issues, monkeyp
     assert _codes().count("AI_SUSPICIOUS_TRAFFIC") == 2
 
 
-def test_ai_watch_skips_ai_when_rules_see_nothing(issues, monkeypatch):
+def test_ai_watch_judges_every_minute_even_without_rule_signals(issues, monkeypatch):
+    """저장소 주인 요청: 새 기록이 있으면 1분마다 AI(Fable)가 모든 IP를 판단한다 (규칙 신호가 없어도)."""
+    seen = []
+    _verdict(monkeypatch, '{"suspicious": false, "severity": "low", "ips": [], "reason": ""}', seen)
+    client = TestClient(app)
+    for _ in range(5):
+        client.get("/?q=봄 풍경")
+    assert guardian.watch_traffic() == {"watched": 5, "suspicious": False}
+    sent = json.loads(seen[0][0][1]["content"])
+    assert sent["testclient"]["signals"] == [] and sent["testclient"]["requests"] == 5
+    assert guardian.watch_traffic() == {"watched": 0} and len(seen) == 1   # 새 기록이 없으면 부르지 않는다
+
+
+def test_rules_mode_skips_ai_when_rules_see_nothing(issues, monkeypatch):
+    monkeypatch.setattr(guardian, "WATCH_MODE", "rules")   # 비용 절감 모드 (WATCH_MODE=rules)
     seen = []
     _verdict(monkeypatch, '{"suspicious": true, "severity": "high", "ips": ["testclient"], "reason": "x"}', seen)
     client = TestClient(app)
     for _ in range(5):
         client.get("/?q=봄 풍경")
     assert guardian.watch_traffic() == {"watched": 5, "suspicious": False, "ai": "skipped"}
-    assert not seen and "AI_SUSPICIOUS_TRAFFIC" not in _codes()  # 평범한 접속에는 AI 비용 0
+    assert not seen and "AI_SUSPICIOUS_TRAFFIC" not in _codes()
 
 
 def test_traffic_signals_catch_rule_dodging_patterns():
@@ -320,16 +335,32 @@ def test_one_broken_scan_step_does_not_crash_the_whole_check(issues, monkeypatch
 
     def broken():
         raise KeyError("status sk-ant-abcdefghijklmnop")
-    monkeypatch.setattr(guardian, "watch_traffic", broken)
+    monkeypatch.setattr(guardian, "check_capacity", broken)
     r = TestClient(app).get("/api/guardian/scan", headers={"Authorization": "Bearer s3cret"})
     assert r.status_code == 503   # 500(서버 오류)이 아니라 '일부 고장'으로 답한다
     body = r.json()
-    assert body["failed_steps"] == ["traffic"] and body["traffic"]["error"] == "KeyError"
-    assert "broken" in body["traffic"]["where"] and body["ai"]["status"] == "ok"   # 다른 단계는 계속 돈다
-    alert = [i for i in issues if "'traffic' 단계 오류" in i[0]]
+    assert body["failed_steps"] == ["capacity"] and body["capacity"]["error"] == "KeyError"
+    assert "broken" in body["capacity"]["where"] and body["ai"]["status"] == "ok"   # 다른 단계는 계속 돈다
+    alert = [i for i in issues if "'capacity' 단계 오류" in i[0]]
     assert len(alert) == 1 and "KeyError" in alert[0][1] and "sk-ant" not in alert[0][1]   # 비밀처럼 보이는 값은 가린다
     TestClient(app).get("/api/guardian/scan", headers={"Authorization": "Bearer s3cret"})
-    assert len([i for i in issues if "'traffic' 단계 오류" in i[0]]) == 1   # 같은 단계 알림은 30분에 한 번
+    assert len([i for i in issues if "'capacity' 단계 오류" in i[0]]) == 1   # 같은 단계 알림은 30분에 한 번
+
+
+def test_scan_runs_traffic_watch_after_the_response(issues, monkeypatch):
+    """Fable 판단은 수십 초 걸릴 수 있어 1분 점검 응답(25초 제한) 뒤에 돈다. 실패해도 위치와 함께 보고한다."""
+    from app import main
+    monkeypatch.setattr(main, "CRON_SECRET", "s3cret")
+    ran = []
+    monkeypatch.setattr(guardian, "watch_traffic", lambda: ran.append(1) or {"watched": 0})
+    r = TestClient(app).get("/api/guardian/scan", headers={"Authorization": "Bearer s3cret"})
+    assert r.status_code == 200 and r.json()["traffic"] == {"scheduled": "after_response"} and ran == [1]
+
+    def broken():
+        raise ValueError("bad verdict")
+    monkeypatch.setattr(guardian, "watch_traffic", broken)
+    TestClient(app).get("/api/guardian/scan", headers={"Authorization": "Bearer s3cret"})
+    assert any("'traffic' 단계 오류" in i[0] and "ValueError" in i[1] for i in issues)
 
 
 def test_scan_route_failure_outside_steps_is_reported_not_500(issues, monkeypatch):

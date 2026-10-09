@@ -5,7 +5,8 @@
   의도 추출만 다른 모델로 돌리려면 CLAUDE_INTENT_MODEL.
 - 비용·속도 (2026-10-08 사용량 절감):
   - effort는 모든 모델에 CLAUDE_EFFORT(기본 low)로 보낸다. Haiku 5.5는 보내지 않으면 medium으로 생각해 토큰을 더 쓴다.
-  - 정해진 형식만 뽑는 일(검색 조건 intent, 접속 감시 watch)은 Haiku의 생각(thinking)을 끈다 — 생각 토큰은 출력 요금이다.
+  - 정해진 형식만 뽑는 일(검색 조건 intent, 상태 확인 probe)은 Haiku의 생각(thinking)을 끈다 — 생각 토큰은 출력 요금이다.
+  - 1분 접속 감시(watch)는 저장소 주인 요청으로 Fable(WATCH_MODEL)이 판단한다.
   - 길고 매번 같은 지시문(system)은 프롬프트 캐시에 올린다. 같은 지시문이 5분 안에 다시 쓰이면 그 부분은 1/10 값이다
     (설명 에이전트처럼 프로젝트 코드 전체를 지시문에 넣는 경우 효과가 크다).
   - 쓴 토큰은 목적별로 ai_usage 표에 남긴다 → /api/guardian/summary, 매일 품질 점검이 보고 더 줄일 곳을 찾는다.
@@ -42,7 +43,12 @@ def enabled() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
 
+WATCH_DEFAULT_MODEL = "claude-fable-5-1"   # 1분 접속 감시는 저장소 주인 요청으로 Fable이 판단 (2026-10-09)
+
+
 def model_for(purpose: str) -> str:
+    if purpose == "watch":   # 비용이 크면 Vercel 환경변수 WATCH_MODEL=claude-haiku-5-5 로 바로 되돌린다
+        return os.environ.get("WATCH_MODEL", "").strip() or WATCH_DEFAULT_MODEL
     main = os.environ.get("CLAUDE_MODEL", "").strip() or DEFAULT_MODEL
     if purpose == "intent":
         return os.environ.get("CLAUDE_INTENT_MODEL", "").strip() or main

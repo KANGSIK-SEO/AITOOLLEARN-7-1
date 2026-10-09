@@ -118,6 +118,8 @@ async def request_context(request: Request, call_next):
                    int((time.monotonic() - started) * 1000))
     if pending.get("triage"):
         tasks.add_task(_after_response, guardian.run_triage, pending["triage"])
+    if pending.get("watch"):   # 1분 점검의 접속 감시(Fable)는 응답을 보낸 뒤에
+        tasks.add_task(_after_response, guardian.run_watch_safely)
     # 맨 마지막: 스트리밍 답변·위 진단이 쓴 토큰까지 모아서 한 번에 저장한다
     tasks.add_task(_after_response, guardian.save_pending_usage, pending)
     response.background = tasks
