@@ -354,6 +354,20 @@ def guardian_visitors(request: Request):
     return guardian.visitor_stats()
 
 
+@app.post("/api/guardian/migrate-from-turso")
+def guardian_migrate_from_turso(request: Request, table: str | None = None, after: int = 0):
+    """Turso → Neon(Postgres) 데이터 옮기기 (.github/workflows/migrate-db.yml, CRON_SECRET 필요).
+    두 DB 접속 정보가 모두 있는 운영 서버 안에서만 할 수 있어 엔드포인트로 둔다. 여러 번 불러도 안전하다.
+    40초씩 옮기고 done=false면 next(표·위치)를 ?table=&after=로 넘겨 다시 부른다 (Vercel 60초 한도)."""
+    if not _cron_authorized(request):
+        raise HTTPException(401, {"code": "UNAUTHENTICATED", "message": "cron only"})
+    try:
+        return {"status": "ok", **db.copy_from_turso(table, after)}
+    except db.DbError as e:
+        log.error("db_copy_from_turso_failed detail=%s", e)
+        return error(409, "MIGRATION_FAILED", str(e))
+
+
 @app.post("/api/auth/signup")
 def signup(body: Credentials, request: Request):
     ip = guardian.client_ip(request)

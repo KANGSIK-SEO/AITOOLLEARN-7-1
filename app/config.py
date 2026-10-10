@@ -127,6 +127,9 @@ def validate_env() -> list[str]:
         errors.append(f"SECRET_KEY가 너무 짧습니다 ({len(secret)}자, 32자 이상 필요).")
     if os.environ.get("TURSO_DATABASE_URL", "").strip() and not os.environ.get("TURSO_AUTH_TOKEN", "").strip():
         errors.append("TURSO_DATABASE_URL이 설정됐지만 TURSO_AUTH_TOKEN이 없습니다. 로컬 SQLite를 쓰려면 TURSO_DATABASE_URL을 비우세요.")
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if database_url and not database_url.startswith(("postgres://", "postgresql://")):
+        errors.append("DATABASE_URL은 postgresql://로 시작하는 Postgres(Neon) 접속 주소여야 합니다.")
     if LLM_REASONING_EFFORT not in REASONING_EFFORTS:
         errors.append(f"LLM_REASONING_EFFORT는 {'|'.join(sorted(REASONING_EFFORTS))} 중 하나여야 합니다 (현재 값: {LLM_REASONING_EFFORT!r}).")
     if errors:

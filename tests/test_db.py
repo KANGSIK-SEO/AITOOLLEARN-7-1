@@ -35,7 +35,7 @@ def test_slow_query_is_logged_with_latency_and_compact_sql(local_db, monkeypatch
     with caplog.at_level(logging.WARNING, logger="app.db"):
         db.execute("SELECT id,\n        email\n   FROM users WHERE email = ?", ("secret@x.com",))
     (msg,) = _slow_logs(caplog)
-    assert "backend=local_sqlite ok=True" in msg
+    assert f"backend={db.backend()} ok=True" in msg
     assert "sql=SELECT id, email FROM users WHERE email = ?" in msg
     assert "latency_ms=" in msg
 
@@ -67,6 +67,7 @@ def test_long_sql_is_truncated(local_db, monkeypatch, caplog):
 def test_turso_backend_latency_is_measured(monkeypatch, caplog):
     """Turso HTTP 왕복이 느려지면 backend=turso로 기록된다."""
     import time
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://example.turso.io")
     monkeypatch.setattr(db, "SLOW_QUERY_MS", 50)
 
@@ -89,6 +90,7 @@ def test_schema_setup_is_one_round_trip(monkeypatch):
         calls.append(len(stmts))
         return [[{"name": "id"}] if s.startswith("PRAGMA") else [] for s, _ in stmts]
 
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://example.turso.io")
     monkeypatch.setattr(db, "_turso_pipeline", fake_pipeline)
     db.reset_for_tests()

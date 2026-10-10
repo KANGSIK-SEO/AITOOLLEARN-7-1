@@ -109,8 +109,9 @@ def check_rate(bucket: str, limit: int, window_seconds: int) -> bool:
         count = db.execute(
             "INSERT INTO rate_counters (bucket, count, window_start) VALUES (?, 1, ?) "
             "ON CONFLICT(bucket) DO UPDATE SET "
-            "count = CASE WHEN window_start < ? THEN 1 ELSE count + 1 END, "
-            "window_start = CASE WHEN window_start < ? THEN ? ELSE window_start END "
+            # 표 이름을 붙여 쓴다 — Postgres는 그냥 window_start라고 쓰면 새 값(excluded)과 헷갈린다며 거부한다
+            "count = CASE WHEN rate_counters.window_start < ? THEN 1 ELSE rate_counters.count + 1 END, "
+            "window_start = CASE WHEN rate_counters.window_start < ? THEN ? ELSE rate_counters.window_start END "
             "RETURNING count",
             (bucket, now_iso, cutoff_iso, cutoff_iso, now_iso),
         )[0]["count"]
@@ -277,7 +278,8 @@ _blocks: dict = {"source": None, "loaded_at": 0.0, "until": {}, "learned": set()
 
 
 def _db_source() -> str:
-    return os.environ.get("TURSO_DATABASE_URL", "") or os.environ.get("LOCAL_DB_PATH", "")
+    return (os.environ.get("DATABASE_URL", "") or os.environ.get("TURSO_DATABASE_URL", "")
+            or os.environ.get("LOCAL_DB_PATH", ""))
 
 
 def _load_blocks() -> dict:

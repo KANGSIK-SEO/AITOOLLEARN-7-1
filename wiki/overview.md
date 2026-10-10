@@ -41,7 +41,7 @@ updated: 2026-10-07
 
 - 서버: Python **FastAPI** (`app/main.py`) → **Vercel** 서버리스 함수 (`index.py`, `vercel.json`)
 - 작품 DB: 읽기 전용 **SQLite + FTS5 전문 검색** (`data/art.db`)
-- 사용자 DB: **Turso**(인터넷 SQLite), 로컬에서는 SQLite 파일 (`app/db.py`)
+- 사용자 DB: **Neon PostgreSQL**(2026-10-11부터, 그 전엔 Turso), 로컬에서는 SQLite 파일 (`app/db.py`)
 - AI: OpenAI **gpt-6-astra**, 장애 시 Upstage **solar-pro4** (`app/llm.py`) → [AI 호출](ai-llm.md)
 
 ## 팀
