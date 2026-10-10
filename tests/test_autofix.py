@@ -154,12 +154,12 @@ def _screen_client(verdict, calls):
     return SimpleNamespace(messages=SimpleNamespace(create=lambda **p: calls.append(p) or message))
 
 
-def test_screen_uses_cheapest_model_without_source_code():
+def test_screen_uses_fable_without_source_code():
     calls = []
     verdict = {"code_fixable": False, "confident": True, "reason": "규칙이 이미 막은 공격"}
     assert autofix_propose.screen({"title": "BRUTE_FORCE", "body": "x"}, [], _screen_client(verdict, calls)) == verdict
     p = calls[0]
-    assert p["model"] == "claude-haiku-5-5" and p["thinking"] == {"type": "disabled"}
+    assert p["model"] == "claude-fable-5-1" and "thinking" not in p  # 생각 끄기는 Haiku에서만
     assert "<source>" not in p["messages"][0]["content"]  # 코드 전체를 보내지 않아 싸다
 
 

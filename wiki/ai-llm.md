@@ -9,7 +9,7 @@ updated: 2026-10-08
 
 | 상황 | 쓰는 순서 |
 |---|---|
-| `ANTHROPIC_API_KEY` 있음 | Claude `claude-haiku-5-5`(가장 저렴, 자동 코드 수정만 Fable) → (크레딧 소진·한도·인증·통신 문제) **Upstage `solar-pro4`** → (solar 키 없으면) OpenAI `gpt-6-astra` |
+| `ANTHROPIC_API_KEY` 있음 | Claude `claude-fable-5-1`(2026-10-11부터 모든 작업을 Fable로, `CLAUDE_MODEL`로 되돌림) → (크레딧 소진·한도·인증·통신 문제) **Upstage `solar-pro4`** → (solar 키 없으면) OpenAI `gpt-6-astra` |
 | Claude 키 없음 | OpenAI `gpt-6-astra` → (**429/401/403**, 한도 소진·키 문제) Upstage `solar-pro4` |
 
 Anthropic은 크레딧을 다 쓰면 429가 아니라 400("credit balance is too low")을 준다. 이것도 소진으로 보고 solar로 넘긴다 (`claude_llm._credit_exhausted`).
