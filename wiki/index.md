@@ -12,7 +12,7 @@
 - [작품 검색](search.md) — FTS5, 다양화, 더 보기, 가로/세로 판별
 - [권리 판단](rights.md) — 허용 기관, R1~R6
 - [권리 근거 기록](records.md) — 스냅숏, 서명, Wayback 보관
-- [데이터베이스](database.md) — 작품 DB vs 사용자 DB, 테이블, Turso 왕복 묶기
+- [데이터베이스](database.md) — 작품 DB vs 사용자 DB(Neon PostgreSQL), 테이블, Turso → Neon 옮기기
 - [로그인과 보안](auth.md) — scrypt, 토큰, 잠금, 초대코드
 - [가디언](guardian.md) — 즉시 규칙 + 하루 한 번 AI 분석
 - [화면](frontend.md) — 카드, PWA, 캐시 무효화, 온디바이스 Datalog
