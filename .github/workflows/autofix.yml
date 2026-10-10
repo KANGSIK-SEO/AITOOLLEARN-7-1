@@ -99,7 +99,7 @@ jobs:
         with:
           ref: main
           persist-credentials: false   # 이 단계에는 저장소에 쓸 권한을 남기지 않는다
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -170,7 +170,7 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -217,7 +217,7 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
