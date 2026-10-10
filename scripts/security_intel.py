@@ -2,7 +2,7 @@
 
 사용 (GitHub Actions security-intel.yml 안에서):
     python3 scripts/security_intel.py <pip freeze 결과> <본 기사 목록 JSON> <결과 폴더>
-필요: ANTHROPIC_API_KEY (없으면 요약 없이 취약점·기사 목록만). 모델은 INTEL_MODEL(기본 claude-haiku-5-5).
+필요: ANTHROPIC_API_KEY (없으면 요약 없이 취약점·기사 목록만). 모델은 INTEL_MODEL(기본 claude-fable-5-1).
 
 하는 일:
 1. 취약점: 실제로 설치되는 라이브러리 버전(pip freeze)을 OSV(구글이 운영하는 공개 취약점 DB)에 묻는다 → vulns.json
@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from autofix_guard import visible  # noqa: E402
 
-DEFAULT_MODEL = "claude-haiku-5-5"
+DEFAULT_MODEL = "claude-fable-5-1"
 DEFAULT_FEEDS = (
     "https://feeds.feedburner.com/TheHackersNews",
     "https://www.bleepingcomputer.com/feed/",

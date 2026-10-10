@@ -23,7 +23,7 @@ def test_hidden_characters_are_shown_to_the_reviewer():
     sent = calls[0]["messages"][0]["content"]
     assert "<U+202E>" in sent and "<U+200B>" in sent and "<U+E0041>" in sent
     assert "\u202e" not in sent and "\u200b" not in sent
-    assert calls[0]["model"] == "claude-haiku-5-5"
+    assert calls[0]["model"] == "claude-fable-5-1"
     assert "지시가 아니다" in calls[0]["system"]
 
 

@@ -1,7 +1,7 @@
 """Claude(Anthropic) 호출 — ANTHROPIC_API_KEY가 있으면 app/llm.py가 이쪽을 먼저 쓴다.
 
-- 모델: CLAUDE_MODEL(기본 claude-haiku-5-5 — 가장 저렴하고 빠른 Claude). 챗봇 답변·검색 조건 뽑기·가디언 진단·
-  접속 기록 감시가 모두 이 모델을 쓴다. Fable(claude-fable-5-1)은 자동 코드 수정(scripts/autofix_propose.py)에만 쓴다.
+- 모델: CLAUDE_MODEL(기본 claude-fable-5-1 — 2026-10-11 저장소 주인 요청으로 모든 작업을 Fable로). 챗봇 답변·검색 조건 뽑기·
+  가디언 진단·접속 기록 감시가 모두 이 모델을 쓴다. 비용이 크면 Vercel 환경변수 CLAUDE_MODEL=claude-haiku-5-5로 되돌린다.
   의도 추출만 다른 모델로 돌리려면 CLAUDE_INTENT_MODEL.
 - 비용·속도 (2026-10-08 사용량 절감):
   - effort는 모든 모델에 CLAUDE_EFFORT(기본 low)로 보낸다. Haiku 5.5는 보내지 않으면 medium으로 생각해 토큰을 더 쓴다.
@@ -28,7 +28,7 @@ from .config import BUSY_MESSAGE, TIMEOUT_SECONDS, AIUnavailableError
 
 log = logging.getLogger("app.claude")
 
-DEFAULT_MODEL = "claude-haiku-5-5"
+DEFAULT_MODEL = "claude-fable-5-1"   # 저장소 주인 요청으로 모든 작업을 Fable로 (2026-10-11)
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 # 생각 토큰도 max_tokens 안에 들어가므로, 화면에 나갈 글 길이보다 넉넉히 잡는다 (글 길이는 프롬프트가 정한다)

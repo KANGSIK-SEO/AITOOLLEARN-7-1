@@ -2,7 +2,7 @@
 
 사용 (GitHub Actions autofix.yml 안에서, AI가 쓴 코드를 실행하지 않는 곳):
     python3 scripts/autofix_review.py <이슈 JSON> <변경 patch> <결과 JSON>
-필요: ANTHROPIC_API_KEY. 모델은 REVIEW_MODEL(기본 claude-haiku-5-5 — 코드 수정이 아니므로 가장 싼 모델).
+필요: ANTHROPIC_API_KEY. 모델은 REVIEW_MODEL(기본 claude-fable-5-1 — 2026-10-11 저장소 주인 요청으로 모든 작업을 Fable로).
 
 왜 필요한가: 장애 로그에는 해커가 쓴 글이 섞일 수 있고, 그 글이 Fable을 속여 비밀 값을 내보내거나
 검사를 빼는 코드를 쓰게 만들 수 있다. 사람이 PR을 꼼꼼히 읽지 못하고 승인할 수도 있다.
@@ -21,7 +21,7 @@ import anthropic
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from autofix_guard import reveal_invisible  # noqa: E402
 
-DEFAULT_MODEL = "claude-haiku-5-5"
+DEFAULT_MODEL = "claude-fable-5-1"
 MAX_PATCH_CHARS = 120_000
 MAX_ISSUE_CHARS = 20_000
 

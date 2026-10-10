@@ -6,7 +6,7 @@
 실시간 대응을 위해 high보다 빠르게. 더 꼼꼼한 수정이 필요하면 저장소 변수로 high).
 
 비용 절감 (2026-10-08):
-- Fable을 부르기 전에 가장 싼 Claude(SCREEN_MODEL, 기본 claude-haiku-5-5)가 이슈만 읽고 "코드로 고칠 일인지" 먼저 본다.
+- 수정안을 만들기 전에 SCREEN_MODEL(기본 claude-fable-5-1, 2026-10-11 저장소 주인 요청)이 이슈만 읽고 "코드로 고칠 일인지" 먼저 본다.
   이미 규칙이 막은 공격, 외부 서비스 장애, 일시적 현상처럼 확실히 코드 문제가 아니면 Fable을 부르지 않는다
   (Fable은 코드 전체를 읽어 한 번에 1~4달러가 든다. Haiku 확인은 1센트 미만).
 - 코드 전체(가장 큰 부분)를 앞에 두고 1시간 프롬프트 캐시에 올린다. 같은 시간대에 이슈가 여러 개 오면
@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from autofix_guard import NEW_TEST_RE, PROTECTED  # noqa: E402
 
 DEFAULT_MODEL = "claude-fable-5-1"
-SCREEN_MODEL = "claude-haiku-5-5"
+SCREEN_MODEL = "claude-fable-5-1"   # 저장소 주인 요청으로 모든 작업을 Fable로 (2026-10-11)
 PRICE_PER_MTOK = {"claude-fable-5-1": (10.0, 50.0), "claude-opus-5-5": (4.0, 20.0),
                   "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-5-5": (0.10, 0.50)}
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -105,14 +105,16 @@ def screen(issue: dict, lessons: list[dict], client: anthropic.Anthropic | None 
     """Fable 전에 싼 모델로 '코드로 고칠 일인가'를 본다. 실패하면 고칠 일로 보고 넘어간다 (기회를 놓치지 않게)."""
     client = client or anthropic.Anthropic()
     issue_text = f"제목: {issue.get('title', '')}\n\n{issue.get('body', '')}"[:MAX_ISSUE_CHARS]
+    params = dict(
+        model=SCREEN_MODEL, max_tokens=4000, system=SCREEN_SYSTEM,
+        messages=[{"role": "user", "content": f"<issue>\n{issue_text}\n</issue>\n\n<lessons>\n"
+                                              f"{json.dumps(lessons, ensure_ascii=False)}\n</lessons>"}],
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": SCREEN_SCHEMA}},
+    )
+    if SCREEN_MODEL.startswith("claude-haiku"):
+        params["thinking"] = {"type": "disabled"}   # 생각 끄기는 Haiku에서만 보낸다
     try:
-        message = client.messages.create(
-            model=SCREEN_MODEL, max_tokens=1000, system=SCREEN_SYSTEM,
-            messages=[{"role": "user", "content": f"<issue>\n{issue_text}\n</issue>\n\n<lessons>\n"
-                                                  f"{json.dumps(lessons, ensure_ascii=False)}\n</lessons>"}],
-            output_config={"effort": "low", "format": {"type": "json_schema", "schema": SCREEN_SCHEMA}},
-            thinking={"type": "disabled"},
-        )
+        message = client.messages.create(**params)
         _, cost = usage_cost(SCREEN_MODEL, message.usage)
         print(f"사전 확인({SCREEN_MODEL}) 비용 약 ${cost:.4f}")
         verdict = json.loads(next(b.text for b in message.content if b.type == "text"))

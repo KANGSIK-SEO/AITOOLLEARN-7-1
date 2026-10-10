@@ -45,7 +45,7 @@ def test_prompt_has_checklist_live_data_and_no_artwork_dump():
     assert "app/main.py" in editable and "app/auth.py" not in editable  # 보호 파일은 고칠 수 있는 목록에 없다
 
 
-def test_ask_claude_uses_cheapest_model_and_json_schema(monkeypatch):
+def test_ask_claude_uses_fable_and_json_schema(monkeypatch):
     monkeypatch.delenv("QUALITY_MODEL", raising=False)
     calls = []
 
@@ -65,5 +65,5 @@ def test_ask_claude_uses_cheapest_model_and_json_schema(monkeypatch):
 
     client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(stream=lambda **p: Stream(**p))))
     assert q.ask_claude("p", client)["summary"] == "대체로 양호"
-    assert calls[0]["model"] == "claude-haiku-5-5"
+    assert calls[0]["model"] == "claude-fable-5-1"
     assert calls[0]["output_config"]["format"]["schema"] is q.OUTPUT_SCHEMA

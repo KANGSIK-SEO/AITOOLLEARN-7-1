@@ -2,7 +2,7 @@
 
 사용 (GitHub Actions quality-review.yml 안에서):
     python3 scripts/quality_review.py <보고서 파일.md> <수정할 항목 파일.json> <용량 판정 파일.json>
-필요: ANTHROPIC_API_KEY. 선택: SITE_URL(운영 주소), CRON_SECRET(운영 요약 읽기), QUALITY_MODEL(기본 claude-haiku-5-5).
+필요: ANTHROPIC_API_KEY. 선택: SITE_URL(운영 주소), CRON_SECRET(운영 요약 읽기), QUALITY_MODEL(기본 claude-fable-5-1).
 
 판정:
 - ok: 이미 잘 되어 있음
@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from autofix_propose import EDITABLE_RE  # noqa: E402
 from autofix_guard import PROTECTED  # noqa: E402
 
-DEFAULT_MODEL = "claude-haiku-5-5"
+DEFAULT_MODEL = "claude-fable-5-1"
 DEFAULT_SITE = "https://art-chatbot-eight.vercel.app"
 CONTEXT_FILES = ("app/*.py", "app/static/*.js", "app/static/*.html", "app/static/*.css", "app/static/*.json",
                  "vercel.json", "db/schema.sql", "requirements.txt", "README.md", "docs/llm-eval.md")
