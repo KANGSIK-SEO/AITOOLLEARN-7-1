@@ -1,4 +1,4 @@
-# 서비스 품질 자동 점검 — 매일 docs/review-checklist.md의 질문마다 Claude(기본 claude-haiku-5-5)가
+# 서비스 품질 자동 점검 — 매일 docs/review-checklist.md의 질문마다 Claude(기본 claude-fable-5-1)가
 # 코드·운영 사이트 응답·최근 24시간 운영 요약을 보고 판정한다 (scripts/quality_review.py).
 # - 결과는 '[품질 점검] 체크리스트 보고서' 이슈 본문에 표로 갱신한다.
 # - 코드로 고칠 수 있는 항목은 '[품질] …' 이슈를 열고 자동 수정(autofix.yml, Claude Fable)을 부른다 → 수정 PR → 주인 승인 → 배포.

@@ -40,7 +40,7 @@
 - `app/auth.py` — **문지기.** 비밀번호 해시(scrypt)와 로그인 쿠키(HMAC 서명) 검증. 초대코드(프리미엄) 여부도 이 쿠키에 담긴다. 서버에 세션을 저장하지 않음.
 - `app/chat.py` — **지휘자.** "질문 → 검색조건 추출 → 검색 → 답변 생성" 파이프라인을 순서대로 지휘.
 - `app/art.py` — **검색엔진.** `data/art.db`에서 SQLite FTS5로 작품을 찾음. AI 호출 없이 순수 DB 검색. 상위 2개(`GUARANTEED_TOP`)는 관련도순 고정, 나머지는 후보 풀에서 무작위로 섞어 같은 질문이라도 항상 똑같은 작품만 나오지 않게 한다.
-- `app/llm.py` — **AI 통신창구.** `ANTHROPIC_API_KEY`가 있으면 Claude(`app/claude_llm.py`, 기본 `claude-haiku-5-5` — 가장 저렴하고 빠른 Claude)를 먼저 쓰고, 실패하면 OpenAI `gpt-6-astra` → Upstage `solar-pro4` 순서로 넘어간다. 답변을 조각조각 받는 스트리밍(`stream_completion`)도 여기서 고른다. 타임아웃·에러를 통일된 형태로 반환.
+- `app/llm.py` — **AI 통신창구.** `ANTHROPIC_API_KEY`가 있으면 Claude(`app/claude_llm.py`, 기본 `claude-fable-5-1` — 2026-10-11부터 모든 작업을 Fable로)를 먼저 쓰고, 실패하면 OpenAI `gpt-6-astra` → Upstage `solar-pro4` 순서로 넘어간다. 답변을 조각조각 받는 스트리밍(`stream_completion`)도 여기서 고른다. 타임아웃·에러를 통일된 형태로 반환.
 - `app/db.py` — **저장소.** 사용자·대화 로그·가디언 사건 저장(로컬 SQLite 또는 Turso 자동 선택).
 - `app/config.py` — **규칙집.** 사용 모델(gpt-6-astra/폴백 solar-pro4)·초대코드·요금제 상한 등 설정을 고정.
 - `app/guardian.py` — **가디언.** 장애·보안 사건을 즉시 기록·대응(잠금, AI 백오프, 악성 입력 차단)하고, 1일 1회 gpt-6-astra로 일괄 분석·GitHub 이슈까지 생성.
@@ -225,7 +225,7 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 | 이름 | 설명 |
 |---|---|
 | `ANTHROPIC_API_KEY` (선택) | Claude API 키. **있으면 Claude가 주 모델**이 되고, 크레딧 소진·한도·인증 문제로 실패하면 Upstage solar-pro4가 이어받는다(solar 키가 없으면 GPT) (`app/claude_llm.py`) |
-| `CLAUDE_MODEL`, `CLAUDE_INTENT_MODEL`, `CLAUDE_EFFORT` (선택) | 답변·가디언 모델(기본 `claude-haiku-5-5`), 검색 조건 뽑기 모델(기본 같은 모델), 생각 깊이(기본 `low`, Haiku에는 보내지 않음). Fable(`claude-fable-5-1`)은 자동 코드 수정에만 쓴다 |
+| `CLAUDE_MODEL`, `CLAUDE_INTENT_MODEL`, `CLAUDE_EFFORT` (선택) | 답변·가디언 모델(기본 `claude-fable-5-1`, 비용이 크면 `claude-haiku-5-5`로 되돌림), 검색 조건 뽑기 모델(기본 같은 모델), 생각 깊이(기본 `low`) |
 | `GPT_ASTRA_API_KEY` | OpenAI gpt-6-astra 키 (Claude 키가 없을 때 주 모델, 있을 때는 대체 모델) |
 | `UPSTAGE_API_KEY` (선택) | Upstage solar-pro4 키. Claude나 GPT가 소진·한도·인증 문제로 실패할 때 이어받는 비상용 |
 | `SECRET_KEY` | 세션 서명 키 (32자 이상 랜덤) |
@@ -307,7 +307,7 @@ GitHub Actions 배포를 구현했다. 모든 변경은 PR로 리뷰 후 병합�
   - 고객이 직접 겪는 오류(AI 응답 실패·DB 오류·서버 오류)는 **첫 발생 즉시**, 그 밖에는 장애 사건 5분에 10건이나 심각(high) 사건 → **즉시 AI 진단 + GitHub 이슈**(응답을 보낸 뒤 실행, 같은 종류는 1분에 한 번, 서로 다른 문제는 바로, 횟수 제한 없음). AI가 안 되면 사건 건수만이라도 이슈로 올린다
   - 처리 못 한 서버 오류도 `SERVER_ERROR` 사건으로 남겨 감시에 걸린다
   - 바깥 눈: `.github/workflows/monitor.yml`이 **1분마다**(5분마다 시작해 안에서 1분 간격 5번) `/healthz`를 확인해 두 번 연속 실패하면 `outage` 이슈를 열고, 회복되면 닫는다. `CRON_SECRET` 시크릿이 있으면 `/api/guardian/scan`으로 요청이 없을 때도 최근 사건을 훑는다
-  - **AI 접속 기록 감시**: 모든 요청을 `access_log`에 남기고(응답 뒤, 2일 보관) 1분마다 `scan`이 새 기록을 Claude(`claude-haiku-5-5`)에게 보여 줘 규칙에 없는 수상한 움직임(대량 요청·계정 돌려 막기·번호 바꿔 보기·숨긴 공격 문자열 등)을 찾는다. 수상한 IP는 `AI_SUSPICIOUS_TRAFFIC` 사건으로 남기고, 10분 안에 두 번 걸리면 1시간 차단한다. 심각(high)이면 즉시 진단 → 이슈 → 자동 수정 PR로 이어진다
+  - **AI 접속 기록 감시**: 모든 요청을 `access_log`에 남기고(응답 뒤, 2일 보관) 1분마다 `scan`이 새 기록을 Claude(`claude-fable-5-1`)에게 보여 줘 규칙에 없는 수상한 움직임(대량 요청·계정 돌려 막기·번호 바꿔 보기·숨긴 공격 문자열 등)을 찾는다. 수상한 IP는 `AI_SUSPICIOUS_TRAFFIC` 사건으로 남기고, 10분 안에 두 번 걸리면 1시간 차단한다. 심각(high)이면 즉시 진단 → 이슈 → 자동 수정 PR로 이어진다
 - **스스로 배우기**: 없는 주소를 15번 찾다 차단된 스캐너가 두드린 주소는 30일 동안 공격 경로로 기억해, 다음 공격자는 처음부터 공격 경로 규칙에 걸린다 (코드 수정 없이 데이터로 진화, 최대 500개).
 - **자동 수정안 + 승인 한 번**: 가디언·`monitor.yml`이 연 이슈를 `autofix.yml`이 받아 Claude Fable(`claude-fable-5-1`, Fable은 여기서만 쓴다)이 수정 코드와 새 테스트를 쓴다.
   비밀 값이 없는 곳에서 안전 검사(`scripts/autofix_guard.py`: 보호 파일·외부 통신·명령 실행·비밀 값 읽기·기존 테스트 수정 금지)와
@@ -315,8 +315,8 @@ GitHub Actions 배포를 구현했다. 모든 변경은 PR로 리뷰 후 병합�
   **Approve**하면 `autofix-ship.yml`이 다시 검사 → main 병합 → Vercel 배포 → `/healthz` 확인, 이상하면 자동으로 되돌리고 재배포한다.
   결과(배포·되돌림·검사 거부)는 "학습 기록" 이슈에 정해진 칸으로 남고, 다음 수정안을 만들 때 AI가 참고한다.
   필요: GitHub secrets `ANTHROPIC_API_KEY`. 끄기: Repository variables `AUTOFIX_ENABLED=false`. 중복 방지: 같은 문제는 10분에 한 번, 같은 문제의 수정 PR이 열려 있으면 건너뜀, 하루 총횟수 제한 없음(`AUTOFIX_SAME_PROBLEM_MINUTES`, `AUTOFIX_DAILY_MAX`로 조정).
-- **품질 자동 점검(매일, `.github/workflows/quality-review.yml`)**: `docs/review-checklist.md`의 평가 질문(서비스 이해·기술 스택·확장성·캐시·외부 의존성·로깅·보안·UX·비동기·접근성·코드 품질·LLM)마다 Claude(`claude-haiku-5-5`)가 코드·운영 사이트 응답 헤더·최근 24시간 운영 요약(`/api/guardian/summary`)을 보고 ok/fix/manual로 판정해 '[품질 점검] 체크리스트 보고서' 이슈를 갱신한다. 코드로 고칠 수 있는 항목은 `[품질]` 이슈 → 자동 수정 PR(Fable, 승인 필요), 한 번에 3개까지(`QUALITY_MAX_FIXES`).
-- **Claude 사용량 절감 (2026-10-08)**: ① 모든 호출에 effort `low`(Haiku 5.5는 안 보내면 medium으로 생각해 토큰을 더 씀), 형식만 뽑는 일(검색 조건·접속 감시)은 생각 끔 ② 긴 지시문은 프롬프트 캐시(설명 에이전트처럼 코드 전체를 넣는 경우 1/10 값) ③ 같은 질문의 검색 조건은 서버가 하루 기억(예시 버튼) ④ 1분 접속 감시는 원본 줄 대신 IP별 요약만 AI에게 보냄 — 2026-10-09부터 저장소 주인 요청으로 새 기록이 있으면 1분마다 **Fable**이 모든 IP를 판단(비용이 크면 Vercel 환경변수 `WATCH_MODEL=claude-haiku-5-5` 또는 `WATCH_MODE=rules`로 되돌림) ⑤ 자동 수정은 Haiku가 이슈만 보고 "코드로 고칠 일인지" 먼저 판단해 아니면 Fable을 부르지 않음, 코드 전체는 1시간 캐시, 건수만 다른 같은 경보는 한 문제로 묶고 24시간 안에 "코드 문제 아님"으로 끝난 문제는 다시 부르지 않음 ⑥ 쓴 토큰은 `ai_usage` 표에 목적별로 남고 `/api/guardian/summary`·매일 품질 점검이 읽어 더 줄일 곳을 `[품질]` 이슈로 낸다.
+- **품질 자동 점검(매일, `.github/workflows/quality-review.yml`)**: `docs/review-checklist.md`의 평가 질문(서비스 이해·기술 스택·확장성·캐시·외부 의존성·로깅·보안·UX·비동기·접근성·코드 품질·LLM)마다 Claude(`claude-fable-5-1`)가 코드·운영 사이트 응답 헤더·최근 24시간 운영 요약(`/api/guardian/summary`)을 보고 ok/fix/manual로 판정해 '[품질 점검] 체크리스트 보고서' 이슈를 갱신한다. 코드로 고칠 수 있는 항목은 `[품질]` 이슈 → 자동 수정 PR(Fable, 승인 필요), 한 번에 3개까지(`QUALITY_MAX_FIXES`).
+- **Claude 사용량 절감 (2026-10-08)**: ① 모든 호출에 effort `low`(Haiku 5.5는 안 보내면 medium으로 생각해 토큰을 더 씀), 형식만 뽑는 일(검색 조건·접속 감시)은 생각 끔 ② 긴 지시문은 프롬프트 캐시(설명 에이전트처럼 코드 전체를 넣는 경우 1/10 값) ③ 같은 질문의 검색 조건은 서버가 하루 기억(예시 버튼) ④ 1분 접속 감시는 원본 줄 대신 IP별 요약만 AI에게 보냄 — 2026-10-09부터 저장소 주인 요청으로 새 기록이 있으면 1분마다 **Fable**이 모든 IP를 판단(비용이 크면 Vercel 환경변수 `WATCH_MODEL=claude-haiku-5-5` 또는 `WATCH_MODE=rules`로 되돌림) ⑤ 자동 수정은 먼저 이슈만 보고(코드 없이) "코드로 고칠 일인지" 먼저 판단해 아니면 Fable을 부르지 않음, 코드 전체는 1시간 캐시, 건수만 다른 같은 경보는 한 문제로 묶고 24시간 안에 "코드 문제 아님"으로 끝난 문제는 다시 부르지 않음 ⑥ 쓴 토큰은 `ai_usage` 표에 목적별로 남고 `/api/guardian/summary`·매일 품질 점검이 읽어 더 줄일 곳을 `[품질]` 이슈로 낸다.
 - **해커의 숨은 지시 막기 (2026-10-08)**: 장애 로그에 섞인 해커의 글이 Fable을 속여 위험한 코드를 쓰게 하고, 사람이 꼼꼼히 못 보고 승인하는 경우를 막는다.
   ① 기계 검사(`scripts/autofix_guard.py`)가 보이지 않는 문자·글자 방향 뒤집기(숨은 지시), 비밀 값을 로그·응답·화면으로 내보내는 줄, 화면에서 밖으로 보내는 코드(sendBeacon·document.cookie·외부 스크립트), 처음 보는 외부 주소, 보안 검사(차단·횟수 제한·로그인 확인 등)를 지우는 변경을 막는다
   ② 다른 AI(`scripts/autofix_review.py`, Haiku)가 공격자의 눈으로 변경을 검토해 수상하거나 검토를 못 하면 PR을 열지 않는다(안전한 쪽으로 실패). 결과는 PR 본문 "🔒 보안 점검" 칸에 보인다
@@ -334,3 +334,12 @@ Runtime Healing"(CACM, Oct 2026)은 LLM이 런타임 상태만 즉석에서 고�
 HEALER를 제안하는데(GPT-4 기준 73% 실행 지속, 39.6% 정답), 저자들 스스로 "진짜 장벽은
 효과성이 아니라 신뢰성"이라며 안전장치가 아직 미성숙하다고 결론짓는다. 가디언이 LLM 생성
 코드를 실행/커밋하는 경로를 만들지 않은 건 그래서다 — 진단과 이슈 생성까지만 자동화한다.
+
+## 10. 문제 상황 대응 방식
+
+| 상황 | 대응 | 근거 |
+|---|---|---|
+| **서버 장애** | `monitor.yml`이 1분마다 `/healthz`·`/api/guardian/scan`을 확인하고, 가디언 에이전트(Fable, `claude-fable-5-1`)가 접속 기록·사건을 분석해 이슈를 연다. 이슈를 받아 Fable이 수정 PR을 만들고, **관리자가 Approve해야** main 병합·Vercel 배포가 된다(이상하면 자동 되돌림). 처리까지 약 17분, Fable 비용은 월 1,000달러 이상으로 추정. | `app/guardian.py`, `.github/workflows/monitor.yml`, `autofix.yml`, `autofix-ship.yml` |
+| **서버 용량 부족** | 최근 5분 요청의 30% 이상이 느리거나 502·503·504면 `[용량]` 이슈를 연다. 코드로 못 고치는 일이라 Vercel·Turso 플랜 업그레이드(비용)로 해결한다. | `app/guardian.py`, `quality-review.yml` |
+| **해킹** | 로그인 5회 실패 → 계정 15분 잠금. 공격 경로 탐색·악성 입력 3회, 한 IP 로그인 실패 10회, AI가 10분 안에 두 번 수상하다고 본 IP → **즉시 1시간 차단**(시간이 지나면 자동 해제). | `app/guardian.py` (`BLOCK_MINUTES`, `STRIKES`) |
+| **API 비용 소모 공격** | 시간당 질문 상한·429 반복 시 백오프로 막고, Claude 크레딧이 소진되거나 한도에 걸리면 비상용 백업 키 **Upstage `solar-pro4`**로 바로 넘어간다(`UPSTAGE_API_KEY` 설정 시). | `app/llm.py`, `app/config.py` |

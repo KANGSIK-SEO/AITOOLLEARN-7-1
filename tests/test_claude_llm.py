@@ -64,18 +64,19 @@ def fake_claude(monkeypatch):
     return messages
 
 
-def test_default_is_cheapest_haiku_with_low_effort(fake_claude):
+def test_default_is_fable_with_low_effort(fake_claude):
     out = llm.chat_completion([{"role": "system", "content": "규칙"}, {"role": "user", "content": "질문"}])
     assert out == "[1] 봄 풍경"
     p = fake_claude.calls[0]
-    # Haiku 5.5는 effort를 안 보내면 medium으로 생각한다 — 비용을 줄이려고 low를 직접 보낸다
-    assert p["model"] == "claude-haiku-5-5" and p["output_config"] == {"effort": "low"}
+    # 저장소 주인 요청으로 모든 작업을 Fable로 (2026-10-11) — effort는 비용을 줄이려고 low를 직접 보낸다
+    assert p["model"] == "claude-fable-5-1" and p["output_config"] == {"effort": "low"}
     assert p["system"] == "규칙" and p["messages"] == [{"role": "user", "content": "질문"}]
-    assert "fallbacks" not in p and "betas" not in p  # Haiku에는 서버 폴백이 없다
-    assert "thinking" not in p  # 답변은 생각을 켜 둔다 (adaptive)
+    assert p["fallbacks"] == "default"
+    assert "thinking" not in p
 
 
-def test_simple_extraction_turns_thinking_off_on_haiku(fake_claude):
+def test_simple_extraction_turns_thinking_off_on_haiku(fake_claude, monkeypatch):
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-haiku-5-5")   # 되돌렸을 때도 Haiku 규칙이 그대로 동작
     fake_claude.response = _response('{"chitchat": true, "keywords": [], "artist": null, "year_from": null, '
                                      '"year_to": null, "orientation": null, "purpose": null}')
     chat.extract_intent("안녕")
@@ -96,7 +97,7 @@ def test_usage_is_recorded_per_purpose(fake_claude, monkeypatch):
     fake_claude.response.usage = SimpleNamespace(input_tokens=120, output_tokens=30,
                                                   cache_read_input_tokens=100, cache_creation_input_tokens=0)
     llm.chat_completion([{"role": "user", "content": "q"}], purpose="probe")
-    assert saved == [("probe", "claude-haiku-5-5", 120, 30, 100, 0)]
+    assert saved == [("probe", "claude-fable-5-1", 120, 30, 100, 0)]
 
 
 def test_traffic_watch_uses_fable_unless_switched_back(fake_claude, monkeypatch):
