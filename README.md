@@ -41,7 +41,7 @@
 - `app/chat.py` — **지휘자.** "질문 → 검색조건 추출 → 검색 → 답변 생성" 파이프라인을 순서대로 지휘.
 - `app/art.py` — **검색엔진.** `data/art.db`에서 SQLite FTS5로 작품을 찾음. AI 호출 없이 순수 DB 검색. 상위 2개(`GUARANTEED_TOP`)는 관련도순 고정, 나머지는 후보 풀에서 무작위로 섞어 같은 질문이라도 항상 똑같은 작품만 나오지 않게 한다.
 - `app/llm.py` — **AI 통신창구.** `ANTHROPIC_API_KEY`가 있으면 Claude(`app/claude_llm.py`, 기본 `claude-fable-5-1` — 2026-10-11부터 모든 작업을 Fable로)를 먼저 쓰고, 실패하면 OpenAI `gpt-6-astra` → Upstage `solar-pro4` 순서로 넘어간다. 답변을 조각조각 받는 스트리밍(`stream_completion`)도 여기서 고른다. 타임아웃·에러를 통일된 형태로 반환.
-- `app/db.py` — **저장소.** 사용자·대화 로그·가디언 사건 저장(로컬 SQLite 또는 Turso 자동 선택).
+- `app/db.py` — **저장소.** 사용자·대화 로그·가디언 사건 저장(운영: Neon PostgreSQL, `DATABASE_URL` 없으면 Turso → 로컬 SQLite).
 - `app/config.py` — **규칙집.** 사용 모델(gpt-6-astra/폴백 solar-pro4)·초대코드·요금제 상한 등 설정을 고정.
 - `app/guardian.py` — **가디언.** 장애·보안 사건을 즉시 기록·대응(잠금, AI 백오프, 악성 입력 차단)하고, 1일 1회 gpt-6-astra로 일괄 분석·GitHub 이슈까지 생성.
 - `app/static/*` — **화면.** 브라우저에 보이는 HTML/JS/CSS 전부(프레임워크 없음). 갤러리 톤 디자인, 한/영 전환, 라이트/다크 테마, 왼쪽 대화 기록 사이드바. 구조는 [`wiki/frontend.md`](wiki/frontend.md).
@@ -54,7 +54,7 @@
                                    ├─ art.search → data/art.db (읽기 전용 SQLite + FTS5)
                                    ├─ chat.compose_answer → gpt-6-astra (근거 기반 한국어 답변)
                                    ├─ guardian: 실패 시 즉시 기록·대응 (잠금/백오프/차단)
-                                   └─ db.execute → Turso(SQLite 호환): users, chats, incidents
+                                   └─ db.execute → Neon PostgreSQL: users, chats, incidents
 ```
 | 컴포넌트 | 역할 |
 |---|---|
@@ -63,7 +63,7 @@
 | `app/llm.py` | OpenAI gpt-6-astra 호출(서버 전용, 타임아웃 설정) + solar-pro4 비상 폴백 |
 | `app/config.py` | 사용 모델(gpt-6-astra)·키 이름·초대코드/요금제 상한 등 설정 |
 | `app/guardian.py` | **가디언** — 장애·보안 사건 즉시 대응 + 1일 1회 AI 일괄 분석 (`/api/guardian/daily-digest`) |
-| `app/db.py` | 사용자·로그·사건 DB (Turso 또는 로컬 SQLite 자동 선택) |
+| `app/db.py` | 사용자·로그·사건 DB (Neon PostgreSQL → Turso → 로컬 SQLite 순서로 자동 선택) |
 | `scripts/collect_*.py` | 공개 API → `data/art.db` 수집기 |
 
 문맥 유지: 같은 사용자의 최근 `CONTEXT_TURNS`(5)개 Q/A를 답변 프롬프트에 포함한다.
@@ -171,7 +171,7 @@
 
 ## 4. DB 구조
 - `data/art.db` (읽기 전용, 레포에 포함): `artworks`(source, source_id, title, artist, date_display, medium, subjects, image_url, source_url, license, is_public_domain …) + `artworks_fts`(FTS5). 스키마: `db/schema.sql`
-- Turso/SQLite (쓰기): 
+- Neon PostgreSQL (쓰기, 2026-10-11부터 — 그 전엔 Turso. 로컬 개발은 SQLite 파일): 
   - `users(id, email UNIQUE, password_hash, is_premium, created_at)`
   - `chats(id, user_id → users.id, question, answer, status[ok|error], error_code, latency_ms, artwork_ids(JSON), created_at)`
   - `favorites(id, user_id → users.id, artwork_id(art.db artworks.id), created_at, UNIQUE(user_id, artwork_id))`
@@ -229,7 +229,9 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
 | `GPT_ASTRA_API_KEY` | OpenAI gpt-6-astra 키 (Claude 키가 없을 때 주 모델, 있을 때는 대체 모델) |
 | `UPSTAGE_API_KEY` (선택) | Upstage solar-pro4 키. Claude나 GPT가 소진·한도·인증 문제로 실패할 때 이어받는 비상용 |
 | `SECRET_KEY` | 세션 서명 키 (32자 이상 랜덤) |
-| `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | Turso DB. **없으면 로컬 `data/app.db` 사용** |
+| `DATABASE_URL` | **운영 DB — Neon PostgreSQL** (Vercel Storage에서 Neon을 프로젝트에 연결하면 자동으로 들어감). 있으면 이것을 쓴다 |
+| `DB_POOL_MAX` (선택) | Postgres 연결 풀 크기 (기본 5) |
+| `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | 예전 DB(Turso). `DATABASE_URL`이 없을 때 쓰고, 있으면 데이터 옮기기의 원본으로만 쓴다. **둘 다 없으면 로컬 `data/app.db`** |
 | `TIMEOUT_SECONDS` | **모든 타임아웃(기본 25초)** — 요청 하나도 25초 안에 끝내고, 넘으면 "죄송합니다. 접속자가 많습니다." (AI·Turso·이미지·아카이브·GitHub 공통. `LLM_TIMEOUT_SECONDS`, `LLM_CALL_BUDGET_SECONDS`로 AI만 따로 줄일 수 있음) |
 | `LLM_REASONING_EFFORT` | gpt-6-astra reasoning_effort (기본 low — 비용 보호) |
 | `CRON_SECRET` | 가디언 일일 점검(`/api/guardian/daily-digest`)을 Vercel Cron만 호출하게 막는 값 |
@@ -254,14 +256,17 @@ docker run --rm -v vercel-auth:/root/.local/share -v vercel-auth-cfg:/root/.conf
   `VERCEL_TOKEN`(Vercel 토큰, scope는 art-chatbot 프로젝트), `VERCEL_SCOPE`(Vercel 팀 이름 `customer-auto`).
   Environment secrets에 넣으면 워크플로가 읽지 못한다. 저장한 값은 다시 보이지 않는 게 정상이다.
 
-**Vercel + Turso 배포 (수동)**
-```bash
-turso db create art-chatbot && turso db show art-chatbot --url && turso db tokens create art-chatbot
-vercel link && vercel env add GPT_ASTRA_API_KEY && vercel env add SECRET_KEY \
-  && vercel env add TURSO_DATABASE_URL && vercel env add TURSO_AUTH_TOKEN \
-  && vercel env add CRON_SECRET && vercel env add GITHUB_TOKEN
-vercel deploy --prod
-```
+**Vercel + Neon 배포**
+1. Vercel → Storage → Neon 데이터베이스 만들기 → 프로젝트 `art-chatbot`에 연결 (`DATABASE_URL`이 자동으로 들어간다).
+2. 나머지 키: `vercel link && vercel env add SECRET_KEY && vercel env add ANTHROPIC_API_KEY && vercel env add CRON_SECRET && vercel env add GITHUB_TOKEN`
+3. 배포하면 서버가 처음 뜰 때 표를 만든다 (`app/db.py`의 `PG_SCHEMA`).
+
+**Turso → Neon 데이터 옮기기 (2026-10-11, 한 번)**: Neon 연결 후 새 코드를 배포하고, Actions 탭 → `migrate-db` → Run workflow.
+운영 서버가 `/api/guardian/migrate-from-turso`(CRON_SECRET 보호)로 Turso의 모든 표를 id 그대로 옮긴다. 40초씩 나눠 옮기고 이어서 부르며,
+이미 옮긴 행은 건너뛰어 여러 번 실행해도 안전하다. 새 행의 번호는 서버가 뜰 때 Turso 최대 id 뒤로 미뤄 둬서 옮기기 전에 생긴 행과 겹치지 않는다.
+다 옮긴 뒤 Turso 환경변수(`TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`)는 지워도 된다.
+
+**테스트를 진짜 Postgres로**: `TEST_DATABASE_URL=postgresql://... pytest` (없으면 테스트마다 임시 SQLite 파일).
 **가디언 (장애 대응 + 보안)**: `app/guardian.py`. 로그인 폭주·AI 429 반복·악성 입력 패턴은
 요청마다 비용 없이 즉시 차단/잠금(`incidents`, `runtime_flags` 테이블). 쌓인 사건은 Vercel Cron이
 하루 한 번(Hobby 플랜 제한) `/api/guardian/daily-digest`를 호출해 gpt-6-astra로 한 번에 분석하고,
@@ -340,6 +345,6 @@ HEALER를 제안하는데(GPT-4 기준 73% 실행 지속, 39.6% 정답), 저자�
 | 상황 | 대응 | 근거 |
 |---|---|---|
 | **서버 장애** | `monitor.yml`이 1분마다 `/healthz`·`/api/guardian/scan`을 확인하고, 가디언 에이전트(Fable, `claude-fable-5-1`)가 접속 기록·사건을 분석해 이슈를 연다. 이슈를 받아 Fable이 수정 PR을 만들고, **관리자가 Approve해야** main 병합·Vercel 배포가 된다(이상하면 자동 되돌림). 처리까지 약 17분, Fable 비용은 월 1,000달러 이상으로 추정. | `app/guardian.py`, `.github/workflows/monitor.yml`, `autofix.yml`, `autofix-ship.yml` |
-| **서버 용량 부족** | 최근 5분 요청의 30% 이상이 느리거나 502·503·504면 `[용량]` 이슈를 연다. 코드로 못 고치는 일이라 Vercel·Turso 플랜 업그레이드(비용)로 해결한다. | `app/guardian.py`, `quality-review.yml` |
+| **서버 용량 부족** | 최근 5분 요청의 30% 이상이 느리거나 502·503·504면 `[용량]` 이슈를 연다. 코드로 못 고치는 일이라 Vercel·Neon 플랜 업그레이드(비용)로 해결한다. | `app/guardian.py`, `quality-review.yml` |
 | **해킹** | 로그인 5회 실패 → 계정 15분 잠금. 공격 경로 탐색·악성 입력 3회, 한 IP 로그인 실패 10회, AI가 10분 안에 두 번 수상하다고 본 IP → **즉시 1시간 차단**(시간이 지나면 자동 해제). | `app/guardian.py` (`BLOCK_MINUTES`, `STRIKES`) |
 | **API 비용 소모 공격** | 시간당 질문 상한·429 반복 시 백오프로 막고, Claude 크레딧이 소진되거나 한도에 걸리면 비상용 백업 키 **Upstage `solar-pro4`**로 바로 넘어간다(`UPSTAGE_API_KEY` 설정 시). | `app/llm.py`, `app/config.py` |

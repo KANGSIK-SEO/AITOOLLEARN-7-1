@@ -33,3 +33,5 @@
 ## [2026-10-09] ingest | 설치 색·오프라인 화면을 새 디자인 톤으로 맞춤, request-flow의 함수명 정정(receiveStream) — frontend·request-flow 갱신
 
 ## [2026-10-11] ingest | 저장소 주인 요청으로 모든 Claude 작업 기본 모델을 claude-fable-5-1로, README에 문제 상황 대응 방식(10절) — ai-llm·guardian 갱신
+
+## [2026-10-11] ingest | 사용자 DB를 Neon PostgreSQL로(DATABASE_URL), Turso → Neon 옮기기 워크플로, Postgres 테스트 모드 — database·overview·glossary 갱신

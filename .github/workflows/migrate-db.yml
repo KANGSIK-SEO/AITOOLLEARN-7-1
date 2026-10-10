@@ -1,0 +1,43 @@
+# Turso → Neon(Postgres) 데이터 옮기기 — 운영 서버의 /api/guardian/migrate-from-turso를 부른다.
+# 두 DB 접속 정보(DATABASE_URL, TURSO_DATABASE_URL)는 Vercel 환경변수에만 있어서 옮기는 일은 서버 안에서 한다.
+# 서버는 한 번에 40초씩 옮기고(Vercel 60초 한도) 다음 위치를 돌려주며, 여기서 끝날 때까지 이어서 부른다.
+# 이미 옮긴 행은 건너뛰므로 여러 번 실행해도 안전하다. 표마다 읽은 행 수와 새로 넣은 행 수를 Summary에 보여 준다.
+# 필요: Repository secret CRON_SECRET (monitor.yml과 같은 값). Actions 탭 → migrate-db → Run workflow로 실행.
+name: migrate-db
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SITE_URL: ${{ vars.SITE_URL || 'https://art-chatbot-eight.vercel.app' }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+    steps:
+      - name: Turso → Neon 옮기기
+        run: |
+          echo '{}' > total.json
+          query=""
+          for i in $(seq 1 100); do
+            code=$(curl -sS -m 70 -o part.json -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer $CRON_SECRET" "$SITE_URL/api/guardian/migrate-from-turso$query" || echo 000)
+            if [ "$code" != 200 ]; then cat part.json || true; echo "::error::데이터를 옮기지 못했습니다 (HTTP $code)"; exit 1; fi
+            jq -s '.[0] as $t | .[1].copied as $p | $t * ($p | with_entries(.value = {
+                     read: (($t[.key].read // 0) + .value.read), inserted: (($t[.key].inserted // 0) + .value.inserted)}))' \
+              total.json part.json > merged.json && mv merged.json total.json
+            if [ "$(jq -r .done part.json)" = "true" ]; then break; fi
+            query="?table=$(jq -r .next.table part.json)&after=$(jq -r .next.after part.json)"
+            echo "이어서 옮기기: $query"
+          done
+          if [ "$(jq -r .done part.json)" != "true" ]; then echo "::error::100번 불러도 끝나지 않았습니다 — 다시 실행하면 이어서 옮깁니다"; exit 1; fi
+          {
+            echo "## Turso → Neon 데이터 옮기기 완료"
+            echo "| 표 | 읽은 행 | 새로 넣은 행 |"
+            echo "|---|---:|---:|"
+            jq -r 'to_entries[] | "| \(.key) | \(.value.read) | \(.value.inserted) |"' total.json
+          } | tee -a "$GITHUB_STEP_SUMMARY"

@@ -1,8 +1,14 @@
 """사용자·대화 로그 DB.
 
-TURSO_DATABASE_URL이 있으면 Turso(HTTP API), 없으면 로컬 SQLite 파일(data/app.db)을 쓴다.
-두 백엔드 모두 execute(sql, params) -> list[dict] 로 동일하게 사용한다. (INSERT는 RETURNING 사용)
+백엔드는 환경변수로 고른다 (위에서부터 먼저 있는 것):
+1. DATABASE_URL — PostgreSQL (운영: Neon, 2026-10-11부터). 백업·시점 복구·권한 관리가 되는 회사용 DB.
+2. TURSO_DATABASE_URL — Turso(HTTP API). Neon으로 옮기기 전 운영 DB, 데이터 옮기기(copy_from_turso)의 원본.
+3. 둘 다 없으면 로컬 SQLite 파일(data/app.db) — 개발·테스트용.
+모든 백엔드를 execute(sql, params) -> list[dict] 로 똑같이 쓴다. SQL은 SQLite 문법(? 자리표시자)으로 쓰고,
+Postgres로 보낼 때 여기서 %s로 바꾼다. (INSERT는 RETURNING 사용)
 """
+import atexit
+import decimal
 import json
 import socket
 import logging
@@ -117,6 +123,15 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN is_premium INTEGER NOT NULL DEFAULT 0",
 ]
 
+# Postgres용 스키마: 자동 증가 키만 BIGSERIAL로 바꾸고 나머지(TEXT 시각, CHECK, UNIQUE)는 그대로 쓴다.
+# Postgres는 ADD COLUMN IF NOT EXISTS를 지원해 오류를 무시할 필요가 없다.
+PG_SCHEMA = [s.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY") for s in SCHEMA]
+PG_MIGRATIONS = [m.replace("ADD COLUMN", "ADD COLUMN IF NOT EXISTS") for m in MIGRATIONS]
+# 외래키 순서대로 (users가 먼저). copy_from_turso가 이 순서로 옮긴다.
+TABLES = ["users", "chats", "favorites", "incidents", "access_log", "ai_usage", "runtime_flags",
+          "rights_records", "rate_counters"]
+SERIAL_TABLES = ["users", "chats", "favorites", "incidents", "access_log", "ai_usage"]
+
 _initialized = False
 
 
@@ -128,9 +143,129 @@ class DbTimeout(DbError):
     """Turso가 25초(TIMEOUT_SECONDS) 안에 답하지 않음 — 화면에는 '접속자가 많습니다'로 안내한다."""
 
 
+def _pg_url() -> str | None:
+    return os.environ.get("DATABASE_URL", "").strip() or None
+
+
 def _turso_url() -> str | None:
     url = os.environ.get("TURSO_DATABASE_URL", "").strip()
     return url.replace("libsql://", "https://", 1) if url else None
+
+
+def backend() -> str:
+    if _pg_url():
+        return "postgres"
+    return "turso" if _turso_url() else "local_sqlite"
+
+
+# ---- PostgreSQL (Neon) ----
+# 서버리스 함수는 요청마다 새로 연결하면 TLS 왕복이 매번 들어 느리다 → 작은 연결 풀을 프로세스마다 하나 둔다.
+# Neon의 pooled 주소(-pooler)는 PgBouncer라 서버 쪽 prepared statement를 쓰면 안 된다 → prepare_threshold=None.
+PG_POOL_MAX = int(os.environ.get("DB_POOL_MAX", "5") or 5)
+_pg_pool = None
+_pg_pool_url: str | None = None
+
+
+def _get_pg_pool():
+    global _pg_pool, _pg_pool_url
+    url = _pg_url()
+    if _pg_pool is None or _pg_pool_url != url:
+        from psycopg_pool import ConnectionPool   # Postgres를 쓸 때만 불러온다 (로컬 SQLite는 의존성 불필요)
+        if _pg_pool is not None:
+            _pg_pool.close()
+        _pg_pool = ConnectionPool(
+            url, min_size=1, max_size=PG_POOL_MAX, timeout=TIMEOUT_SECONDS, open=True,
+            check=ConnectionPool.check_connection,   # Neon이 쉬는 동안 끊긴 연결을 걸러 낸다
+            kwargs={"autocommit": True, "prepare_threshold": None, "connect_timeout": int(TIMEOUT_SECONDS)})
+        _pg_pool_url = url
+    return _pg_pool
+
+
+def close_pool() -> None:
+    global _pg_pool
+    if _pg_pool is not None:
+        _pg_pool.close()
+        _pg_pool = None
+
+
+atexit.register(close_pool)   # 프로세스가 끝날 때 연결을 정리한다 (풀의 작업 스레드가 종료를 막지 않게)
+
+
+def _pg_sql(sql: str, has_params: bool) -> str:
+    """SQLite 문법의 ? 자리표시자를 psycopg의 %s로 바꾼다. 따옴표 안의 ?는 그대로 두고,
+    값이 있을 때는 글자 그대로의 %(LIKE 'ip_block:%')를 %%로 바꿔 자리표시자로 오해하지 않게 한다."""
+    if not has_params:
+        return sql
+    out, quote = [], None
+    for ch in sql:
+        if ch == "%":
+            out.append("%%")
+            continue
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "?":
+            out.append("%s")
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
+def _pg_param(v):
+    return int(v) if isinstance(v, bool) else v   # is_premium 같은 정수 열에 True/False가 와도 SQLite처럼 0/1로
+
+
+def _pg_value(v):
+    if isinstance(v, decimal.Decimal):   # SUM()은 numeric을 돌려준다 — SQLite처럼 정수/실수로 맞춘다 (JSON 응답용)
+        return int(v) if v == v.to_integral_value() else float(v)
+    return v
+
+
+def _pg_error(e: Exception) -> DbError:
+    import psycopg
+    from psycopg_pool import PoolTimeout
+    if isinstance(e, (PoolTimeout, psycopg.errors.QueryCanceled, psycopg.errors.ConnectionTimeout)):
+        return DbTimeout(f"Postgres 응답 시간 초과({TIMEOUT_SECONDS:g}s)")
+    return DbError(str(e).strip() or type(e).__name__)
+
+
+def _pg_run(cur, sql: str, params) -> list[dict]:
+    params = tuple(_pg_param(p) for p in params or ())
+    cur.execute(_pg_sql(sql, bool(params)), params or None)
+    if cur.description is None:
+        return []
+    cols = [c.name for c in cur.description]
+    return [dict(zip(cols, (_pg_value(v) for v in row))) for row in cur.fetchall()]
+
+
+def _pg_many(stmts: list[tuple[str, tuple]]) -> list[list[dict] | DbError]:
+    """연결 하나로 차례로 실행한다 (autocommit이라 한 문장이 실패해도 나머지는 실행된다 — Turso pipeline과 같음)."""
+    import psycopg
+    from psycopg_pool import PoolTimeout
+    out: list[list[dict] | DbError] = []
+    try:
+        with _get_pg_pool().connection() as conn, conn.cursor() as cur:
+            for sql, params in stmts:
+                try:
+                    out.append(_pg_run(cur, sql, params))
+                except psycopg.errors.QueryCanceled as e:
+                    raise _pg_error(e) from e
+                except psycopg.DatabaseError as e:
+                    if conn.broken:
+                        raise
+                    out.append(_pg_error(e))
+    except (psycopg.OperationalError, psycopg.InterfaceError, PoolTimeout) as e:
+        raise _pg_error(e) from e
+    return out
+
+
+def _pg_execute(sql: str, params) -> list[dict]:
+    result = _pg_many([(sql, params)])[0]
+    if isinstance(result, DbError):
+        raise result
+    return result
 
 
 def _to_arg(v) -> dict:
@@ -225,16 +360,18 @@ def _local_many(stmts: list[tuple[str, tuple]]) -> list[list[dict] | DbError]:
 
 
 def _raw_many(stmts: list[tuple[str, tuple]]) -> list[list[dict] | DbError]:
-    base = _turso_url()
+    kind, base = backend(), _turso_url()
     started = time.monotonic()
     ok = False
     try:
-        results = _turso_pipeline(base, stmts) if base else _local_many(stmts)
+        if kind == "postgres":
+            results = _pg_many(stmts)
+        else:
+            results = _turso_pipeline(base, stmts) if kind == "turso" else _local_many(stmts)
         ok = True
         return results
     finally:
-        _log_if_slow(" ; ".join(sql for sql, _ in stmts), int((time.monotonic() - started) * 1000),
-                     "turso" if base else "local_sqlite", ok)
+        _log_if_slow(" ; ".join(sql for sql, _ in stmts), int((time.monotonic() - started) * 1000), kind, ok)
 
 
 def execute_many(stmts: list[tuple[str, tuple]]) -> list[list[dict]]:
@@ -253,15 +390,18 @@ def execute(sql: str, params=()) -> list[dict]:
 
 
 def _raw_execute(sql: str, params=()) -> list[dict]:
-    base = _turso_url()
+    kind, base = backend(), _turso_url()
     started = time.monotonic()
     ok = False
     try:
-        rows = _turso_execute(base, sql, params) if base else _local_execute(sql, params)
+        if kind == "postgres":
+            rows = _pg_execute(sql, params)
+        else:
+            rows = _turso_execute(base, sql, params) if kind == "turso" else _local_execute(sql, params)
         ok = True
         return rows
     finally:
-        _log_if_slow(sql, int((time.monotonic() - started) * 1000), "turso" if base else "local_sqlite", ok)
+        _log_if_slow(sql, int((time.monotonic() - started) * 1000), kind, ok)
 
 
 def _log_if_slow(sql: str, latency_ms: int, backend: str, ok: bool) -> None:
@@ -298,6 +438,11 @@ def ensure_schema() -> None:
     global _initialized
     if _initialized:
         return
+    if backend() == "postgres":
+        _ensure_pg_schema()
+        _initialized = True
+        log.info("db_schema_ready backend=postgres")
+        return
     stmts = [(stmt, ()) for stmt in SCHEMA] + [("PRAGMA table_info(favorites)", ())] + [(m, ()) for m in MIGRATIONS]
     results = _raw_many(stmts)
     for (sql, _), r in zip(stmts, results):
@@ -307,7 +452,69 @@ def ensure_schema() -> None:
     if favorites_cols and "id" not in favorites_cols:
         _migrate_favorites_id()
     _initialized = True
-    log.info("db_schema_ready backend=%s", "turso" if _turso_url() else "local_sqlite")
+    log.info("db_schema_ready backend=%s", backend())
+
+
+def _ensure_pg_schema() -> None:
+    """서버 여러 대가 동시에 처음 떠도 괜찮게, 다른 서버가 먼저 만들어 생긴 '이미 있음' 오류는 무시한다."""
+    stmts = [(stmt, ()) for stmt in PG_SCHEMA + PG_MIGRATIONS]
+    for (sql, _), r in zip(stmts, _raw_many(stmts)):
+        if isinstance(r, DbError) and "already exists" not in str(r) and "duplicate key" not in str(r):
+            raise r
+    if _turso_url():
+        try:
+            _bump_sequences_past_turso()
+        except DbError as e:   # 옮기기 준비가 실패해도 서비스는 띄운다 (옮기기 때 다시 맞춘다)
+            log.error("db_sequence_bump_failed detail=%s", e)
+
+
+def _bump_sequences_past_turso() -> None:
+    """옮기기 전에 새로 생기는 행이 Turso의 id를 먼저 차지하지 않게, 자동 증가 번호를 Turso 최대 id 뒤로 보낸다
+    (안 그러면 옮길 때 같은 id의 Turso 행이 '이미 있음'으로 건너뛰어진다)."""
+    stmts = [(f"SELECT COALESCE(MAX(id), 0) AS m FROM {t}", ()) for t in SERIAL_TABLES]
+    results = _turso_pipeline(_turso_url(), stmts)
+    for table, r in zip(SERIAL_TABLES, results):
+        if isinstance(r, DbError):
+            raise r
+        _pg_execute(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
+                    f"GREATEST(?, COALESCE((SELECT MAX(id) FROM {table}), 0)) + 1, false)", (r[0]["m"],))
+
+
+def copy_from_turso(table: str | None = None, after: int = 0, budget_seconds: float = 40.0,
+                    batch: int = 500) -> dict:
+    """Turso(원본)의 표를 Postgres(DATABASE_URL)로 옮긴다. id를 그대로 옮기고, 이미 있는 행은 건너뛴다.
+    Vercel 함수는 60초 한도라 budget_seconds가 지나면 멈추고 다음 위치(next: 표·rowid)를 돌려준다 —
+    부른 쪽(.github/workflows/migrate-db.yml)이 그 위치로 다시 부른다. 여러 번 불러도 안전하다.
+    운영에서는 /api/guardian/migrate-from-turso(CRON_SECRET 보호)로 부른다."""
+    base = _turso_url()
+    if not base or backend() != "postgres":
+        raise DbError("DATABASE_URL(Postgres)과 TURSO_DATABASE_URL(원본)이 둘 다 있어야 옮길 수 있습니다.")
+    if table is not None and table not in TABLES:
+        raise DbError(f"모르는 표입니다: {table}")
+    ensure_schema()
+    _bump_sequences_past_turso()
+    started = time.monotonic()
+    copied: dict = {}
+    for name in TABLES[TABLES.index(table) if table else 0:]:
+        cursor = after if name == table else 0
+        stats = copied.setdefault(name, {"read": 0, "inserted": 0})
+        while True:
+            if time.monotonic() - started > budget_seconds:
+                return {"done": False, "next": {"table": name, "after": cursor}, "copied": copied}
+            rows = _turso_execute(base, f"SELECT rowid AS _rowid, * FROM {name} WHERE rowid > ? ORDER BY rowid LIMIT ?",
+                                  (cursor, batch))
+            if not rows:
+                break
+            cols = [c for c in rows[0] if c != "_rowid"]
+            one_row = f"({', '.join('?' * len(cols))})"   # 여러 행을 문장 하나로 — 왕복 횟수를 줄인다
+            sql = (f"INSERT INTO {name} ({', '.join(cols)}) VALUES {', '.join([one_row] * len(rows))} "
+                   "ON CONFLICT DO NOTHING RETURNING 1 AS x")
+            stats["inserted"] += len(_pg_execute(sql, tuple(row[c] for row in rows for c in cols)))
+            stats["read"] += len(rows)
+            cursor = rows[-1]["_rowid"]
+    _bump_sequences_past_turso()
+    log.warning("db_copy_from_turso %s", json.dumps(copied))
+    return {"done": True, "next": None, "copied": copied}
 
 
 def reset_for_tests() -> None:

@@ -1,3 +1,5 @@
 fastapi
 uvicorn
 anthropic
+psycopg[binary]
+psycopg-pool

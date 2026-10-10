@@ -12,7 +12,8 @@ updated: 2026-10-07
 | PDM | 퍼블릭 도메인 마크. CC0와 비슷하지만 법적으로 다르다 | Rijksmuseum 보류 이유 |
 | 공공누리 1유형 | 한국 공공저작물 표시. **출처 표시 의무**가 있어 CC0가 아니다 | e뮤지엄 보류 이유 |
 | FTS5 | SQLite 안의 전문 검색 기능 (책 뒤 색인처럼 단어로 빨리 찾기) | `artworks_fts` ([작품 검색](search.md)) |
-| Turso | 인터넷으로 쓰는 SQLite 서비스 | 사용자 DB ([데이터베이스](database.md)) |
+| Turso | 인터넷으로 쓰는 SQLite 서비스 | 예전 사용자 DB, 2026-10-11 Neon으로 옮김 ([데이터베이스](database.md)) |
+| Neon | 인터넷으로 쓰는 PostgreSQL 서비스 (Vercel Storage에서 연결) | 사용자 DB ([데이터베이스](database.md)) |
 | 서버리스 | 서버를 직접 켜 두지 않고, 요청이 올 때만 잠깐 실행되는 방식 | Vercel |
 | scrypt | 일부러 느리게 만든 비밀번호 해시 방식 (무차별 대입을 어렵게) | [로그인과 보안](auth.md) |
 | HMAC 서명 | 비밀 키로 만든 "도장". 내용이 바뀌면 도장이 안 맞는다 | 로그인 토큰, 근거 기록 |
