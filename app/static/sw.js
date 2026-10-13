@@ -18,6 +18,10 @@ const SHELL = [
 ];
 // artworks.json(~2MB)은 모든 방문자에게 미리 깔지 않고, 온디바이스 패널을 실제로 열 때만
 // 받는다 — 받고 나면 아래 fetch 핸들러가 평소대로 캐시에 올려둔다.
+// 단, 이 파일은 캐시 이름(ASSET_VERSION) 계산에 들어가지 않아 작품 DB를 다시 수집해도 캐시 이름이 안 바뀐다 →
+// 캐시 우선으로 두면 설치된 브라우저가 영영 옛 데이터로 추천한다. 그래서 네트워크 우선으로 받는다:
+// 서버에서 받을 수 있으면 새 내용으로 캐시를 갱신하고, 오프라인이면 캐시본을 쓴다.
+const NETWORK_FIRST = new Set(['/static/artworks.json']);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -59,15 +63,20 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // 네트워크 우선 항목은 캐시를 먼저 보지 않는다 — 아래 요청이 성공하면 캐시를 갱신하고, 실패하면 캐시본으로 되돌아간다
+  const lookup = NETWORK_FIRST.has(url.pathname) ? Promise.resolve(undefined) : caches.match(request);
   event.respondWith(
-    caches.match(request).then((cached) =>
+    lookup.then((cached) =>
       cached || fetch(request).then((response) => {
         if (response.ok) {
           const copy = response.clone();
           caches.open(CACHE).then((cache) => cache.put(request, copy));
         }
         return response;
-      })
+      }).catch((err) => caches.match(request).then((fallback) => {
+        if (fallback) return fallback;   // 오프라인: 예전에 받아 둔 작품 데이터로라도 동작한다
+        throw err;
+      }))
     )
   );
 });
