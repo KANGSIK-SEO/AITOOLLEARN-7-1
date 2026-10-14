@@ -12,7 +12,9 @@
     async function loadFacts() {
         if (factsCache) return factsCache;
         const res = await fetch("/static/artworks.json");
-        factsCache = await res.json();
+        if (!res.ok) throw new Error(String(res.status));   // 서버 오류(404·5xx)도 실패로 본다 — 호출부(app.js)가 안내한다
+        const facts = await res.json();
+        factsCache = facts;   // 성공했을 때만 기억한다 — 실패하면 null 그대로라 다음에 열면 다시 받는다
         return factsCache;
     }
 

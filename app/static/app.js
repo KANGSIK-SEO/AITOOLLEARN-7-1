@@ -164,6 +164,7 @@ const I18N = {
         labStyle: "화풍", labAnyStyle: "전체", labSubject: "주제 키워드", labSubjectPh: "콤마로 여러 개",
         labFrom: "시작 연도", labTo: "종료 연도", labRule: "검색 규칙 미리보기", labRun: "내 기기에서 추천받기",
         labLoading: "작품 데이터를 불러오는 중…",
+        labLoadFail: "작품 데이터를 불러오지 못했어요. 인터넷 연결을 확인하고 다시 열어 주세요.",
         odParsed: "키워드 사전으로 해석했어요: {m}", odNone: "인식된 키워드가 없어요. 조건을 직접 골라 보세요.",
         odHeading: "온디바이스 추천", odMsg: "브라우저에서 규칙을 평가했어요 (서버·AI 호출 없음)",
         odEmpty: "조건에 맞는 작품이 없어요. 조건을 줄여 보세요.",
@@ -223,6 +224,7 @@ const I18N = {
         labStyle: "Style", labAnyStyle: "Any", labSubject: "Subjects", labSubjectPh: "comma-separated",
         labFrom: "Year from", labTo: "Year to", labRule: "Rule preview", labRun: "Recommend on this device",
         labLoading: "Loading artwork data…",
+        labLoadFail: "Couldn't load artwork data. Check your connection and try again.",
         odParsed: "Parsed with the keyword dictionary: {m}", odNone: "No known keywords — pick the filters yourself.",
         odHeading: "On-device picks", odMsg: "Rules evaluated in your browser (no server or AI calls)",
         odEmpty: "No matching works. Try loosening the filters.",
@@ -1173,11 +1175,24 @@ function refreshRulePreview() {
     $("od-rule-preview").textContent = OnDevice.buildRuleText(currentOnDeviceFilters());
 }
 
+// 작품 데이터를 못 받았을 때(오프라인·서버 오류): 미리보기 칸과 토스트로 알린다.
+// state.onDeviceReady는 false 그대로 두어, 창을 다시 열면 자동으로 다시 시도한다
+function showOnDeviceLoadFailure() {
+    $("od-rule-preview").textContent = t("labLoadFail");
+    toast(t("labLoadFail"));
+}
+
 async function openLab() {
     $("lab-modal").showModal();
     if (state.onDeviceReady) return;
     $("od-rule-preview").textContent = t("labLoading");
-    const facts = await OnDevice.loadFacts();   // artworks.json — 처음 열 때 한 번만 받는다
+    let facts;
+    try {
+        facts = await OnDevice.loadFacts();   // artworks.json — 처음 열 때 한 번만 받는다
+    } catch (_) {
+        showOnDeviceLoadFailure();
+        return;
+    }
     $("od-style").append(...OnDevice.styleOptions(facts).map((style) => new Option(style, style)));
     state.onDeviceReady = true;
     refreshRulePreview();
@@ -1200,7 +1215,14 @@ function parseOnDevice() {
 
 async function runOnDevice() {
     const filters = currentOnDeviceFilters();
-    const works = OnDevice.evalRule(await OnDevice.loadFacts(), filters);
+    let facts;
+    try {
+        facts = await OnDevice.loadFacts();
+    } catch (_) {   // 창을 열 때는 받았어도 그 사이 연결이 끊겼을 수 있다 — 창을 닫지 않고 안내만 한다
+        showOnDeviceLoadFailure();
+        return;
+    }
+    const works = OnDevice.evalRule(facts, filters);
     $("lab-modal").close();
     startTurn();
     const note = el("div", "msg msg-system");
