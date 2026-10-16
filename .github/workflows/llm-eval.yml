@@ -30,7 +30,7 @@ jobs:
           pip install -q -r requirements.txt
           python scripts/eval_llm.py | tee eval-summary.txt
           { echo '## LLM 평가 결과'; echo '```'; cat eval-summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: llm-eval
